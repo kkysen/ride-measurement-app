@@ -8,4 +8,5 @@ publish.workspace = true
 # Sensor fusion shared by the app and offline processing.
 [dependencies]
 anyhow.workspace = true
+ride-gnss.workspace = true
 ride-session.workspace = true

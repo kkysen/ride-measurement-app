@@ -1,43 +1,56 @@
-//! Replays a recorded session through [`LiveSpeedEstimator`], fed the same way the app feeds it live.
+//! Replays a recorded session through [`Fusion`], fed exactly as the app feeds it live,
+//! then smooths over the whole ride.
 
+use ride_gnss::solve::Stats;
+use ride_session::proto::record::Payload;
 use ride_session::read::Session;
-use ride_session::track::TrackPoint;
+use ride_session::track::GPS_PROVIDER;
 
-use crate::live_speed::{Estimate, LiveSpeedEstimator};
+use crate::fusion::{Fix, Fusion, SmoothedSpeed};
 
-enum Event<'a> {
-    Accel(i64, [f64; 3]),
-    Gyro(i64, [f64; 3]),
-    Fix(&'a TrackPoint),
+/// What a replay produced.
+pub struct Replay {
+    /// Smoothed speed at every GPS fix and every second.
+    pub smoothed: Vec<SmoothedSpeed>,
+    /// Navigation messages, ephemerides, and epochs solved from raw GNSS.
+    pub gnss: Stats,
 }
 
-impl Event<'_> {
-    fn t_ns(&self) -> i64 {
-        match self {
-            Event::Accel(t, _) | Event::Gyro(t, _) => *t,
-            Event::Fix(p) => p.elapsed_realtime_ns,
-        }
+impl Replay {
+    /// The smoothed speed at a fix's time, if the replay has one.
+    pub fn at(&self, elapsed_realtime_ns: i64) -> Option<&SmoothedSpeed> {
+        let i = self
+            .smoothed
+            .partition_point(|s| s.elapsed_realtime_ns < elapsed_realtime_ns);
+        self.smoothed
+            .get(i)
+            .filter(|s| s.elapsed_realtime_ns == elapsed_realtime_ns)
     }
 }
 
-/// The estimate just after each fix in `fixes` (GPS fixes, as from [`ride_session::track::gps_segments`]).
-///
-/// Uses the uncalibrated accelerometer and gyro streams if recorded, else the calibrated ones, like the app.
-/// Sensor samples and fixes are merged by timestamp; live, they arrive slightly out of order,
-/// so the replay can differ a little from what the phone showed, never by design.
-pub fn speed_at_fixes(session: &Session, fixes: &[&TrackPoint]) -> anyhow::Result<Vec<Estimate>> {
-    let mut events: Vec<Event> = Vec::new();
+enum Event {
+    Accel([f64; 3]),
+    Gyro([f64; 3]),
+    Fix(Fix),
+    Measurements(ride_session::proto::GnssMeasurementsEvent),
+    Navigation(ride_session::proto::GnssNavigationMessage),
+}
+
+/// Uses the uncalibrated accelerometer and gyro if recorded, else the calibrated ones, like the app.
+/// Every input is merged by time; live, they arrive slightly out of order, so the replay can differ a little
+/// from what the phone showed, never by design.
+pub fn replay(session: &Session) -> anyhow::Result<Replay> {
+    let mut events: Vec<(i64, Event)> = Vec::new();
     for (name, fallback, gyro) in [
         ("accel_uncal", "accel", false),
         ("gyro_uncal", "gyro", true),
     ] {
-        let name = [name, fallback]
-            .into_iter()
-            .find(|n| session.info.streams.iter().any(|s| s.name == *n));
-        let Some(name) = name else { continue };
+        let has = |n: &str| session.info.streams.iter().any(|s| s.name == n);
+        let Some(name) = [name, fallback].into_iter().find(|n| has(n)) else {
+            continue;
+        };
         let uncalibrated = name.ends_with("_uncal");
-        let contents = session.read_stream(name)?;
-        for chunk in &contents.chunks {
+        for chunk in &session.read_stream(name)?.chunks {
             let n = chunk.values_per_sample as usize;
             let values: Vec<f32> = chunk.values().collect();
             for (i, t) in chunk.timestamps_ns().into_iter().enumerate() {
@@ -46,39 +59,76 @@ pub fn speed_at_fixes(session: &Session, fixes: &[&TrackPoint]) -> anyhow::Resul
                     continue;
                 }
                 // Uncalibrated sensors carry the bias estimate in values[3..5]; subtract it, in `f32` like the app.
-                let xyz: [f64; 3] = std::array::from_fn(|k| {
+                let xyz = std::array::from_fn(|k| {
                     f64::from(if uncalibrated { v[k] - v[k + 3] } else { v[k] })
                 });
-                events.push(if gyro {
-                    Event::Gyro(t, xyz)
-                } else {
-                    Event::Accel(t, xyz)
-                });
+                events.push((
+                    t,
+                    if gyro {
+                        Event::Gyro(xyz)
+                    } else {
+                        Event::Accel(xyz)
+                    },
+                ));
             }
         }
     }
-    events.extend(fixes.iter().map(|p| Event::Fix(p)));
-    // Stable, so at equal times sensors (pushed first) come before fixes.
-    events.sort_by_key(Event::t_ns);
+    for stream in ["location", "gnss"] {
+        if !session.stream_path(stream).exists() {
+            continue;
+        }
+        for r in session
+            .read_records(stream)?
+            .chunks
+            .into_iter()
+            .flat_map(|c| c.records)
+        {
+            let received = r.received_elapsed_realtime_ns;
+            match r.payload {
+                Some(Payload::Location(l)) if l.provider == GPS_PROVIDER && !l.is_mock => {
+                    let fix = Fix {
+                        elapsed_realtime_ns: l.elapsed_realtime_nanos,
+                        lat: l.latitude_degrees,
+                        lon: l.longitude_degrees,
+                        altitude: l.altitude_meters,
+                        accuracy: l.horizontal_accuracy_meters.map(f64::from),
+                        speed: l.speed_meters_per_second.map(f64::from),
+                        speed_sigma: l.speed_accuracy_meters_per_second.map(f64::from),
+                    };
+                    events.push((fix.elapsed_realtime_ns, Event::Fix(fix)));
+                }
+                Some(Payload::GnssMeasurements(m)) => {
+                    let t = m
+                        .clock
+                        .as_ref()
+                        .and_then(|c| c.elapsed_realtime_nanos)
+                        .unwrap_or(received);
+                    events.push((t, Event::Measurements(m)));
+                }
+                Some(Payload::GnssNavigationMessage(m)) => {
+                    events.push((received, Event::Navigation(m)))
+                }
+                _ => {}
+            }
+        }
+    }
+    // Stable, so at equal times sensors (pushed first) come before GNSS.
+    events.sort_by_key(|(t, _)| *t);
 
-    let mut est = LiveSpeedEstimator::new();
-    let mut out = Vec::with_capacity(fixes.len());
-    for e in &events {
+    let mut fusion = Fusion::new(None);
+    for (t, e) in events {
         match e {
-            Event::Accel(t, [x, y, z]) => est.on_accel(*t, *x, *y, *z),
-            Event::Gyro(_, [x, y, z]) => est.on_gyro(*x, *y, *z),
-            Event::Fix(p) => {
-                est.on_gnss_fix(
-                    p.elapsed_realtime_ns,
-                    p.latitude_degrees,
-                    p.longitude_degrees,
-                    p.horizontal_accuracy_meters.map(f64::from),
-                    p.speed_meters_per_second.map(f64::from),
-                    p.speed_accuracy_meters_per_second.map(f64::from),
-                );
-                out.push(est.estimate(p.elapsed_realtime_ns));
+            Event::Accel(a) => fusion.on_accel(t, a),
+            Event::Gyro(w) => fusion.on_gyro(t, w),
+            Event::Fix(fix) => fusion.on_fix(fix),
+            Event::Measurements(m) => {
+                fusion.on_gnss_measurements(t, &m);
             }
+            Event::Navigation(m) => fusion.on_navigation_message(&m),
         }
     }
-    Ok(out)
+    Ok(Replay {
+        smoothed: fusion.smoothed(),
+        gnss: fusion.navigator().stats.clone(),
+    })
 }

@@ -33,6 +33,8 @@ pub struct Estimate {
     pub since_gnss_s: Option<f64>,
     /// Measurements rejected as outliers so far, per sensor.
     pub rejected: BTreeMap<Sensor, u32>,
+    /// Whether a measurement (GNSS or a stop) has set the speed yet; before that it's integrated from 0.
+    pub initialized: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -168,6 +170,28 @@ impl LiveSpeedEstimator {
         Self::default()
     }
 
+    /// A fresh estimator for running backward in time from this one's latest state, for smoothing:
+    /// it keeps the phone's frame (gravity, travel axis and its sign, the accelerometer bias along it), which need
+    /// acceleration to learn and so can't be learned again at constant speed, adjusted for reversed time.
+    /// It starts without a speed, so the two directions stay independent where they're combined.
+    ///
+    /// Feed it the accelerometer as recorded and the gyro negated. In reversed time velocity reverses
+    /// and rotation runs backward, but acceleration is the same vector, so along the flipped axis the speed changes
+    /// at minus the forward rate, as it should; the bias along the flipped axis changes sign.
+    pub fn reversed(&self) -> Self {
+        Self {
+            gravity: self.gravity,
+            gravity_init: self.gravity_init,
+            cov: self.cov,
+            axis: self.axis.map(|a| -a),
+            axis_known: self.axis_known,
+            axis_sign_known: self.axis_sign_known,
+            b: -self.b,
+            p11: self.p11,
+            ..Self::default()
+        }
+    }
+
     /// Gyro sample (rad/s), bias already removed.
     pub fn on_gyro(&mut self, wx: f64, wy: f64, wz: f64) {
         self.omega = [wx, wy, wz];
@@ -267,6 +291,14 @@ impl LiveSpeedEstimator {
     }
 
     /// A GNSS fix: Doppler speed if the fix has one, and position for position-differenced speed.
+    /// A speed (m/s) and its standard deviation from a velocity solution of our own (e.g. `ride_gnss`'s from
+    /// raw Doppler), used the same way as a fix's Doppler speed.
+    pub fn on_gnss_speed(&mut self, t_ns: i64, speed_mps: f64, sigma_mps: f64) {
+        self.last_gnss_ns = t_ns;
+        self.inflate_to(t_ns);
+        self.on_doppler_speed(t_ns, speed_mps, sigma_mps);
+    }
+
     pub fn on_gnss_fix(
         &mut self,
         t_ns: i64,
@@ -320,6 +352,7 @@ impl LiveSpeedEstimator {
             since_gnss_s: (self.last_gnss_ns != 0)
                 .then(|| (now_ns - self.last_gnss_ns) as f64 * 1e-9),
             rejected: self.rejected.clone(),
+            initialized: self.initialized,
         }
     }
 
@@ -427,11 +460,8 @@ impl LiveSpeedEstimator {
     fn predict(&mut self, along: f64, dt: f64) {
         // Nothing this records sustains more than 1 g along the track; more is the phone being knocked or shaken.
         let along = along.clamp(-MAX_ACCEL_MPS2, MAX_ACCEL_MPS2);
-        if self.axis_sign_known || self.stopped {
-            self.v += (along - self.b) * dt;
-        } else {
-            self.v += along * dt;
-        }
+        // The bias is along the axis, like the signed speed, so it's subtracted whichever way is forward.
+        self.v += (along - self.b) * dt;
         // P = F P F^T + Q with F = [[1, -dt], [0, 1]].
         let n00 =
             self.p00 - 2.0 * dt * self.p01 + dt * dt * self.p11 + ACCEL_NOISE * ACCEL_NOISE * dt;

@@ -814,6 +814,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ride-fusion",
+ "ride-gnss",
  "ride-session",
  "serde_json",
  "tempfile",
@@ -835,6 +836,7 @@ name = "ride-fusion"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ride-gnss",
  "ride-session",
 ]
 
