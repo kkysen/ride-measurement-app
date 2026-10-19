@@ -41,7 +41,7 @@ fn write_session(dir: &std::path::Path, chunks: &[SensorChunk]) {
         session_id: "test".into(),
         streams: vec![StreamInfo {
             name: "accel".into(),
-            sensor: None,
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -98,4 +98,46 @@ fn truncated_tail_keeps_complete_chunks() {
         .unwrap();
     assert!(read.truncated);
     assert_eq!(read.chunks, chunks[..2]);
+}
+
+#[test]
+fn record_stream_round_trips() {
+    use ride_session::RecordChunk;
+    use ride_session::proto::record::Payload;
+    use ride_session::proto::{Location, ManualEvent, Record, manual_event};
+
+    let dir = tempfile::tempdir().unwrap();
+    write_session(dir.path(), &[]);
+    let chunks = vec![RecordChunk {
+        records: vec![
+            Record {
+                received_elapsed_realtime_ns: 5,
+                payload: Some(Payload::Location(Location {
+                    provider: "gps".into(),
+                    latitude_degrees: f64::from_bits(0x4044_5a1c_ac08_3127),
+                    longitude_degrees: -73.985_130_1,
+                    speed_meters_per_second: Some(-0.0),
+                    ..Default::default()
+                })),
+            },
+            Record {
+                received_elapsed_realtime_ns: 6,
+                payload: Some(Payload::ManualEvent(ManualEvent {
+                    kind: manual_event::Kind::AtStation.into(),
+                    text: "14 St".into(),
+                })),
+            },
+        ],
+        written_elapsed_realtime_ns: 7,
+    }];
+    let mut w = StreamWriter::create(dir.path(), "events").unwrap();
+    for c in &chunks {
+        w.append(c).unwrap();
+    }
+    let read = Session::open(dir.path())
+        .unwrap()
+        .read_records("events")
+        .unwrap();
+    assert!(!read.truncated);
+    assert_eq!(read.chunks, chunks);
 }

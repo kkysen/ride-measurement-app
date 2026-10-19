@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use ride_session::proto::record::Payload;
+use ride_session::proto::{StreamKind, manual_event};
 use ride_session::read::Session;
 
 #[derive(Parser)]
@@ -42,6 +44,10 @@ fn summary(session: &Session) -> anyhow::Result<()> {
         println!("device {} {} (SDK {})", d.manufacturer, d.model, d.sdk_int);
     }
     for stream in &info.streams {
+        if stream.kind() == StreamKind::Records {
+            record_summary(session, &stream.name)?;
+            continue;
+        }
         let contents = session
             .read_stream(&stream.name)
             .with_context(|| format!("stream {}", stream.name))?;
@@ -78,6 +84,63 @@ fn summary(session: &Session) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+fn record_summary(session: &Session, name: &str) -> anyhow::Result<()> {
+    let contents = session
+        .read_records(name)
+        .with_context(|| format!("stream {name}"))?;
+    let records: Vec<_> = contents.chunks.iter().flat_map(|c| &c.records).collect();
+    print!(
+        "{name}: {} chunks, {} records",
+        contents.chunks.len(),
+        records.len()
+    );
+    if contents.truncated {
+        print!(", TRUNCATED tail");
+    }
+    println!();
+    let (Some(first), Some(last)) = (records.first(), records.last()) else {
+        return Ok(());
+    };
+    let start = first.received_elapsed_realtime_ns;
+    println!(
+        "  {:.1} s",
+        (last.received_elapsed_realtime_ns - start) as f64 * 1e-9
+    );
+    let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+    for r in &records {
+        *counts.entry(payload_name(r.payload.as_ref())).or_default() += 1;
+        if let Some(Payload::ManualEvent(e)) = &r.payload {
+            let kind = manual_event::Kind::try_from(e.kind).map_or("unknown", |k| k.as_str_name());
+            println!(
+                "  at {:.1} s: {kind} {}",
+                (r.received_elapsed_realtime_ns - start) as f64 * 1e-9,
+                e.text
+            );
+        }
+    }
+    for (kind, n) in counts {
+        println!("  {n} {kind}");
+    }
+    Ok(())
+}
+
+fn payload_name(payload: Option<&Payload>) -> &'static str {
+    match payload {
+        None => "empty",
+        Some(Payload::GnssMeasurements(_)) => "gnss_measurements",
+        Some(Payload::GnssStatus(_)) => "gnss_status",
+        Some(Payload::GnssNavigationMessage(_)) => "gnss_navigation_message",
+        Some(Payload::GnssMeasurementsStatus(_)) => "gnss_measurements_status",
+        Some(Payload::Location(_)) => "location",
+        Some(Payload::CellInfo(_)) => "cell_info",
+        Some(Payload::ServiceState(_)) => "service_state",
+        Some(Payload::SignalStrength(_)) => "signal_strength",
+        Some(Payload::WifiScan(_)) => "wifi_scan",
+        Some(Payload::ManualEvent(_)) => "manual_event",
+        Some(Payload::Battery(_)) => "battery",
+    }
 }
 
 fn csv(session: &Session, stream: &str) -> anyhow::Result<()> {

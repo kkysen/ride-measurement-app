@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use prost::Message;
 
-use crate::{SESSION_INFO_FILE, STREAM_EXTENSION, SensorChunk, SessionInfo};
+use crate::{SESSION_INFO_FILE, STREAM_EXTENSION, SessionInfo};
 
 /// Level used while recording; cheap, since post-ride recompression squeezes further.
 pub const LIVE_ZSTD_LEVEL: i32 = 3;
@@ -38,7 +38,7 @@ impl StreamWriter {
         &self.path
     }
 
-    pub fn append(&mut self, chunk: &SensorChunk) -> anyhow::Result<()> {
+    pub fn append(&mut self, chunk: &impl Message) -> anyhow::Result<()> {
         let frame = zstd::encode_all(
             chunk.encode_length_delimited_to_vec().as_slice(),
             LIVE_ZSTD_LEVEL,

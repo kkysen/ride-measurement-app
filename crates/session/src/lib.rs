@@ -8,7 +8,7 @@ pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/ride.v1.rs"));
 }
 
-pub use proto::{SensorChunk, SessionInfo};
+pub use proto::{RecordChunk, SensorChunk, SessionInfo};
 
 pub const FORMAT_VERSION: u32 = 1;
 pub const SESSION_INFO_FILE: &str = "session.pb";
