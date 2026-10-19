@@ -2,6 +2,7 @@
 
 mod delimited;
 pub mod read;
+pub mod track;
 pub mod write;
 
 pub mod proto {
