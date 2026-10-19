@@ -43,3 +43,7 @@ plot session stream:
 # Export a session's audio to `<session>/audio.wav` for listening.
 wav session:
     cargo run -q --bin ride -- wav {{session}} {{session}}/audio.wav
+
+# Write `<session>/map.html`: the GPS path colored by speed, with your manual events marked.
+map session:
+    cargo run -q --bin ride -- map {{session}}

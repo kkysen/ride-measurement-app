@@ -1,3 +1,5 @@
+mod map;
+
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -31,6 +33,12 @@ enum Command {
         #[arg(long, default_value = "audio")]
         stream: String,
     },
+    /// Write the ride's GPS path, colored by speed, as an HTML map (default `<session>/map.html`).
+    Map {
+        session: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -42,6 +50,10 @@ fn main() -> anyhow::Result<()> {
             output,
             stream,
         } => wav(&Session::open(session)?, &stream, &output),
+        Command::Map { session, output } => {
+            let output = output.unwrap_or_else(|| session.join("map.html"));
+            map::map(&Session::open(session)?, &output)
+        }
     }
 }
 

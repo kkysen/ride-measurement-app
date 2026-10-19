@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ride map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --surface: #ffffff;
+    --ink: #1f1f1d;
+    --ink-muted: #6b6a66;
+    --border: #dddcd8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --surface: #1f1f1d;
+      --ink: #f0efec;
+      --ink-muted: #a8a7a2;
+      --border: #383835;
+    }
+  }
+  html, body { margin: 0; height: 100%; background: var(--surface); color: var(--ink);
+    font: 14px/1.4 system-ui, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  .panel { position: absolute; z-index: 1000; background: var(--surface); color: var(--ink);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+  #info { top: 12px; right: 12px; min-width: 200px; max-width: calc(100% - 48px); }
+  #info .muted, #legend .muted { color: var(--ink-muted); }
+  #info .speed { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #legend { bottom: 24px; left: 12px; }
+  #legend .bar { width: 180px; height: 8px; border-radius: 4px; margin: 4px 0; }
+  #legend .row { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+  #legend .gap { display: inline-block; width: 24px; border-top: 2px dashed #8a8984; vertical-align: middle; margin-right: 6px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="info" class="panel"><div class="muted">Hover or tap the path for the speed there.</div></div>
+<div id="legend" class="panel"></div>
+<script>
+const data = /*RIDE_DATA*/null;
+
+// Sequential blue ramp (steps 250 to 700): light is slow, dark is fast.
+const RAMP = ["#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95", "#104281", "#0d366b"];
+const KMH = 3.6;
+
+const pts = data.segments.flat();
+const speeds = pts.map(p => p[4]).filter(s => s != null).sort((a, b) => a - b);
+// The 98th percentile, so one bad fix doesn't wash out the whole scale.
+const maxSpeed = Math.max(5, speeds.length ? speeds[Math.floor(0.98 * (speeds.length - 1))] : 5);
+
+function color(speed) {
+  if (speed == null) return "#8a8984";
+  const f = Math.min(1, Math.max(0, speed / maxSpeed)) * (RAMP.length - 1);
+  return RAMP[Math.round(f)];
+}
+
+const map = L.map("map", { preferCanvas: true });
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
+
+// No GPS between segments (tunnels): a dashed line, not a guess at the path.
+for (let i = 1; i < data.segments.length; i++) {
+  const a = data.segments[i - 1].at(-1), b = data.segments[i][0];
+  L.polyline([[a[0], a[1]], [b[0], b[1]]], { color: "#8a8984", weight: 2, dashArray: "6 6", interactive: false }).addTo(map);
+}
+for (const seg of data.segments) {
+  const latlngs = seg.map(p => [p[0], p[1]]);
+  // A white casing so the path reads on any tiles.
+  L.polyline(latlngs, { color: "#ffffff", weight: 8, opacity: 0.9, interactive: false }).addTo(map);
+  for (let i = 1; i < seg.length; i++) {
+    const s = seg[i - 1][4] != null && seg[i][4] != null ? (seg[i - 1][4] + seg[i][4]) / 2 : null;
+    L.polyline([latlngs[i - 1], latlngs[i]], { color: color(s), weight: 4, interactive: false }).addTo(map);
+  }
+  if (seg.length === 1) L.circleMarker(latlngs[0], { radius: 3, color: color(seg[0][4]), interactive: false }).addTo(map);
+}
+for (const e of data.events) {
+  L.circleMarker([e.lat, e.lon], { radius: 6, color: "#ffffff", weight: 2, fillColor: "#1f1f1d", fillOpacity: 1 })
+    // As text, not HTML: notes are free text.
+    .bindTooltip(Object.assign(document.createElement("span"), {
+      textContent: e.label + (Math.abs(e.offsetS) > 5 ? ` (nearest fix ${Math.abs(e.offsetS).toFixed(0)} s away)` : ""),
+    }))
+    .addTo(map);
+}
+map.fitBounds(L.latLngBounds(pts.map(p => [p[0], p[1]])), { padding: [24, 24] });
+
+const cursor = L.circleMarker([0, 0], { radius: 7, color: "#ffffff", weight: 2, fillColor: "#1f1f1d", fillOpacity: 1, interactive: false });
+const fmt = (v, d) => v == null ? "unknown" : v.toFixed(d);
+function show(p) {
+  cursor.setLatLng([p[0], p[1]]).addTo(map);
+  const time = new Date(p[3]).toLocaleTimeString();
+  document.getElementById("info").innerHTML =
+    `<div class="speed">${fmt(p[4] == null ? null : p[4] * KMH, 1)} km/h</div>` +
+    `<div class="muted">${fmt(p[4], 2)} m/s ± ${fmt(p[5], 2)}</div>` +
+    `<div class="muted">${time} · ${fmt(p[2], 0)} s in · position ± ${fmt(p[6], 0)} m</div>`;
+}
+// The fix nearest the pointer, if it's within a finger's width.
+function nearest(e) {
+  let best = null, bestD = 30;
+  for (const p of pts) {
+    const d = map.latLngToContainerPoint([p[0], p[1]]).distanceTo(e.containerPoint);
+    if (d < bestD) { best = p; bestD = d; }
+  }
+  return best;
+}
+let pinned = false;
+map.on("mousemove", e => { if (!pinned) { const p = nearest(e); if (p) show(p); } });
+map.on("click", e => { const p = nearest(e); pinned = p != null; if (p) show(p); });
+
+document.getElementById("legend").innerHTML =
+  `<div>Speed (GPS)</div>` +
+  `<div class="bar" style="background: linear-gradient(to right, ${RAMP.join(",")})"></div>` +
+  `<div class="row muted"><span>0</span><span>${(maxSpeed * KMH).toFixed(0)}+ km/h</span></div>` +
+  `<div class="muted"><span class="gap"></span>no GPS</div>`;
+document.title = `Ride map ${data.session}`;
+</script>
+</body>
+</html>
