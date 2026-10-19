@@ -760,6 +760,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ride-fusion",
  "ride-session",
  "serde_json",
  "tempfile",
@@ -770,6 +771,14 @@ name = "ride-ffi"
 version = "0.1.0"
 dependencies = [
  "uniffi",
+]
+
+[[package]]
+name = "ride-fusion"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ride-session",
 ]
 
 [[package]]
