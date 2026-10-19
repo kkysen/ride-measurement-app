@@ -3,7 +3,8 @@
 // A session is a directory:
 // - `session.pb`: one length-delimited `SessionInfo`.
 // - `<stream>.zst` for each stream in `SessionInfo.streams`:
-//   a concatenation of independent zstd frames, each holding exactly one length-delimited `SensorChunk`.
+//   a concatenation of independent zstd frames, each holding exactly one length-delimited chunk:
+//   a `SensorChunk` for `STREAM_KIND_SENSOR` streams, a `RecordChunk` for `STREAM_KIND_RECORDS` streams.
 //   Frames are self-contained, so a crash loses at most the frame being written.
 //
 // Length-delimited means a varint byte length followed by the message, as in `writeDelimitedTo`.
@@ -35,10 +36,17 @@ message Device {
   string build_fingerprint = 4;
 }
 
+enum StreamKind {
+  STREAM_KIND_SENSOR = 0;
+  STREAM_KIND_RECORDS = 1;
+}
+
 message StreamInfo {
   // File name without the `.zst` extension.
   string name = 1;
+  // Set for sensor streams.
   SensorInfo sensor = 2;
+  StreamKind kind = 3;
 }
 
 // Everything `android.hardware.Sensor` reports, recorded as-is.
@@ -72,4 +80,220 @@ message SensorChunk {
   repeated int32 accuracy = 4;
   // `SystemClock.elapsedRealtimeNanos()` when the chunk was written, to check the sensor timestamp base.
   int64 written_elapsed_realtime_ns = 5;
+}
+
+message RecordChunk {
+  repeated Record records = 1;
+  int64 written_elapsed_realtime_ns = 2;
+}
+
+// One event from a non-sensor Android API, stored as close to what Android delivered as practical.
+// Optional fields are unset when Android reports them as unavailable.
+message Record {
+  // `SystemClock.elapsedRealtimeNanos()` when the app received it.
+  int64 received_elapsed_realtime_ns = 1;
+  oneof payload {
+    GnssMeasurementsEvent gnss_measurements = 2;
+    GnssStatus gnss_status = 3;
+    GnssNavigationMessage gnss_navigation_message = 4;
+    Location location = 5;
+    CellInfoSnapshot cell_info = 6;
+    ServiceState service_state = 7;
+    SignalStrength signal_strength = 8;
+    WifiScan wifi_scan = 9;
+    ManualEvent manual_event = 10;
+    BatteryStatus battery = 11;
+    GnssMeasurementsStatus gnss_measurements_status = 12;
+  }
+}
+
+message GnssMeasurementsEvent {
+  GnssClock clock = 1;
+  repeated GnssMeasurement measurements = 2;
+  // `GnssMeasurementsEvent.hasIsFullTracking` / `isFullTracking` (API 34).
+  optional bool is_full_tracking = 3;
+}
+
+// `android.location.GnssClock`.
+message GnssClock {
+  int64 time_nanos = 1;
+  optional double time_uncertainty_nanos = 2;
+  optional int32 leap_second = 3;
+  optional int64 full_bias_nanos = 4;
+  optional double bias_nanos = 5;
+  optional double bias_uncertainty_nanos = 6;
+  optional double drift_nanos_per_second = 7;
+  optional double drift_uncertainty_nanos_per_second = 8;
+  int32 hardware_clock_discontinuity_count = 9;
+  optional int64 elapsed_realtime_nanos = 10;
+  optional double elapsed_realtime_uncertainty_nanos = 11;
+  optional double reference_carrier_frequency_hz_for_isb = 12;
+  optional string reference_code_type_for_isb = 13;
+  optional int32 reference_constellation_type_for_isb = 14;
+}
+
+// `android.location.GnssMeasurement`.
+message GnssMeasurement {
+  int32 svid = 1;
+  int32 constellation_type = 2;
+  double time_offset_nanos = 3;
+  int32 state = 4;
+  int64 received_sv_time_nanos = 5;
+  int64 received_sv_time_uncertainty_nanos = 6;
+  double cn0_dbhz = 7;
+  optional double baseband_cn0_dbhz = 8;
+  double pseudorange_rate_meters_per_second = 9;
+  double pseudorange_rate_uncertainty_meters_per_second = 10;
+  int32 accumulated_delta_range_state = 11;
+  double accumulated_delta_range_meters = 12;
+  double accumulated_delta_range_uncertainty_meters = 13;
+  optional float carrier_frequency_hz = 14;
+  int32 multipath_indicator = 15;
+  optional double snr_in_db = 16;
+  optional double automatic_gain_control_level_db = 17;
+  optional string code_type = 18;
+  optional double full_inter_signal_bias_nanos = 19;
+  optional double full_inter_signal_bias_uncertainty_nanos = 20;
+  optional double satellite_inter_signal_bias_nanos = 21;
+  optional double satellite_inter_signal_bias_uncertainty_nanos = 22;
+}
+
+// `GnssMeasurementsEvent.Callback.onStatusChanged`.
+message GnssMeasurementsStatus {
+  int32 status = 1;
+}
+
+// `android.location.GnssStatus`, one entry per satellite.
+message GnssStatus {
+  repeated GnssSatellite satellites = 1;
+}
+
+message GnssSatellite {
+  int32 svid = 1;
+  int32 constellation_type = 2;
+  float cn0_dbhz = 3;
+  float elevation_degrees = 4;
+  float azimuth_degrees = 5;
+  bool has_almanac = 6;
+  bool has_ephemeris = 7;
+  bool used_in_fix = 8;
+  optional float carrier_frequency_hz = 9;
+  optional float baseband_cn0_dbhz = 10;
+}
+
+// `android.location.GnssNavigationMessage`.
+message GnssNavigationMessage {
+  int32 svid = 1;
+  int32 type = 2;
+  int32 status = 3;
+  int32 message_id = 4;
+  int32 submessage_id = 5;
+  bytes data = 6;
+}
+
+// `android.location.Location`.
+message Location {
+  string provider = 1;
+  int64 time_ms = 2;
+  int64 elapsed_realtime_nanos = 3;
+  optional double elapsed_realtime_uncertainty_nanos = 4;
+  double latitude_degrees = 5;
+  double longitude_degrees = 6;
+  optional double altitude_meters = 7;
+  optional double msl_altitude_meters = 8;
+  optional float msl_altitude_accuracy_meters = 9;
+  optional float speed_meters_per_second = 10;
+  optional float bearing_degrees = 11;
+  optional float horizontal_accuracy_meters = 12;
+  optional float vertical_accuracy_meters = 13;
+  optional float speed_accuracy_meters_per_second = 14;
+  optional float bearing_accuracy_degrees = 15;
+  bool is_mock = 16;
+}
+
+// `TelephonyManager.requestCellInfoUpdate` results: everything the modem currently sees.
+message CellInfoSnapshot {
+  repeated Cell cells = 1;
+}
+
+message Cell {
+  // `lte`, `nr`, `gsm`, `wcdma`, `tdscdma`, `cdma`, or the class name for anything else.
+  string kind = 1;
+  bool registered = 2;
+  int32 connection_status = 3;
+  // `CellInfo.getTimestampMillis`, elapsed realtime when the modem measured it.
+  int64 timestamp_ms = 4;
+  string mcc = 5;
+  string mnc = 6;
+  // LTE CI, NR NCI, GSM/WCDMA CID; unset if unavailable.
+  optional int64 cell_id = 7;
+  optional int32 pci = 8;
+  optional int32 tac = 9;
+  optional int32 arfcn = 10;
+  repeated int32 bands = 11;
+  int32 dbm = 12;
+  int32 asu_level = 13;
+  int32 level = 14;
+  // `CellInfo.toString()`, which includes every field Android exposes, for anything not parsed above.
+  string raw = 15;
+}
+
+// `TelephonyCallback.ServiceStateListener`.
+message ServiceState {
+  int32 state = 1;
+  bool roaming = 2;
+  string operator_numeric = 3;
+  // `ServiceState.toString()`, including registration info per network.
+  string raw = 4;
+}
+
+// `TelephonyCallback.SignalStrengthsListener`.
+message SignalStrength {
+  int32 level = 1;
+  string raw = 2;
+}
+
+message WifiScan {
+  // Whether this app requested the scan (as opposed to results from someone else's scan).
+  bool requested = 1;
+  repeated WifiResult results = 2;
+}
+
+// `android.net.wifi.ScanResult`.
+message WifiResult {
+  string bssid = 1;
+  string ssid = 2;
+  int32 frequency_mhz = 3;
+  int32 level_dbm = 4;
+  // Microseconds since boot when this result was last seen.
+  int64 timestamp_us = 5;
+  int32 channel_width = 6;
+  int32 wifi_standard = 7;
+}
+
+message ManualEvent {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_BOARDED = 1;
+    KIND_AT_STATION = 2;
+    KIND_ALIGHTED = 3;
+    KIND_NOTE = 4;
+    KIND_DOORS_OPEN = 5;
+    KIND_DOORS_CLOSED = 6;
+  }
+  Kind kind = 1;
+  string text = 2;
+}
+
+// `BatteryManager` and the sticky `ACTION_BATTERY_CHANGED` broadcast.
+message BatteryStatus {
+  int32 level = 1;
+  int32 scale = 2;
+  int32 status = 3;
+  int32 plugged = 4;
+  // Tenths of a degree Celsius.
+  int32 temperature_decidegrees_c = 5;
+  int32 voltage_mv = 6;
+  optional int32 current_now_ua = 7;
+  optional int32 charge_counter_uah = 8;
 }
