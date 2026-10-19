@@ -13,6 +13,7 @@ class Stream:
     values: np.ndarray  # float32, shape (samples, values_per_sample)
     accuracy: np.ndarray  # int32
     truncated: bool
+    damaged_ranges: int  # byte ranges skipped as corrupt; their samples are missing
 
 
 def stream_names(session_dir: str) -> list[str]:
@@ -27,4 +28,5 @@ def read_stream(session_dir: str, stream: str) -> Stream:
         values=values.reshape(-1, max(raw["values_per_sample"], 1)),
         accuracy=np.frombuffer(raw["accuracy"], dtype="<i4"),
         truncated=raw["truncated"],
+        damaged_ranges=raw["damaged_ranges"],
     )
