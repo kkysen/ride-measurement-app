@@ -131,6 +131,10 @@ Shows speed, along-track distance, current/next station. Results logged, but ove
    bus uses road graph. Station identity resolved by an HMM over the graph using inter-station distance (from integrated speed),
    dwell timing, barometer, own WiFi/cell fingerprints, and manual taps;
    network location enters only as a weak, outlier-gated hint, so a misconfigured station cell cannot override the rest.
+   OSM / OpenRailwayMap geometry is only roughly accurate (worse underground), so it is a prior with uncertainty, not a hard constraint:
+   the graph topology (which tracks connect, station order) is trusted far more than coordinates.
+   Repeated rides refine our own track map: jointly estimate track geometry (curvature from gyro, length from speed)
+   and station positions across all rides of a line, SLAM-style, with OSM as the starting point.
 5. **Rail joints**: periodic vertical jolts at rate = speed / rail length (often 12.5-25 m) give a GNSS-free speed estimate.
    Accel first: it measures the car body's jolt directly at 400 Hz, free since we record it anyway;
    it is damped when the phone is in a pocket or hand. Audio catches the higher-frequency clack and is less sensitive to how the phone is held,
