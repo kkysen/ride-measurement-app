@@ -71,8 +71,11 @@ Rule: store only what cannot be recomputed later; everything derived is regenera
   Low-rate streams: length-delimited protobuf messages, compressed per chunk.
 - Compression on the fly with `zstd` at a low level, one independent frame per chunk.
   At ~30 KB/s raw this costs negligible CPU, avoids a post-ride pass and the peak disk usage of uncompressed files,
-  and a crash loses at most the current chunk. The downside is a slightly worse ratio than one big high-level pass,
-  so an optional offline recompress at a high `zstd` level (with a trained dictionary) can squeeze archives further.
+  and a crash loses at most the current chunk. The downside is a slightly worse ratio than one big high-level pass.
+- Post-ride recompress on the phone (while charging, or right after the ride): rewrite each stream as one file at a high `zstd` level.
+  Never delete data before its replacement is verified: write the new file, `fsync`, decode it fully,
+  compare every record against the original chunks (or a content hash of the decoded records), and only then delete the chunks.
+  Any failure keeps the chunks and flags the session; sessions are also deleted from the phone only after the copy off it is verified the same way.
   Benchmark `zstd` vs `lz4` vs domain codecs on real rides before freezing the format; the `.proto` schema versions it.
 - Rough size: ~80-100 MB/h before encoding, est. ~20-40 MB/h after; about 1 GB/month at 1 h/day.
   Sessions are copied off the phone (`adb pull` or sync) and deleted after verification.
