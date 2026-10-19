@@ -25,10 +25,14 @@ and must not trust network (cell/WiFi) location, which can report the wrong unde
 
 ## Rust core for performance-sensitive and shared code
 - Platform shells stay thin (Kotlin on Android, Swift on iOS later): sensor callbacks, UI, foreground service.
-- Shared Rust crate for anything heavy or reused: session file writer/reader, live EKF, rail-joint detection, map-matching.
+- Shared Rust crate for heavy or reused algorithms: live EKF, rail-joint detection, map-matching.
   Built for Android with `cargo-ndk`, bindings to Kotlin and Swift via `uniffi`,
   and to Python via `pyo3`/`maturin`, so live and offline processing run the exact same code.
-- Start Phase 1 in Kotlin unless the writer shows up as a bottleneck; move code to Rust as it earns it.
+- The logger stays in Kotlin: it is mostly Android API calls and file appends,
+  and crossing into Rust per sensor sample would cost more than it saves.
+- The session format is defined by a `.proto` schema, not a Rust library, so every language reads it natively.
+- Prototype fusion in Python; create the Rust crate in Phase 2 when the live EKF moves to the phone,
+  then port proven algorithms into it.
 
 ## Phase 1: Logger app (main focus)
 Foreground service + wake lock, runs screen-off for hours.
