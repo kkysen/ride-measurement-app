@@ -66,8 +66,12 @@ Rule: store only what cannot be recomputed later; everything derived is regenera
   (both use inputs we lack, and are tiny), barometer, cell/WiFi scans, light, proximity, battery/temperature, manual events.
 - Not stored: calibrated IMU, rotation vector, step detector, GnssLogger text, anything the live EKF computes.
 - Encoding for high-rate streams: columnar chunks of a few seconds each.
-  Quantize each value to the sensor's reported resolution (`Sensor.getResolution`), which is lossless relative to the ADC;
-  timestamps and values delta-encoded (delta of delta for timestamps), zigzag, then compressed.
+  Every encoding must be bit-exact lossless: decoding returns the exact `float` bits Android delivered.
+  Values: XOR with the previous value's bits (Gorilla-style) or byte-shuffle, then compress;
+  timestamps: delta of delta, zigzag, then compressed.
+  Integer quantization to `Sensor.getResolution` is only an optimization, never trusted:
+  phones often misreport resolution and calibration rescales values off clean steps,
+  so a chunk is quantized only if every value round-trips bit-exactly, otherwise it is stored as raw bits.
   Low-rate streams: length-delimited protobuf messages, compressed per chunk.
 - Compression on the fly with `zstd` at a low level, one independent frame per chunk.
   At ~30 KB/s raw this costs negligible CPU, avoids a post-ride pass and the peak disk usage of uncompressed files,
