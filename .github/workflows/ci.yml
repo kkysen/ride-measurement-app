@@ -30,6 +30,15 @@ jobs:
           cargo clippy --all-targets -- -D warnings
           cargo test
 
+      # The app's Rust library, built with the runner's LLVM against just the NDK's sysroot,
+      # the same way as on an ARM64 host (see `scripts/android-clang`).
+      - name: Rust for Android
+        run: |
+          rustup target add aarch64-linux-android
+          sudo apt-get install -y --no-install-recommends clang lld llvm
+          scripts/install-ndk-sysroot.sh
+          echo "AR_aarch64_linux_android=llvm-ar" >> "$GITHUB_ENV"
+
       # Every build is signed with the one shared key, never a per-runner debug key (see README).
       - name: Signing key
         env:

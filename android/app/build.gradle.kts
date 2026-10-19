@@ -1,4 +1,5 @@
 import com.google.protobuf.gradle.proto
+import javax.inject.Inject
 
 plugins {
     alias(libs.plugins.android.application)
@@ -22,6 +23,8 @@ android {
             .orElse(providers.environmentVariable("RIDE_ONEDRIVE_CLIENT_ID"))
             .getOrElse("")
         buildConfigField("String", "ONEDRIVE_CLIENT_ID", "\"$clientId\"")
+        // The Rust library is built only for ARM64, the only ABI of the phones this targets.
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     // Every build, local or CI, debug or release, is signed with the same key,
@@ -59,6 +62,92 @@ android {
     sourceSets["main"].proto { srcDir("../../proto") }
 }
 
+// The Rust core (`crates/ffi`), built with `cargo` and called through `uniffi`-generated Kotlin bindings.
+val repoRoot = rootDir.parentFile
+val cargoTarget = File(repoRoot, "target")
+
+abstract class CargoTask @Inject constructor(private val exec: ExecOperations) : DefaultTask() {
+    @get:Internal
+    abstract val repoRoot: DirectoryProperty
+
+    // Rebuild whenever any Rust source or manifest changes; `cargo` itself skips work that's up to date.
+    @get:InputFiles
+    abstract val rustSources: ConfigurableFileCollection
+
+    protected fun cargo(vararg args: String) {
+        exec.exec {
+            workingDir = repoRoot.get().asFile
+            commandLine("cargo", *args)
+        }
+    }
+}
+
+// The Android library, packaged as `lib/arm64-v8a/libride_ffi.so`.
+abstract class CargoBuildAndroid @Inject constructor(exec: ExecOperations, private val fs: FileSystemOperations) :
+    CargoTask(exec) {
+    @get:OutputDirectory
+    abstract val outDir: DirectoryProperty
+
+    @TaskAction
+    fun build() {
+        cargo("build", "--release", "-p", "ride-ffi", "--lib", "--target", "aarch64-linux-android")
+        fs.sync {
+            from(repoRoot.file("target/aarch64-linux-android/release/libride_ffi.so"))
+            into(outDir.dir("arm64-v8a"))
+        }
+    }
+}
+
+// Kotlin bindings, generated from the host build of the library (library mode reads the metadata in it),
+// which JVM unit tests also load.
+abstract class UniffiBindings @Inject constructor(exec: ExecOperations, private val fs: FileSystemOperations) :
+    CargoTask(exec) {
+    @get:OutputDirectory
+    abstract val outDir: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+        cargo("build", "--release", "-p", "ride-ffi", "--lib")
+        fs.delete { delete(outDir) }
+        cargo(
+            "run", "--release", "-q", "-p", "ride-ffi", "--bin", "uniffi-bindgen", "--",
+            "generate", "--library", "target/release/libride_ffi.so",
+            "--language", "kotlin", "--no-format", "--out-dir", outDir.get().asFile.path,
+        )
+    }
+}
+
+val rustInputs = files(
+    File(repoRoot, "Cargo.toml"),
+    File(repoRoot, "Cargo.lock"),
+    File(repoRoot, ".cargo/config.toml"),
+    fileTree(File(repoRoot, "crates")) { include("**/*.rs", "**/Cargo.toml") },
+    fileTree(File(repoRoot, "proto")),
+)
+val cargoBuildAndroid = tasks.register<CargoBuildAndroid>("cargoBuildAndroid") {
+    repoRoot.set(rootDir.parentFile)
+    rustSources.from(rustInputs)
+    outDir.set(layout.buildDirectory.dir("rust/jniLibs"))
+}
+val uniffiBindings = tasks.register<UniffiBindings>("uniffiBindings") {
+    repoRoot.set(rootDir.parentFile)
+    rustSources.from(rustInputs)
+    outDir.set(layout.buildDirectory.dir("generated/uniffi"))
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.jniLibs?.addGeneratedSourceDirectory(cargoBuildAndroid, CargoBuildAndroid::outDir)
+        variant.sources.kotlin?.addGeneratedSourceDirectory(uniffiBindings, UniffiBindings::outDir)
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(uniffiBindings)
+    // Where JNA finds the host build of the library.
+    systemProperty("jna.library.path", File(cargoTarget, "release").path)
+}
+
 protobuf {
     protoc {
         artifact = libs.protoc.get().toString()
@@ -83,8 +172,11 @@ dependencies {
     implementation(libs.work.runtime)
     implementation(libs.protobuf.javalite)
     implementation("${libs.zstd.jni.get()}@aar")
+    implementation("${libs.jna.get()}@aar")
 
     testImplementation(libs.junit)
     // The JVM build of zstd-jni, for unit tests on the host.
     testImplementation(libs.zstd.jni)
+    // The JVM build of JNA, for loading the host build of the Rust library in unit tests.
+    testImplementation(libs.jna)
 }
