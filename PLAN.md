@@ -1,62 +1,75 @@
-# Ride measurement app (Android, personal use)
+# Ride measurement app (Android first, personal use)
 
 ## Context
-Record rides (train, bus, etc.) with the highest-fidelity sensor data possible
-(GNSS position, Doppler speed, IMU, audio, optionally video),
-then fuse offline for an accurate trajectory/speed profile and mode classification.
-Empty repo; greenfield.
+Record rides (train, bus, etc.) with the highest-fidelity sensor data possible,
+primarily for offline analysis, with some lightweight live analysis on the phone.
+Offline results are authoritative: anything computed live can be recomputed better later (smoother, more context).
+Audio and video are deferred to later improvements.
+Many rides start in or just after tunnels, so the design must not depend on an initial GNSS fix,
+and must not trust network (cell/WiFi) location, which can report the wrong underground station.
 
-## Key decisions
-- **Native Android app (Kotlin), not a PWA.**
-  A PWA gets only fused `Geolocation` (~1 Hz, no raw GNSS, no Doppler, no timestamps you can trust),
-  `DeviceMotion` at browser-chosen rates, and dies when the screen locks/backgrounds.
-  Native gives: `GnssMeasurement` (raw pseudorange, pseudorange-rate = Doppler, carrier phase, per-satellite C/N0),
-  `GnssNavigationMessage`, `Location` with speed/bearing accuracy,
-  `SensorManager` at `SENSOR_DELAY_FASTEST` / `HIGH_SAMPLING_RATE_SENSORS` (~200-500 Hz accel, gyro, mag, baro),
-  all timestamped on `elapsedRealtimeNanos`, plus a foreground service so it runs screen-off for hours.
-  Turn on Developer options > "Force full GNSS measurements" to disable duty cycling.
-- **Split: dumb, lossless logger on phone; fusion offline in Python.**
-  Real-time fusion is optional later; offline lets us run a *smoother* (forward + backward),
-  which beats any real-time filter, and lets us re-run algorithms on old rides.
-- **Future iPhone support**: keep the session format platform-neutral and the fusion pipeline phone-agnostic,
-  so an iOS logger later is just a thin Swift app writing the same format.
-  iOS has no raw GNSS (only CoreLocation position/speed/course with accuracies), so iPhone rides will be less accurate;
-  the pipeline must treat raw GNSS as optional. Not worth Kotlin Multiplatform/Flutter for a logger this thin.
+## Phase 0: Repo
+- `git init` in `/home/khyber/work/ride-measurement-app`, add this plan as `PLAN.md`, commit.
+- `gh repo create kkysen/ride-measurement-app --public --source . --push` (user explicitly asked for a public GitHub repo).
+- Every later edit to the plan gets its own commit (one commit per separate change), pushed only when asked.
 
-## Phase 1: Logger app
-- Foreground service, wake lock, single monotonic clock (`elapsedRealtimeNanos`) for every stream;
-  log GNSS clock offset to map to UTC.
-- Streams: raw GNSS measurements + nav messages, `Location` (GPS provider and fused),
-  accel / gyro / mag / baro / uncalibrated variants, audio (Opus or 16 kHz PCM; low cost, great for mode/events),
-  video optional (CameraX, low res/fps, frame timestamps logged) since it is the battery/storage hog.
-- Format: one session dir per ride; append-only binary or protobuf-delimited per stream, audio/video in standard containers.
-  Optionally also emit the GnssLogger-compatible text format so Google tools (GNSS Analysis, RTKLIB via `gnsslogger_to_rnx`) work directly.
-- Calibration: record 10-30 s stationary at start (IMU bias, gravity direction); note phone mounting (pocket vs. fixed changes everything).
-- Export via share sheet / adb pull.
+## Platform
+- **Native Android app (Kotlin), not a PWA.** A PWA gets only fused, low-rate `Geolocation` (no raw GNSS, no Doppler),
+  throttled `DeviceMotion`, no barometer/cell/WiFi data, and is killed when the screen locks.
+- **Install by sideloading**, no Play Store review: enable developer mode, install over USB with Android Studio or `adb install`.
+  (Google is rolling out developer identity verification for sideloaded apps on certified devices;
+  `adb`/Android Studio installs to your own phone stay available, and friends would need either that or a free hobbyist registration.)
+- **iPhone later**: keep the session format and fusion pipeline phone-agnostic so an iOS logger is a thin Swift app.
+  iOS has no raw GNSS and no cell/WiFi scan APIs, so iPhone rides are less accurate; raw GNSS is optional in the pipeline.
+  Install: free Apple ID signing (re-sign every 7 days) for yourself, or $99/yr developer account + TestFlight for friends.
 
-## Phase 2: Offline fusion (Python, `numpy`/`scipy`, maybe `gtsam`)
-1. **GNSS processing**: raw measurements -> own WLS/PPP-lite or RTKLIB with a nearby CORS base station (free RINEX from NOAA/EUREF/IGS) for sub-meter;
-   Doppler -> velocity solution independent of position (typically ~0.1 m/s, better than differencing positions).
-   Carrier-phase time-differencing gives cm-level *relative* displacement when phone tracks ADR (many do poorly; check).
-2. **Error-state EKF/UKF + RTS smoother**, or factor graph (GTSAM) which handles outages and loop constraints cleanly.
-   State: position, velocity, attitude, accel/gyro bias. IMU drives the prediction at high rate;
-   GNSS position, Doppler velocity, and baro altitude are measurement updates, weighted by their reported/estimated uncertainty, with outlier gating (multipath in stations/urban canyons).
-3. **Vehicle constraints** (the big win for rail): non-holonomic constraint (no lateral/vertical velocity in vehicle frame) after estimating phone-to-vehicle rotation;
-   zero-velocity updates at stops (detected from IMU variance + audio).
-   For trains, **map-matching to the track graph** from OpenStreetMap (`railway=rail`) reduces the problem to 1-D along-track position; that alone dominates accuracy in tunnels.
-   Same idea for buses with road graph + known route.
-4. **Tunnels/underground**: pure IMU dead-reckoning drifts quickly (phone MEMS, ~minutes = hundreds of m);
-   rely on track constraint + ZUPTs at stations + known station positions + audio/vibration signatures.
-5. **Mode classification**: audio spectrogram + IMU vibration spectra (rail joints give periodic clacks whose rate = speed / rail length, an independent speed cue).
-   Start with handcrafted features + small classifier; label your own rides.
-6. **Video (later)**: visual odometry (e.g. ORB-SLAM3, or simple optical flow for speed) as another velocity factor;
-   TrackSight-style localization needs a reference map of features per line, so only worth it for routes you repeat.
+## Phase 1: Logger app (main focus)
+Foreground service + wake lock, runs screen-off for hours.
+One clock for everything: `elapsedRealtimeNanos`; also log GNSS clock to map to UTC.
 
-## Phase 3 (optional)
-Live display of speed/position on phone; ride viewer (map + speed plot) as a local web page.
+Streams:
+- **GNSS raw** (`GnssMeasurement`): pseudorange, pseudorange-rate (Doppler, gives velocity directly, ~0.1 m/s),
+  ADR (accumulated delta range = carrier phase, cm-level relative displacement when the chip tracks it),
+  per-satellite C/N0; plus `GnssNavigationMessage`, `GnssStatus`, `GnssClock`.
+  Enable Developer options > "Force full GNSS measurements" to disable **duty cycling**
+  (the chip otherwise powers down between fixes to save battery, causing gaps and resetting carrier phase).
+- **Location fixes**: GPS provider (with speed/bearing accuracy) and fused provider, logged but not trusted blindly.
+- **IMU** at max rate (`HIGH_SAMPLING_RATE_SENSORS`, ~400 Hz): accel, gyro, mag, plus uncalibrated variants and rotation vector.
+- **Barometer**: altitude changes, tunnel entry/exit pressure transients, station platforms below ground. Very useful underground.
+- **Cell info** (`CellInfo`: cell IDs, signal strength) and **WiFi scans** (BSSIDs, RSSI):
+  recorded as raw fingerprints, never as a position. We build our own station fingerprint map from labeled past rides.
+- **Other cheap signals**: light sensor (tunnel detection), proximity (in pocket), step detector (walking vs riding), battery/temperature.
+- **Manual event button**: tap "boarded", "at station X" (picked from nearby OSM stations), "alighted".
+  Cheap and the most reliable underground ground truth.
+- Optional toggle: low-bitrate audio (Opus ~24 kbps is ~10 MB/h). Deferred by default, see rail joints note.
+
+Format: one directory per session, append-only length-delimited protobuf per stream;
+optionally also GnssLogger-compatible text so Google's tools and RTKLIB work directly.
+Calibration: 10-30 s stationary at start when possible (IMU bias, gravity). Export via share sheet / `adb pull`.
+
+## Phase 2: Live analysis (light)
+Forward-only error-state EKF on the phone: IMU prediction, Doppler velocity and GPS position updates, ZUPTs.
+Shows speed, along-track distance, current/next station. Results logged, but overwritten by offline processing.
+
+## Phase 3: Offline fusion (Python: `numpy`, `scipy`, possibly `gtsam`)
+1. **GNSS**: own WLS from raw measurements, or RTKLIB with a nearby CORS base station (free RINEX) for sub-meter;
+   Doppler velocity; time-differenced ADR where available.
+2. **Smoother**: error-state EKF + RTS backward pass, or factor graph. The backward pass is what solves tunnel starts:
+   the first good fix after exiting propagates back through the tunnel segment.
+3. **Vehicle constraints**: estimate phone-to-vehicle rotation, then non-holonomic constraint (no sideways/vertical velocity);
+   **ZUPTs** (zero-velocity updates: when stopped, assert velocity = 0, which resets IMU drift) at stops detected from IMU variance.
+4. **Map-matching to OSM track graph** (`railway=*`): reduces the train problem to 1-D along-track position;
+   bus uses road graph. Station identity resolved by an HMM over the graph using inter-station distance (from integrated speed),
+   dwell timing, barometer, own WiFi/cell fingerprints, and manual taps;
+   network location enters only as a weak, outlier-gated hint, so a misconfigured station cell cannot override the rest.
+5. **Rail joints**: periodic vertical jolts at rate = speed / rail length (often 12.5-25 m) give a GNSS-free speed estimate.
+   Try accel first (400 Hz should catch impacts); audio picks up clacks more clearly, so it is a good first audio use.
+   Caveat: continuously welded rail has no joints, but switches/expansion joints still give occasional landmarks.
+6. **Mode classification** (later): IMU vibration spectra, then audio.
+7. **Video** (later): visual odometry as a velocity factor; TrackSight-style localization only for routes repeated often.
 
 ## Verification
-- Logger: compare recorded rates/gaps per stream; check screen-off 1 h ride has no dropouts.
-- GNSS: verify Doppler speed vs. position-derived speed agree on open sky; stationary test for noise floor.
-- Fusion: drop GNSS for synthetic outages on good data and measure error vs. held-out truth;
-  compare against known track geometry and station-to-station distances / timetable.
+- Logger: per-stream rate/gap report; 1 h screen-off ride without dropouts.
+- GNSS: Doppler speed vs position-derived speed agree on open sky; stationary noise floor.
+- Fusion: synthetic GNSS outages on good data, error vs held-out truth;
+  station-to-station distances vs OSM; correct station identity on rides starting underground.
