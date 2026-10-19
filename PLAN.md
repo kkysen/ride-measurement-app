@@ -103,6 +103,11 @@ Rule: store only what cannot be recomputed later; everything derived is regenera
 - Station detection, live: a stop (low IMU variance for several seconds) near an OSM station on the matched line;
   underground, a stop plus dwell length plus the along-track distance since the last known station picks the candidate.
   Offline, the HMM in Phase 3 makes the final call.
+- Pass-through stations (express trains): predicted from the dead-reckoned along-track position against OSM stations,
+  so the WiFi scan is scheduled to fire just before the predicted pass, widening the window as position uncertainty grows.
+  Confirmed by signatures of passing through a station box: pressure step from the larger cross-section,
+  light sensor brightening, a short burst of new WiFi BSSIDs, and switches/crossovers in the gyro just outside many stations.
+  Each pass becomes a position fix offline, the same as a stop but weaker.
 - Screen off during recording; live display is opt-in.
 - Expect single-digit percent per hour; measure with `dumpsys batterystats` on real rides and record battery in the session.
 
