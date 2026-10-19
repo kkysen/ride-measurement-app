@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.os.PowerManager
+import android.util.Log
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -111,6 +112,15 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Screen() {
+        // Recording doesn't use the Rust core, so if it fails to load, show why and keep going.
+        val rustCoreStatus = remember {
+            try {
+                "Rust core ${coreVersion()}"
+            } catch (e: Throwable) {
+                Log.e("RideLogger", "Rust core failed to load", e)
+                "Rust core failed to load (recording still works):\n${Log.getStackTraceString(e)}"
+            }
+        }
         val state by RecorderService.state.collectAsStateWithLifecycle()
         val auth = remember { OneDriveAuth(this) }
         var oneDriveStatus by remember { mutableStateOf(if (auth.signedIn) "OneDrive: signed in" else "OneDrive: not signed in") }
@@ -184,7 +194,7 @@ class MainActivity : ComponentActivity() {
                 }) { Text(if (auth.signedIn) "Sign in again" else "Sign in to OneDrive") }
                 Button(onClick = { RecompressWorker.enqueueThenUpload(this@MainActivity) }) { Text("Upload now") }
             }
-            Text("App ${BuildConfig.VERSION_NAME}, Rust core ${coreVersion()}", style = MaterialTheme.typography.bodySmall)
+            Text("App ${BuildConfig.VERSION_NAME}, " + rustCoreStatus, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
