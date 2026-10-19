@@ -6,3 +6,4 @@ local.properties
 .kotlin/
 __pycache__/
 .venv/
+*.so

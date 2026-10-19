@@ -1,0 +1,16 @@
+[build-system]
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
+
+[project]
+name = "ride"
+version = "0.1.0"
+description = "Read and plot ride sessions"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = ["numpy>=2.5", "matplotlib>=3.11"]
+
+[tool.maturin]
+manifest-path = "../crates/py/Cargo.toml"
+module-name = "ride._native"
+python-source = "."
