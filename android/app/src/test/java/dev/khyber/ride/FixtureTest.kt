@@ -3,7 +3,10 @@ package dev.khyber.ride
 import dev.khyber.ride.proto.SessionInfo
 import dev.khyber.ride.proto.StreamInfo
 import java.io.File
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import uniffi.ride_ffi.recompressSession
+import uniffi.ride_ffi.recompressedMarker
 
 /**
  * Writes a session with the Kotlin writer for the Rust reader to check bit-exactly
@@ -33,6 +36,22 @@ class FixtureTest {
                 writer.append(builder.build(c.toLong()))
             }
         }
+    }
+
+    /**
+     * The same session after post-ride recompression, through the bindings the app uses,
+     * for the Rust and Python readers to check (`kotlin_fixture.rs`, `test_ride.py`).
+     */
+    @Test
+    fun writeRecompressedFixture() {
+        val source = File(System.getProperty("ride.fixtureDir") ?: "build/fixtures/kotlin-session")
+        writeFixture()
+        val dir = File(source.parentFile, "kotlin-session-recompressed")
+        dir.deleteRecursively()
+        source.copyRecursively(dir)
+        val results = recompressSession(dir.path)
+        assertTrue(results.toString(), results.isNotEmpty() && results.all { it.replaced })
+        assertTrue(File(dir, recompressedMarker()).exists())
     }
 
     companion object {

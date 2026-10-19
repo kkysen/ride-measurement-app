@@ -16,5 +16,6 @@ path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
 uniffi = { version = "0.32.2", features = ["cli"] }
+anyhow.workspace = true
 ride-fusion.workspace = true
 ride-session.workspace = true

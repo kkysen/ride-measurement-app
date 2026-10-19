@@ -176,3 +176,58 @@ pub fn speed_scale_for_top_speed(top_speed_mps: Option<f64>) -> SpeedScale {
 pub fn speed_edge_color_argb(scale: SpeedScale, a_mps: Option<f64>, b_mps: Option<f64>) -> u32 {
     Scale::from(scale).color_argb(speed_colors::edge_speed(a_mps, b_mps))
 }
+
+/// A failure of a whole operation, with its full cause chain.
+#[derive(Debug, uniffi::Error)]
+pub enum RideError {
+    Failed { reason: String },
+}
+
+impl std::fmt::Display for RideError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RideError::Failed { reason } => f.write_str(reason),
+        }
+    }
+}
+
+impl std::error::Error for RideError {}
+
+impl From<anyhow::Error> for RideError {
+    fn from(e: anyhow::Error) -> Self {
+        RideError::Failed {
+            reason: format!("{e:#}"),
+        }
+    }
+}
+
+/// What happened to one stream file.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct StreamRecompression {
+    pub file_name: String,
+    pub replaced: bool,
+    /// Human-readable: the sizes if replaced, else why the original was kept.
+    pub summary: String,
+}
+
+/// The file a session gets once post-ride recompression handled every stream; uploads wait for it.
+#[uniffi::export]
+pub fn recompressed_marker() -> String {
+    ride_session::recompress::MARKER.into()
+}
+
+/// Post-ride recompression of the session in `dir` (`ride_session::recompress`).
+#[uniffi::export]
+pub fn recompress_session(dir: String) -> Result<Vec<StreamRecompression>, RideError> {
+    use ride_session::recompress::{self, Outcome};
+    Ok(
+        recompress::recompress_session(std::path::Path::new(&dir), recompress::LEVEL)?
+            .into_iter()
+            .map(|(file_name, outcome)| StreamRecompression {
+                file_name,
+                replaced: matches!(outcome, Outcome::Replaced { .. }),
+                summary: outcome.to_string(),
+            })
+            .collect(),
+    )
+}

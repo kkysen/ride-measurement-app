@@ -770,6 +770,7 @@ dependencies = [
 name = "ride-ffi"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "ride-fusion",
  "ride-session",
  "uniffi",

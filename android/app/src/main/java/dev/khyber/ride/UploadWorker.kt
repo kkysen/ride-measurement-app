@@ -11,6 +11,7 @@ import dev.khyber.ride.onedrive.OneDriveUploader
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import uniffi.ride_ffi.recompressedMarker
 
 /**
  * Uploads every finished session not yet uploaded. Nothing is ever deleted here:
@@ -22,9 +23,16 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         if (!auth.configured || !auth.signedIn) return@withContext Result.success()
         val uploader = OneDriveUploader(auth)
         val current = RecorderService.state.value.sessionId
+        // Only sessions the Rust recompressor finished with, so a session is never uploaded and then replaced.
+        val recompressed = try {
+            recompressedMarker()
+        } catch (e: Throwable) {
+            android.util.Log.e("UploadWorker", "Rust library unavailable; not uploading", e)
+            return@withContext Result.success()
+        }
         val sessions = RecorderService.sessionsDir().listFiles().orEmpty()
             .filter {
-                it.isDirectory && it.name != current && File(it, Recompressor.MARKER).exists() &&
+                it.isDirectory && it.name != current && File(it, recompressed).exists() &&
                     !File(it, UPLOADED_MARKER).exists()
             }
         try {
