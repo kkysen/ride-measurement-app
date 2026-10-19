@@ -252,3 +252,43 @@ fn impossible_speeds_are_rejected_even_first() {
     assert_eq!(e.rejected.get(&Sensor::GnssDoppler), Some(&8));
     assert_close(10.0, e.speed_mps, 1.0);
 }
+
+#[test]
+fn speed_jumps_beyond_one_g_are_rejected() {
+    let mut est = LiveSpeedEstimator::new();
+    for i in 0..10 {
+        est.on_gnss_fix(ns(i as f64), 0.0, 0.0, None, Some(10.0), Some(0.3));
+    }
+    // 10 to 40 m/s in 1 s is 3 g: a glitch, even though far under Mach 1.
+    est.on_gnss_fix(ns(10.0), 0.0, 0.0, None, Some(40.0), Some(0.3));
+    est.on_gnss_fix(ns(11.0), 0.0, 0.0, None, Some(10.5), Some(0.3));
+    let e = est.estimate(ns(11.0));
+    assert_eq!(e.rejected.get(&Sensor::GnssDoppler), Some(&1));
+    assert_close(10.5, e.speed_mps, 0.5);
+}
+
+#[test]
+fn glitched_first_speed_is_recovered_from() {
+    let mut est = LiveSpeedEstimator::new();
+    // The first fix is wrong; the rest agree with each other and are far from it.
+    est.on_gnss_fix(0, 0.0, 0.0, None, Some(150.0), Some(0.3));
+    for i in 1..12 {
+        est.on_gnss_fix(ns(i as f64), 0.0, 0.0, None, Some(10.0), Some(0.3));
+    }
+    assert_close(10.0, est.estimate(ns(11.0)).speed_mps, 0.5);
+}
+
+#[test]
+fn imu_acceleration_is_capped_at_one_g() {
+    let mut est = LiveSpeedEstimator::new();
+    // Depart normally so the travel axis and its sign are known, then a 5 g knock for 0.2 s.
+    let (_, end) = simulate(&mut est, 25.0, depart_and_cruise, 1.0, None);
+    let before = est.estimate(ns(end)).speed_mps;
+    let tilt = 30f64.to_radians();
+    for i in 1..=80 {
+        let t = end + i as f64 / RATE;
+        est.on_accel(ns(t), 5.0 * G, G * tilt.sin(), G * tilt.cos());
+    }
+    let after = est.estimate(ns(end + 0.2)).speed_mps;
+    assert!(after - before <= G * 0.2 + 0.1, "{before} -> {after}");
+}

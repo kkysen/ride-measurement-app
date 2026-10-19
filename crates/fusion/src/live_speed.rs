@@ -36,6 +36,16 @@ pub struct Estimate {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct SpeedRef {
+    t_ns: i64,
+    speed: f64,
+    sigma: f64,
+    /// Implausible speeds since, and the last of them.
+    implausible: u32,
+    last_implausible: Option<(i64, f64, f64)>,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct Fix {
     t_ns: i64,
     lat: f64,
@@ -65,6 +75,12 @@ const POSITION_MAX_SIGMA_MPS: f64 = 3.0;
 /// Mach 1 at sea level: nothing this records goes faster, so a faster measurement is always wrong,
 /// even as the first one or during a re-initialization, when gating can't catch it.
 pub const MAX_SPEED_MPS: f64 = 343.0;
+/// Trains, buses, and planes in normal operation stay well under 1 g along the track,
+/// so a GNSS speed that would take more than this to reach from the previous plausible one is wrong.
+pub const MAX_ACCEL_MPS2: f64 = 9.80665;
+/// After this many implausible GNSS speeds in a row that agree with each other,
+/// the earlier reference was the wrong one (e.g. a glitched first fix): start over from them.
+const IMPLAUSIBLE_RESET: u32 = 5;
 pub const GATE_SIGMA: f64 = 3.0;
 pub const GNSS_REINIT_REJECTS: u32 = 5;
 pub const RECENT_S: f64 = 3.0;
@@ -107,6 +123,8 @@ pub struct LiveSpeedEstimator {
 
     last_used_ns: BTreeMap<Sensor, i64>,
     rejected: BTreeMap<Sensor, u32>,
+    /// Per GNSS sensor, the last plausible speed, to check the next against [`MAX_ACCEL_MPS2`].
+    speed_refs: BTreeMap<Sensor, SpeedRef>,
 }
 
 impl Default for LiveSpeedEstimator {
@@ -140,6 +158,7 @@ impl Default for LiveSpeedEstimator {
             prev_fix: None,
             last_used_ns: BTreeMap::new(),
             rejected: BTreeMap::new(),
+            speed_refs: BTreeMap::new(),
         }
     }
 }
@@ -337,6 +356,10 @@ impl LiveSpeedEstimator {
             *self.rejected.entry(sensor).or_default() += 1;
             return;
         }
+        if !self.plausible_change(sensor, t_ns, speed, sigma) {
+            *self.rejected.entry(sensor).or_default() += 1;
+            return;
+        }
         let signed = if self.v < 0.0 && !self.axis_sign_known {
             -speed
         } else {
@@ -366,7 +389,44 @@ impl LiveSpeedEstimator {
         }
     }
 
+    /// Whether reaching `speed` from this sensor's last plausible speed takes at most [`MAX_ACCEL_MPS2`],
+    /// allowing for both speeds' uncertainty; records it as the new reference if so.
+    fn plausible_change(&mut self, sensor: Sensor, t_ns: i64, speed: f64, sigma: f64) -> bool {
+        let reachable = |t0: i64, v0: f64, s0: f64| {
+            let dt = (t_ns - t0).max(0) as f64 * 1e-9;
+            (speed - v0).abs() <= MAX_ACCEL_MPS2 * dt + GATE_SIGMA * s0.hypot(sigma)
+        };
+        let fresh = SpeedRef {
+            t_ns,
+            speed,
+            sigma,
+            implausible: 0,
+            last_implausible: None,
+        };
+        let Some(r) = self.speed_refs.get_mut(&sensor) else {
+            self.speed_refs.insert(sensor, fresh);
+            return true;
+        };
+        if reachable(r.t_ns, r.speed, r.sigma) {
+            *r = fresh;
+            return true;
+        }
+        // Implausible; but a run of them consistent with each other means the reference was wrong.
+        let consistent = r
+            .last_implausible
+            .is_none_or(|(t0, v0, s0)| reachable(t0, v0, s0));
+        r.implausible = if consistent { r.implausible + 1 } else { 1 };
+        r.last_implausible = Some((t_ns, speed, sigma));
+        if r.implausible >= IMPLAUSIBLE_RESET {
+            *r = fresh;
+            return true;
+        }
+        false
+    }
+
     fn predict(&mut self, along: f64, dt: f64) {
+        // Nothing this records sustains more than 1 g along the track; more is the phone being knocked or shaken.
+        let along = along.clamp(-MAX_ACCEL_MPS2, MAX_ACCEL_MPS2);
         if self.axis_sign_known || self.stopped {
             self.v += (along - self.b) * dt;
         } else {
