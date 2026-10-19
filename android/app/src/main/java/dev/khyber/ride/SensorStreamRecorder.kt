@@ -26,7 +26,7 @@ import uniffi.ride_ffi.StreamWriter
 class SensorStreamRecorder(
     private val sensorManager: SensorManager,
     private val sensor: Sensor,
-    private val name: String,
+    val name: String,
     dir: File,
     /** How many sensors share the FIFO at full rate, to size the batching latency. */
     sharingFifo: Int,
@@ -58,13 +58,13 @@ class SensorStreamRecorder(
 
     private val flushTask = object : Runnable {
         override fun run() {
-            flush()
+            Health.guard("write $name") { flush() }
             handler.postDelayed(this, CHUNK_NS / 1_000_000)
         }
     }
 
     fun start() {
-        register()
+        Health.guard("sensor $name: register") { register() }
         handler.postDelayed(flushTask, CHUNK_NS / 1_000_000)
     }
 
@@ -76,7 +76,7 @@ class SensorStreamRecorder(
         val latch = CountDownLatch(1)
         stopping = latch
         handler.post {
-            if (!sensorManager.flush(this)) latch.countDown()
+            if (Health.guard("sensor $name: flush FIFO") { sensorManager.flush(this) } != true) latch.countDown()
         }
     }
 
@@ -88,8 +88,8 @@ class SensorStreamRecorder(
         sensorManager.unregisterListener(this)
         handler.removeCallbacks(flushTask)
         handler.post {
-            flush()
-            writer.finish()
+            Health.guard("write $name") { flush() }
+            Health.guard("close $name") { writer.finish() }
             writer.close()
             builder.close()
         }
@@ -102,6 +102,10 @@ class SensorStreamRecorder(
     }
 
     override fun onSensorChanged(event: SensorEvent) {
+        Health.guard("sensor $name") { onSample(event) }
+    }
+
+    private fun onSample(event: SensorEvent) {
         if (!builder.fits(event.values.size.toUInt())) flush()
         if (builder.sampleCount() == 0u) chunkStartNs = event.timestamp
         if (continuous && lastTimestampNs != 0L && sensor.minDelay > 0) {
@@ -131,6 +135,10 @@ class SensorStreamRecorder(
     }
 
     override fun onFlushCompleted(sensor: Sensor) {
+        Health.guard("sensor $name: flush completed") { onFlushed() }
+    }
+
+    private fun onFlushed() {
         stopping?.let {
             it.countDown()
             return

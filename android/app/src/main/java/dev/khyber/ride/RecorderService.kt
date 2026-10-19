@@ -112,24 +112,34 @@ class RecorderService : Service() {
                 .firstNotNullOfOrNull { s -> sensorManager.getDefaultSensor(s.type)?.let { s to it } }
         }
         val highRate = sensorSpecs.count { (_, sensor) -> sensor.reportingMode == Sensor.REPORTING_MODE_CONTINUOUS }
-        recorders = sensorSpecs.map { (spec, sensor) ->
-            SensorStreamRecorder(sensorManager, sensor, spec.name, dir, sharingFifo = highRate)
+        // Every part is set up on its own: one failing is reported (see `Health`) and the rest still record.
+        Health.reset()
+        recorders = sensorSpecs.mapNotNull { (spec, sensor) ->
+            Health.guard("sensor ${spec.name}") {
+                SensorStreamRecorder(sensorManager, sensor, spec.name, dir, sharingFifo = highRate)
+            }
         }
-        val events = RecordStreamRecorder("events", dir)
-        val radio = RecordStreamRecorder("radio", dir)
-        recordStreams = listOf(events, radio)
+        fun records(name: String) = Health.guard("records $name") { RecordStreamRecorder(name, dir) }
+        val events = records("events")
+        Health.events = events
+        val radio = records("radio")
+        recordStreams = listOfNotNull(events, radio)
         if (locationAllowed) {
-            val gnss = RecordStreamRecorder("gnss", dir)
-            val locations = RecordStreamRecorder("location", dir)
-            recordStreams = recordStreams + listOf(gnss, locations)
-            gnssRecorder = GnssRecorder(getSystemService(LocationManager::class.java), gnss, locations)
+            val gnss = records("gnss")
+            val locations = records("location")
+            recordStreams = recordStreams + listOfNotNull(gnss, locations)
+            if (gnss != null && locations != null) {
+                gnssRecorder = GnssRecorder(getSystemService(LocationManager::class.java), gnss, locations)
+            }
         }
         val gnssRef = gnssRecorder
-        radioRecorder = RadioRecorder(this, radio) { gnssRef?.lastGpsFixElapsedNs ?: 0L }
-        bleRecorder = BleRecorder(this, radio)
+        if (radio != null) {
+            radioRecorder = Health.guard("radio") { RadioRecorder(this, radio) { gnssRef?.lastGpsFixElapsedNs ?: 0L } }
+            bleRecorder = Health.guard("ble") { BleRecorder(this, radio) }
+        }
         eventsStream = events
-        if (audioAllowed) audioRecorder = AudioStreamRecorder(this, dir)
-        writeSessionInfo(
+        if (audioAllowed) audioRecorder = Health.guard("audio") { AudioStreamRecorder(this, dir) }
+        Health.guard("session info") { writeSessionInfo(
             dir.path,
             SessionInfo.newBuilder()
                 .setFormatVersion(formatVersion().toInt())
@@ -149,20 +159,16 @@ class RecorderService : Service() {
                 .addAllStreams(listOfNotNull(audioRecorder?.streamInfo))
                 .build()
                 .toByteArray(),
-        )
+        ) }
         LiveTrack.reset()
         LiveSpeed.start()
-        recorders.forEach { it.start() }
-        try {
-            gnssRecorder?.start()
-        } catch (e: SecurityException) {
-            android.util.Log.w("RecorderService", "no location permission; not recording GNSS", e)
-        }
-        radioRecorder?.start()
-        bleRecorder?.start()
-        audioRecorder?.start()
+        recorders.forEach { r -> Health.guard("sensor ${r.name}") { r.start() } }
+        Health.guard("gnss") { gnssRecorder?.start() }
+        Health.guard("radio") { radioRecorder?.start() }
+        Health.guard("ble") { bleRecorder?.start() }
+        Health.guard("audio") { audioRecorder?.start() }
         if (restarted) {
-            events.add {
+            events?.add {
                 manualEvent = ManualEvent.newBuilder()
                     .setKind(ManualEvent.Kind.KIND_NOTE)
                     .setText("restarted after Android stopped recording; location ${if (locationAllowed) "on" else "off"}")
@@ -174,22 +180,24 @@ class RecorderService : Service() {
     }
 
     override fun onDestroy() {
+        // Each part stops on its own, so one failing still lets the rest flush and close their files.
         eventsStream = null
-        gnssRecorder?.stop()
+        Health.guard("stop gnss") { gnssRecorder?.stop() }
         gnssRecorder = null
-        radioRecorder?.stop()
+        Health.guard("stop radio") { radioRecorder?.stop() }
         radioRecorder = null
-        bleRecorder?.stop()
+        Health.guard("stop ble") { bleRecorder?.stop() }
         bleRecorder = null
-        audioRecorder?.stop()
+        Health.guard("stop audio") { audioRecorder?.stop() }
         audioRecorder = null
-        LiveSpeed.stop()
-        recorders.forEach { it.beginStop() }
-        recorders.forEach { it.stop() }
+        Health.guard("stop live speed") { LiveSpeed.stop() }
+        recorders.forEach { r -> Health.guard("stop sensor ${r.name}") { r.beginStop() } }
+        recorders.forEach { r -> Health.guard("stop sensor ${r.name}") { r.stop() } }
         recorders = emptyList()
-        recordStreams.forEach { it.stop() }
+        Health.events = null
+        recordStreams.forEach { r -> Health.guard("stop records ${r.name}") { r.stop() } }
         recordStreams = emptyList()
-        wakeLock?.release()
+        Health.guard("wake lock") { wakeLock?.release() }
         _state.value = State(recording = false, sessionId = null)
         RecompressWorker.enqueueThenUpload(this)
         super.onDestroy()

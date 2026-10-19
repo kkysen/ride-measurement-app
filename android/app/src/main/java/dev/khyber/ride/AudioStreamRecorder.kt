@@ -59,7 +59,7 @@ class AudioStreamRecorder(context: Context, dir: File) {
         record = r
         running = true
         r.startRecording()
-        thread = Thread({ loop(r) }, "audio").apply { start() }
+        thread = Thread({ Health.guard("audio") { loop(r) } }, "audio").apply { start() }
     }
 
     fun stop() {
@@ -69,7 +69,7 @@ class AudioStreamRecorder(context: Context, dir: File) {
             stop()
             release()
         }
-        writer.finish()
+        Health.guard("close audio") { writer.finish() }
         writer.close()
     }
 
@@ -79,25 +79,27 @@ class AudioStreamRecorder(context: Context, dir: File) {
         val timestamps = ArrayList<PbAudioTimestamp>()
         val ts = AudioTimestamp()
         var chunkFirstFrame = 0L
+        // Hands the chunk to the writer, which keeps it and retries if the write fails, so it's cleared either way.
         fun flush() {
             if (pcm.size() == 0) return
-            writer.appendEncoded(
+            val chunk = Health.guard("audio chunk") {
                 AudioChunk.newBuilder()
                     .setFirstFrame(chunkFirstFrame)
                     .setPcmS16Le(ByteString.copyFrom(pcm.toByteArray()))
                     .addAllTimestamps(timestamps)
                     .setWrittenElapsedRealtimeNs(SystemClock.elapsedRealtimeNanos())
                     .build()
-                    .toByteArray(),
-            )
+                    .toByteArray()
+            }
             pcm.reset()
             timestamps.clear()
             chunkFirstFrame = frameCount
+            if (chunk != null) Health.guard("write audio") { writer.appendEncoded(chunk) }
         }
         while (running) {
             val n = r.read(buf, 0, buf.size)
             if (n < 0) {
-                Log.w("AudioStreamRecorder", "read error $n")
+                Health.report("audio", java.io.IOException("AudioRecord.read returned $n"))
                 break
             }
             pcm.write(buf, 0, n)

@@ -54,6 +54,9 @@ android {
         }
     }
 
+    // `android.util.Log` and friends return defaults in JVM unit tests instead of throwing.
+    testOptions.unitTests.isReturnDefaultValues = true
+
     buildFeatures {
         compose = true
         buildConfig = true

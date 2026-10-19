@@ -58,6 +58,7 @@ class GnssRecorder(
         }
     }
 
+    // Building records is guarded in `add`; `LiveSpeed` and `LiveTrack` guard themselves.
     private val gpsListener = LocationListener { location ->
         lastGpsFixElapsedNs = SystemClock.elapsedRealtimeNanos()
         locations.add { this.location = location.toProto() }
@@ -90,33 +91,46 @@ class GnssRecorder(
 
     @SuppressLint("MissingPermission")
     fun start() {
+        // Each separately, so one failing (e.g. a phone without navigation messages) doesn't stop the others.
         val executor = Executor { gnss.handler.post(it) }
-        locationManager.registerGnssMeasurementsCallback(
-            GnssMeasurementRequest.Builder().setFullTracking(true).build(),
-            executor,
-            measurementsCallback,
-        )
-        locationManager.registerGnssStatusCallback(executor, statusCallback)
-        locationManager.registerGnssNavigationMessageCallback(executor, navigationCallback)
+        Health.guard("gnss measurements") {
+            locationManager.registerGnssMeasurementsCallback(
+                GnssMeasurementRequest.Builder().setFullTracking(true).build(),
+                executor,
+                measurementsCallback,
+            )
+        }
+        Health.guard("gnss status") { locationManager.registerGnssStatusCallback(executor, statusCallback) }
+        Health.guard("gnss navigation messages") {
+            locationManager.registerGnssNavigationMessageCallback(executor, navigationCallback)
+        }
         gnss.add { gnssCapabilities = capabilitiesProto() }
         // Phase center offsets and corrections; phones without antenna info just never call back.
-        if (!locationManager.registerAntennaInfoListener(executor, antennaListener)) {
-            Log.i("GnssRecorder", "no GNSS antenna info on this phone")
+        Health.guard("gnss antenna info") {
+            if (!locationManager.registerAntennaInfoListener(executor, antennaListener)) {
+                Log.i("GnssRecorder", "no GNSS antenna info on this phone")
+            }
         }
         val looper = locations.handler.looper
-        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0L, 0f, gpsListener, looper)
-        if (locationManager.hasProvider(LocationManager.FUSED_PROVIDER)) {
-            locationManager.requestLocationUpdates(LocationManager.FUSED_PROVIDER, 1_000L, 0f, fusedListener, looper)
+        Health.guard("gps fixes") {
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0L, 0f, gpsListener, looper)
+        }
+        Health.guard("fused fixes") {
+            if (locationManager.hasProvider(LocationManager.FUSED_PROVIDER)) {
+                locationManager.requestLocationUpdates(LocationManager.FUSED_PROVIDER, 1_000L, 0f, fusedListener, looper)
+            }
         }
     }
 
     fun stop() {
-        locationManager.unregisterGnssMeasurementsCallback(measurementsCallback)
-        locationManager.unregisterGnssStatusCallback(statusCallback)
-        locationManager.unregisterGnssNavigationMessageCallback(navigationCallback)
-        locationManager.unregisterAntennaInfoListener(antennaListener)
-        locationManager.removeUpdates(gpsListener)
-        locationManager.removeUpdates(fusedListener)
+        Health.guard("stop gnss measurements") { locationManager.unregisterGnssMeasurementsCallback(measurementsCallback) }
+        Health.guard("stop gnss status") { locationManager.unregisterGnssStatusCallback(statusCallback) }
+        Health.guard("stop gnss navigation messages") {
+            locationManager.unregisterGnssNavigationMessageCallback(navigationCallback)
+        }
+        Health.guard("stop gnss antenna info") { locationManager.unregisterAntennaInfoListener(antennaListener) }
+        Health.guard("stop gps fixes") { locationManager.removeUpdates(gpsListener) }
+        Health.guard("stop fused fixes") { locationManager.removeUpdates(fusedListener) }
     }
 }
 

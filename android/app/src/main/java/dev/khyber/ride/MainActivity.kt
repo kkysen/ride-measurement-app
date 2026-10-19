@@ -180,6 +180,17 @@ class MainActivity : ComponentActivity() {
 
             Text(if (state.recording) "Recording ${state.sessionId}" else "Not recording")
             state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            // Parts that failed while everything else kept recording (see `Health`).
+            val problems by Health.problems.collectAsStateWithLifecycle()
+            if (problems.isNotEmpty()) {
+                Text(
+                    "Not recording fully:\n" + problems.entries.joinToString("\n") { (source, p) ->
+                        "$source: ${p.message}" + if (p.count > 1) " (${p.count} times)" else ""
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             Button(onClick = {
                 if (state.recording) RecorderService.stop(this@MainActivity) else RecorderService.start(this@MainActivity)
             }) { Text(if (state.recording) "Stop" else "Start") }

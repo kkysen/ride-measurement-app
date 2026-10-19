@@ -26,7 +26,7 @@ class RecordStreamRecorder(val name: String, dir: File) {
 
     private val flushTask = object : Runnable {
         override fun run() {
-            flush()
+            Health.guard("write $name") { flush() }
             handler.postDelayed(this, FLUSH_MS)
         }
     }
@@ -35,9 +35,15 @@ class RecordStreamRecorder(val name: String, dir: File) {
         handler.postDelayed(flushTask, FLUSH_MS)
     }
 
-    /** Stamps the record with the receive time now, on the caller's thread, then queues it. */
+    /**
+     * Stamps the record with the receive time now, on the caller's thread, then queues it.
+     * If building it throws (e.g. an Android getter fails), that's reported to [Health] and the record skipped.
+     */
     fun add(build: Record.Builder.() -> Unit) {
-        val record = Record.newBuilder().setReceivedElapsedRealtimeNs(SystemClock.elapsedRealtimeNanos()).apply(build).build()
+        val receivedNs = SystemClock.elapsedRealtimeNanos()
+        val record = Health.guard("records $name") {
+            Record.newBuilder().setReceivedElapsedRealtimeNs(receivedNs).apply(build).build()
+        } ?: return
         handler.post {
             pending.add(record)
             recordCount++
@@ -47,24 +53,24 @@ class RecordStreamRecorder(val name: String, dir: File) {
     fun stop() {
         handler.removeCallbacks(flushTask)
         handler.post {
-            flush()
-            writer.finish()
+            Health.guard("write $name") { flush() }
+            Health.guard("close $name") { writer.finish() }
             writer.close()
         }
         thread.quitSafely()
         thread.join()
     }
 
+    /** Hands the pending records to the writer, which keeps them and retries if the write fails. */
     private fun flush() {
         if (pending.isEmpty()) return
-        writer.appendEncoded(
-            RecordChunk.newBuilder()
-                .addAllRecords(pending)
-                .setWrittenElapsedRealtimeNs(SystemClock.elapsedRealtimeNanos())
-                .build()
-                .toByteArray(),
-        )
+        val chunk = RecordChunk.newBuilder()
+            .addAllRecords(pending)
+            .setWrittenElapsedRealtimeNs(SystemClock.elapsedRealtimeNanos())
+            .build()
+            .toByteArray()
         pending.clear()
+        writer.appendEncoded(chunk)
     }
 
     companion object {

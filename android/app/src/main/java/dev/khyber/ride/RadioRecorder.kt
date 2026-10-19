@@ -88,17 +88,19 @@ class RadioRecorder(
         override fun onReceive(context: Context, intent: Intent) {
             val requested = scanRequested
             scanRequested = false
-            val results = wifi.scanResults
+            val results = Health.guard("wifi scan results") { wifi.scanResults } ?: return
             radio.add { wifiScan = WifiScan.newBuilder().setRequested(requested).addAllResults(results.map { it.toProto() }).build() }
         }
     }
 
     private val batteryReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) = recordBattery(intent)
+        override fun onReceive(context: Context, intent: Intent) {
+            Health.guard("battery") { recordBattery(intent) }
+        }
     }
 
     private val power = context.getSystemService(PowerManager::class.java)
-    private val thermalListener = PowerManager.OnThermalStatusChangedListener { recordThermal() }
+    private val thermalListener = PowerManager.OnThermalStatusChangedListener { Health.guard("thermal") { recordThermal() } }
 
     private fun recordThermal() {
         val headroom = power.getThermalHeadroom(0)
@@ -110,11 +112,12 @@ class RadioRecorder(
     }
 
     private val poll = object : Runnable {
+        // Each separately, so one failing doesn't stop the others or the polling itself.
         override fun run() {
-            requestCellInfo()
-            maybeScanWifi()
-            recordBattery(null)
-            recordThermal()
+            Health.guard("cell info") { requestCellInfo() }
+            Health.guard("wifi scan") { maybeScanWifi() }
+            Health.guard("battery") { recordBattery(null) }
+            Health.guard("thermal") { recordThermal() }
             handler.postDelayed(this, POLL_MS)
         }
     }
@@ -126,19 +129,25 @@ class RadioRecorder(
             telephonyRegistered = true
         } catch (e: SecurityException) {
             android.util.Log.w("RadioRecorder", "no phone state permission; not recording service state", e)
+        } catch (e: Throwable) {
+            Health.report("telephony", e)
         }
-        context.registerReceiver(wifiReceiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION), null, handler)
-        context.registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED), null, handler)
-        power.addThermalStatusListener(Executor { handler.post(it) }, thermalListener)
+        Health.guard("wifi scan results") {
+            context.registerReceiver(wifiReceiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION), null, handler)
+        }
+        Health.guard("battery") {
+            context.registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED), null, handler)
+        }
+        Health.guard("thermal") { power.addThermalStatusListener(Executor { handler.post(it) }, thermalListener) }
         handler.post(poll)
     }
 
     fun stop() {
         handler.removeCallbacks(poll)
-        if (telephonyRegistered) telephony.unregisterTelephonyCallback(telephonyCallback)
-        context.unregisterReceiver(wifiReceiver)
-        context.unregisterReceiver(batteryReceiver)
-        power.removeThermalStatusListener(thermalListener)
+        if (telephonyRegistered) Health.guard("stop telephony") { telephony.unregisterTelephonyCallback(telephonyCallback) }
+        Health.guard("stop wifi scan results") { context.unregisterReceiver(wifiReceiver) }
+        Health.guard("stop battery") { context.unregisterReceiver(batteryReceiver) }
+        Health.guard("stop thermal") { power.removeThermalStatusListener(thermalListener) }
     }
 
     @SuppressLint("MissingPermission")

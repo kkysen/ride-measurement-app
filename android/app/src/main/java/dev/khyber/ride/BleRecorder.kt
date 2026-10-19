@@ -25,12 +25,16 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
     private var scanning = false
 
     private inner class Callback(val filtered: Boolean) : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult) = record(listOf(result), filtered)
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            Health.guard("ble") { record(listOf(result), filtered) }
+        }
 
-        override fun onBatchScanResults(results: MutableList<ScanResult>) = record(results, filtered)
+        override fun onBatchScanResults(results: MutableList<ScanResult>) {
+            Health.guard("ble") { record(results, filtered) }
+        }
 
         override fun onScanFailed(errorCode: Int) {
-            Log.w(TAG, "BLE scan (filtered: $filtered) failed: $errorCode")
+            Health.report("ble scan (filtered: $filtered)", IllegalStateException("scan failed with error $errorCode"))
         }
     }
 
@@ -40,8 +44,12 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
     private val filteredCallback = Callback(filtered = true)
     private val unfilteredCallback = Callback(filtered = false)
 
-    @SuppressLint("MissingPermission")
     fun start() {
+        Health.guard("ble") { startScans() }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startScans() {
         if (context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
             Log.i(TAG, "no Bluetooth scan permission; not recording BLE")
             return
@@ -74,6 +82,8 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
             }
         } catch (e: IllegalStateException) {
             // Bluetooth was turned off meanwhile; the scan is already gone.
+        } catch (e: Throwable) {
+            Health.report("stop ble", e)
         }
         scanning = false
     }
