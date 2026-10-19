@@ -127,6 +127,7 @@ class RecorderService : Service() {
                 .addAllStreams(listOfNotNull(audioRecorder?.streamInfo))
                 .build(),
         )
+        LiveTrack.reset()
         LiveSpeed.start()
         recorders.forEach { it.start() }
         try {
