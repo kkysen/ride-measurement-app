@@ -46,17 +46,21 @@ Recordings themselves survive an uninstall (they live in shared storage), but th
 3. Here: `adb pair <ip>:<pairing port>` and enter the code.
 4. Here: `adb connect <ip>:<port>` (the port on the main Wireless debugging screen, not the pairing one).
 5. `just install`.
-6. In the app: grant all-files access, location, and notifications.
+6. In the app: grant all-files access, location (precise), notifications, phone, and nearby devices (WiFi),
+   then tap "Allow location all the time" and pick "Allow all the time".
+   Without it, a recording Android restarts in the background can't use GNSS.
 7. Recommended: Developer options > "Force full GNSS measurements" (for later GNSS logging).
 8. Keep Android from stopping recordings mid-ride:
    - In the app, tap "Don't optimize battery for this app" (Settings > Apps > Ride Logger > Battery > Unrestricted).
-   - Turn off any manufacturer battery saver for the app (Samsung: Battery > Background usage limits, add to "Never sleeping apps";
-     Xiaomi/OnePlus/Oppo: allow autostart and background activity). See https://dontkillmyapp.com for your phone.
+   - Samsung (S26+): Settings > Battery > Background usage limits > Never sleeping apps: add Ride Logger,
+     and make sure "Put unused apps to sleep" doesn't include it.
+     Other manufacturers: see https://dontkillmyapp.com.
    - Don't swipe the app away from recents while recording; some manufacturers kill its service when you do.
    - Avoid Battery Saver / Ultra power saving modes while recording.
 
    If Android still kills recording, it restarts itself and starts a new session linked to the killed one
    (`just summary` prints `continues session ...`).
+   To test this: start recording, switch away from the app, and run `adb shell am kill dev.khyber.ride`.
 
 The phone and this machine must be on the same network.
 `adb` here is the x86-64 build running under `box64`.
@@ -64,6 +68,9 @@ The phone and this machine must be on the same network.
 ### 4. Record and check a ride
 
 1. Tap Start, ride, tap Stop. Recording continues with the screen off.
+   During the ride, the buttons mark events for later ground truth:
+   Boarded, At station (type the station name first if you can), Doors open/closed, Alighted, and free-form notes.
+   These are the most reliable ground truth underground.
 2. `just pull` copies sessions into `data/sessions/` (nothing is deleted on the phone).
 3. `just summary data/sessions/<session>` shows rates and gaps; `just plot data/sessions/<session> accel` plots.
 
