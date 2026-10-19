@@ -288,6 +288,15 @@ fn record_summary(
                 e.text
             );
         }
+        if let Some(Payload::RecorderError(e)) = &r.payload {
+            let first_line = e.message.lines().next().unwrap_or_default();
+            problems.warnings.push(format!(
+                "{label}: at {:.1} s, the app reported {} failing ({} times so far): {first_line}",
+                (r.received_elapsed_realtime_ns - start) as f64 * 1e-9,
+                e.source,
+                e.count
+            ));
+        }
     }
     for (kind, n) in counts {
         println!("  {n} {kind}");
@@ -394,6 +403,7 @@ fn payload_name(payload: Option<&Payload>) -> &'static str {
         Some(Payload::GnssAntennaInfos(_)) => "gnss_antenna_infos",
         Some(Payload::Thermal(_)) => "thermal",
         Some(Payload::BleScan(_)) => "ble_scan",
+        Some(Payload::RecorderError(_)) => "recorder_error",
     }
 }
 

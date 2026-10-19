@@ -120,6 +120,7 @@ message Record {
     GnssAntennaInfos gnss_antenna_infos = 14;
     ThermalStatus thermal = 15;
     BleScanResults ble_scan = 16;
+    RecorderError recorder_error = 17;
   }
 }
 
@@ -397,4 +398,15 @@ message BleScanResult {
   int32 periodic_advertising_interval = 9;
   bool connectable = 10;
   int32 data_status = 11;
+}
+
+// Something in the app failed while recording (a sensor, an Android API, a write), so analysis knows what's missing.
+// The app keeps everything else going; repeats of the same error are recorded at 1, 2, 4, 8, ... occurrences.
+message RecorderError {
+  // What failed, e.g. "sensor accel_uncal" or "radio cell info".
+  string source = 1;
+  // The exception, with its message.
+  string message = 2;
+  // How many times this source has failed so far.
+  int64 count = 3;
 }
