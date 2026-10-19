@@ -8,11 +8,6 @@ Audio and video are deferred to later improvements.
 Many rides start in or just after tunnels, so the design must not depend on an initial GNSS fix,
 and must not trust network (cell/WiFi) location, which can report the wrong underground station.
 
-## Phase 0: Repo
-- `git init` in `/home/khyber/work/ride-measurement-app`, add this plan as `PLAN.md`, commit.
-- `gh repo create kkysen/ride-measurement-app --public --source . --push` (user explicitly asked for a public GitHub repo).
-- Every later edit to the plan gets its own commit (one commit per separate change), pushed only when asked.
-
 ## Platform
 - **Native Android app (Kotlin), not a PWA.** A PWA gets only fused, low-rate `Geolocation` (no raw GNSS, no Doppler),
   throttled `DeviceMotion`, no barometer/cell/WiFi data, and is killed when the screen locks.
