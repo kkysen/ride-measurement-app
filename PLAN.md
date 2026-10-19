@@ -88,7 +88,14 @@ Rule: store only what cannot be recomputed later; everything derived is regenera
 - Main costs: GNSS with duty cycling disabled, and the CPU waking for every 400 Hz sample.
 - Use sensor batching (`maxReportLatencyUs` of a few seconds) so the hardware FIFO buffers samples and the CPU sleeps between batches;
   this is likely the biggest single saving. Write to disk in chunks, never per sample.
-- WiFi scans are throttled by Android (4 per 2 min in the foreground); scan only near stations or when GNSS is lost.
+  Batching is lossless: same samples, same hardware timestamps, just delivered later.
+  The one risk is FIFO overflow (dropped samples), so keep latency well under `Sensor.getFifoMaxEventCount` / rate
+  (the FIFO is often shared between sensors), and detect gaps from timestamps; on any gap, shorten the latency automatically.
+- WiFi scans are throttled by Android (4 per 2 min in the foreground); scan only while GNSS is lost,
+  prioritizing when stopped, since a stop underground is almost always a station.
+- Station detection, live: a stop (low IMU variance for several seconds) near an OSM station on the matched line;
+  underground, a stop plus dwell length plus the along-track distance since the last known station picks the candidate.
+  Offline, the HMM in Phase 3 makes the final call.
 - Screen off during recording; live display is opt-in.
 - Expect single-digit percent per hour; measure with `dumpsys batterystats` on real rides and record battery in the session.
 
