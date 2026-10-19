@@ -6,7 +6,7 @@ use ride_session::proto::record::Payload;
 use ride_session::read::Session;
 use ride_session::track::GPS_PROVIDER;
 
-use crate::fusion::{Fix, Fusion, SmoothedSpeed};
+use crate::fusion::{Fix, Fusion, ImuSample, SmoothedSpeed, imu_sample};
 
 /// What a replay produced.
 pub struct Replay {
@@ -41,35 +41,24 @@ enum Event {
 /// from what the phone showed, never by design.
 pub fn replay(session: &Session) -> anyhow::Result<Replay> {
     let mut events: Vec<(i64, Event)> = Vec::new();
-    for (name, fallback, gyro) in [
-        ("accel_uncal", "accel", false),
-        ("gyro_uncal", "gyro", true),
-    ] {
-        let has = |n: &str| session.info.streams.iter().any(|s| s.name == n);
-        let Some(name) = [name, fallback].into_iter().find(|n| has(n)) else {
+    // The recorded streams the app feeds live, preferring uncalibrated (see `RecorderService.kt`).
+    for (name, fallback) in [("accel_uncal", "accel"), ("gyro_uncal", "gyro")] {
+        let info = |n: &str| session.info.streams.iter().find(|s| s.name == n);
+        let Some(stream) = info(name).or_else(|| info(fallback)) else {
             continue;
         };
-        let uncalibrated = name.ends_with("_uncal");
-        for chunk in &session.read_stream(name)?.chunks {
+        let Some(sensor_type) = stream.sensor.as_ref().map(|s| s.r#type) else {
+            continue;
+        };
+        for chunk in &session.read_stream(&stream.name)?.chunks {
             let n = chunk.values_per_sample as usize;
             let values: Vec<f32> = chunk.values().collect();
             for (i, t) in chunk.timestamps_ns().into_iter().enumerate() {
-                let v = &values[i * n..(i + 1) * n];
-                if v.len() < 3 || (uncalibrated && v.len() < 6) {
-                    continue;
+                match imu_sample(sensor_type, &values[i * n..(i + 1) * n]) {
+                    Some(ImuSample::Accel(a)) => events.push((t, Event::Accel(a))),
+                    Some(ImuSample::Gyro(w)) => events.push((t, Event::Gyro(w))),
+                    None => {}
                 }
-                // Uncalibrated sensors carry the bias estimate in values[3..5]; subtract it, in `f32` like the app.
-                let xyz = std::array::from_fn(|k| {
-                    f64::from(if uncalibrated { v[k] - v[k + 3] } else { v[k] })
-                });
-                events.push((
-                    t,
-                    if gyro {
-                        Event::Gyro(xyz)
-                    } else {
-                        Event::Accel(xyz)
-                    },
-                ));
             }
         }
     }

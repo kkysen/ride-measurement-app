@@ -20,24 +20,48 @@ use crate::live_speed::{Estimate, LiveSpeedEstimator};
 const OWN_SOLUTION_HOLD_NS: i64 = 3_000_000_000;
 
 /// One buffered input, for re-running the estimator.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Input {
     Accel([f64; 3]),
     Gyro([f64; 3]),
-    /// A fix: position, horizontal accuracy, and speed and its accuracy if used.
-    Fix {
-        lat: f64,
-        lon: f64,
-        accuracy: Option<f64>,
-        speed: Option<f64>,
-        speed_sigma: Option<f64>,
-    },
+    /// A fix, with its speed only if it was used. Boxed: fixes are rare, and IMU samples (most of the window,
+    /// which on the phone is about half a million inputs) stay small.
+    Fix(Box<Fix>),
     /// Our own velocity solution's speed and standard deviation.
     Speed(f64, f64),
 }
 
 /// Forward estimates are kept at every fix and at least this often, so smoothing covers gaps without fixes.
 const SAMPLE_EVERY_NS: i64 = 1_000_000_000;
+
+/// `android.hardware.Sensor` types.
+pub const TYPE_ACCELEROMETER: i32 = 1;
+pub const TYPE_GYROSCOPE: i32 = 4;
+pub const TYPE_GYROSCOPE_UNCALIBRATED: i32 = 16;
+pub const TYPE_ACCELEROMETER_UNCALIBRATED: i32 = 35;
+
+pub enum ImuSample {
+    Accel([f64; 3]),
+    Gyro([f64; 3]),
+}
+
+/// An accelerometer or gyro sample from Android's values: uncalibrated sensors carry their bias estimate in
+/// `values[3..6]`, which is subtracted (in `f32`, as Android computes the calibrated values).
+pub fn imu_sample(sensor_type: i32, v: &[f32]) -> Option<ImuSample> {
+    let uncalibrated = matches!(
+        sensor_type,
+        TYPE_ACCELEROMETER_UNCALIBRATED | TYPE_GYROSCOPE_UNCALIBRATED
+    );
+    if v.len() < 3 || (uncalibrated && v.len() < 6) {
+        return None;
+    }
+    let xyz = std::array::from_fn(|k| f64::from(if uncalibrated { v[k] - v[k + 3] } else { v[k] }));
+    match sensor_type {
+        TYPE_ACCELEROMETER | TYPE_ACCELEROMETER_UNCALIBRATED => Some(ImuSample::Accel(xyz)),
+        TYPE_GYROSCOPE | TYPE_GYROSCOPE_UNCALIBRATED => Some(ImuSample::Gyro(xyz)),
+        _ => None,
+    }
+}
 
 /// A GPS fix, as `android.location.Location` reports it (degrees, meters, m/s).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -93,6 +117,15 @@ impl Fusion {
         &mut self.navigator
     }
 
+    /// An Android sensor sample, as delivered (`SensorEvent.values`); IMU samples are used, others ignored.
+    pub fn on_sensor(&mut self, sensor_type: i32, t_ns: i64, values: &[f32]) {
+        match imu_sample(sensor_type, values) {
+            Some(ImuSample::Accel(a)) => self.on_accel(t_ns, a),
+            Some(ImuSample::Gyro(w)) => self.on_gyro(t_ns, w),
+            None => {}
+        }
+    }
+
     pub fn on_accel(&mut self, t_ns: i64, a: [f64; 3]) {
         self.estimator.on_accel(t_ns, a[0], a[1], a[2]);
         self.buffer(t_ns, Input::Accel(a));
@@ -139,13 +172,11 @@ impl Fusion {
             .on_gnss_fix(t_ns, lat, lon, accuracy, speed, speed_sigma);
         self.buffer(
             t_ns,
-            Input::Fix {
-                lat,
-                lon,
-                accuracy,
+            Input::Fix(Box::new(Fix {
                 speed,
                 speed_sigma,
-            },
+                ..fix
+            })),
         );
         self.forward
             .push_back((t_ns, self.estimator.estimate(t_ns)));
@@ -194,27 +225,23 @@ impl Fusion {
             return Vec::new();
         };
         // Inputs are in arrival order, which can be slightly out of time order across sensors; sort a copy.
-        let mut inputs: Vec<(i64, Input)> = self.inputs.iter().copied().collect();
-        inputs.sort_by_key(|&(t, _)| t);
+        let mut inputs: Vec<&(i64, Input)> = self.inputs.iter().collect();
+        inputs.sort_by_key(|(t, _)| *t);
         let mut backward = self.estimator.reversed();
         // Forward samples from the latest back, each paired with the backward estimate once the pass reaches it.
         let mut pending = self.forward.iter().rev().peekable();
         let mut out = Vec::with_capacity(self.forward.len());
-        for &(t, input) in inputs.iter().rev() {
+        for &&(t, ref input) in inputs.iter().rev() {
             // Reversed time runs forward from the end; rotation changes sign, acceleration doesn't
             // (see `LiveSpeedEstimator::reversed`).
             let tr = end - t + 1;
-            match input {
+            match *input {
                 Input::Accel(a) => backward.on_accel(tr, a[0], a[1], a[2]),
                 Input::Gyro(w) => backward.on_gyro(-w[0], -w[1], -w[2]),
                 Input::Speed(speed, sigma) => backward.on_gnss_speed(tr, speed, sigma),
-                Input::Fix {
-                    lat,
-                    lon,
-                    accuracy,
-                    speed,
-                    speed_sigma,
-                } => backward.on_gnss_fix(tr, lat, lon, accuracy, speed, speed_sigma),
+                Input::Fix(ref f) => {
+                    backward.on_gnss_fix(tr, f.lat, f.lon, f.accuracy, f.speed, f.speed_sigma)
+                }
             }
             while let Some(&&(ts, ref f)) = pending.peek() {
                 if ts < t {

@@ -58,42 +58,90 @@ pub struct Estimate {
     pub rejected: Vec<SensorCount>,
 }
 
-/// [`live_speed::LiveSpeedEstimator`], callable from any thread.
+/// A smoothed speed at a fix or a sample time (`ride_fusion::fusion::SmoothedSpeed`).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SmoothedSpeed {
+    pub elapsed_realtime_ns: i64,
+    pub speed_mps: f64,
+    pub sigma_mps: f64,
+}
+
+/// Raw GNSS progress, for the screen.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct GnssStats {
+    pub subframes_ok: u64,
+    pub subframes_bad: u64,
+    pub ephemerides: u64,
+    pub epochs: u64,
+    pub epochs_solved: u64,
+}
+
+/// [`ride_fusion::fusion::Fusion`], callable from any thread: the live speed, from the same code offline replays.
 #[derive(uniffi::Object)]
-pub struct LiveSpeedEstimator(Mutex<live_speed::LiveSpeedEstimator>);
+pub struct Fusion(Mutex<ride_fusion::fusion::Fusion>);
 
 #[uniffi::export]
-impl LiveSpeedEstimator {
+impl Fusion {
+    /// Keeps `window_s` seconds of input for smoothing.
     #[uniffi::constructor]
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self(Mutex::new(live_speed::LiveSpeedEstimator::new())))
+    pub fn new(window_s: u32) -> Arc<Self> {
+        let window = i64::from(window_s) * 1_000_000_000;
+        Arc::new(Self(Mutex::new(ride_fusion::fusion::Fusion::new(Some(
+            window,
+        )))))
     }
 
-    pub fn on_gyro(&self, wx: f64, wy: f64, wz: f64) {
-        self.lock().on_gyro(wx, wy, wz);
+    /// An Android sensor sample as delivered: `Sensor.getType()`, `SensorEvent.timestamp`, `SensorEvent.values`.
+    pub fn on_sensor(&self, sensor_type: i32, t_ns: i64, values: Vec<f32>) {
+        self.lock().on_sensor(sensor_type, t_ns, &values);
     }
 
-    pub fn on_accel(&self, t_ns: i64, ax: f64, ay: f64, az: f64) {
-        self.lock().on_accel(t_ns, ax, ay, az);
-    }
-
-    pub fn on_gnss_fix(
+    /// A GPS-provider fix.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors `android.location.Location`'s fields"
+    )]
+    pub fn on_fix(
         &self,
         t_ns: i64,
         lat_deg: f64,
         lon_deg: f64,
+        altitude_m: Option<f64>,
         horizontal_accuracy_m: Option<f64>,
         speed_mps: Option<f64>,
         speed_accuracy_mps: Option<f64>,
     ) {
-        self.lock().on_gnss_fix(
-            t_ns,
-            lat_deg,
-            lon_deg,
-            horizontal_accuracy_m,
-            speed_mps,
-            speed_accuracy_mps,
-        );
+        self.lock().on_fix(ride_fusion::fusion::Fix {
+            elapsed_realtime_ns: t_ns,
+            lat: lat_deg,
+            lon: lon_deg,
+            altitude: altitude_m,
+            accuracy: horizontal_accuracy_m,
+            speed: speed_mps,
+            speed_sigma: speed_accuracy_mps,
+        });
+    }
+
+    /// An encoded `GnssMeasurementsEvent` (as recorded), received at `received_ns`.
+    pub fn on_gnss_measurements(
+        &self,
+        received_ns: i64,
+        encoded: Vec<u8>,
+    ) -> Result<(), RideError> {
+        use prost::Message;
+        let event = ride_session::proto::GnssMeasurementsEvent::decode(encoded.as_slice())
+            .map_err(anyhow::Error::from)?;
+        self.lock().on_gnss_measurements(received_ns, &event);
+        Ok(())
+    }
+
+    /// An encoded `GnssNavigationMessage` (as recorded).
+    pub fn on_navigation_message(&self, encoded: Vec<u8>) -> Result<(), RideError> {
+        use prost::Message;
+        let msg = ride_session::proto::GnssNavigationMessage::decode(encoded.as_slice())
+            .map_err(anyhow::Error::from)?;
+        self.lock().on_navigation_message(&msg);
+        Ok(())
     }
 
     pub fn estimate(&self, now_ns: i64) -> Estimate {
@@ -114,11 +162,35 @@ impl LiveSpeedEstimator {
                 .collect(),
         }
     }
+
+    /// Smoothed speeds over the window (forward and backward passes combined).
+    pub fn smoothed(&self) -> Vec<SmoothedSpeed> {
+        self.lock()
+            .smoothed()
+            .into_iter()
+            .map(|s| SmoothedSpeed {
+                elapsed_realtime_ns: s.elapsed_realtime_ns,
+                speed_mps: s.speed_mps,
+                sigma_mps: s.sigma_mps,
+            })
+            .collect()
+    }
+
+    pub fn gnss_stats(&self) -> GnssStats {
+        let s = self.lock().navigator().stats.clone();
+        GnssStats {
+            subframes_ok: s.subframes_ok,
+            subframes_bad: s.subframes_bad,
+            ephemerides: s.ephemerides,
+            epochs: s.epochs,
+            epochs_solved: s.epochs_solved,
+        }
+    }
 }
 
-impl LiveSpeedEstimator {
-    fn lock(&self) -> std::sync::MutexGuard<'_, live_speed::LiveSpeedEstimator> {
-        // A panic while holding the lock leaves the estimator usable; keep going rather than poison the app.
+impl Fusion {
+    fn lock(&self) -> std::sync::MutexGuard<'_, ride_fusion::fusion::Fusion> {
+        // A panic while holding the lock leaves the state usable; keep going rather than poison the app.
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
