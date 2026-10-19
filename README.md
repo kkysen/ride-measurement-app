@@ -15,6 +15,7 @@ Layout:
 ## Your steps
 
 Things only you can do, in order. Step 1 is already done on this machine.
+`CHECKLIST.md` has the same steps as a short checklist, including what to do during and after a ride.
 
 ### 1. Toolchain (done)
 
