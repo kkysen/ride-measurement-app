@@ -15,7 +15,8 @@ Details for each step are in `README.md` under "Your steps".
 - [ ] Open Ride Logger and grant everything it asks for:
   - [ ] All-files access (keeps recordings safe from uninstalls).
   - [ ] Location: precise, then "Allow location all the time" > Allow all the time.
-  - [ ] Notifications, phone, nearby devices, microphone.
+  - [ ] Notifications, phone, nearby devices (WiFi and Bluetooth), microphone.
+- [ ] Phone: Bluetooth on (for station and train beacons).
   - [ ] "Don't optimize battery for this app" > Allow.
 - [ ] Phone: Settings > Battery > Background usage limits > Never sleeping apps: add Ride Logger.
       Check "Put unused apps to sleep" / "Deep sleeping apps" don't include it.
@@ -24,8 +25,12 @@ Details for each step are in `README.md` under "Your steps".
 
 ## Tonight: 1-minute test at home
 
-- [ ] Check the bottom of the main screen says "Rust core 0.1.0". If it shows an error instead, recording still works; send me the error.
-- [ ] Tap Start, walk around for a minute (ideally near a window for GNSS), tap a couple of event buttons, tap Stop.
+- [ ] Check the bottom of the main screen says "Rust core 0.1.0".
+      Recording now runs through Rust: if Start shows "Can't record" (or the version line shows an error),
+      send me the error and install the last build where recording didn't need Rust (`6594b7a`):
+      `git worktree add ../ride-kotlin-recording 6594b7a && cd ../ride-kotlin-recording && just install`.
+- [ ] Tap Start, walk around for a minute (ideally near a window for GNSS), tap a couple of event buttons,
+      turn the screen off for 30 s or so (to check beacons still record), tap Stop.
 - [ ] While recording, check the live speed shows (it now runs in Rust). If it shows "Live speed failed" instead, recording still works; send me the error.
 - [ ] While recording, tap Map: your path should appear (once GPS has a fix) and the map should follow you.
   If it shows an error instead, recording still works; send me the error.
@@ -33,6 +38,7 @@ Details for each step are in `README.md` under "Your steps".
 - [ ] Here: `just map data/sessions/<session>`, then open `data/sessions/<session>/map.html` in a browser.
       Expect: `accel_uncal`, `gyro_uncal`, `mag_uncal` at a few hundred Hz with 0 gaps, `pressure`, `light`, `proximity`,
       `gnss` and `location` records (if near a window), `radio` records, your events, and `audio` if on.
+      New: `gnss_capabilities` in `gnss`; `thermal` and `ble_scan` in `radio` (if Bluetooth is on).
 - [ ] If audio was on: `just wav data/sessions/<session>` and listen to `audio.wav`.
 - [ ] Optional restart test: Start, switch to another app, `adb shell am kill dev.khyber.ride`;
       `just pull` + `just summary` should show a second session with `continues session ...`.
