@@ -9,9 +9,11 @@ FIXTURE = os.environ.get("RIDE_KOTLIN_FIXTURE")
 
 
 @pytest.mark.skipif(not FIXTURE, reason="RIDE_KOTLIN_FIXTURE not set")
-def test_kotlin_fixture_bits():
-    s = ride.read_stream(FIXTURE, "accel")
-    assert ride.stream_names(FIXTURE) == ["accel"]
+@pytest.mark.parametrize("suffix", ["", "-recompressed"])
+def test_kotlin_fixture_bits(suffix):
+    fixture = FIXTURE + suffix
+    s = ride.read_stream(fixture, "accel")
+    assert ride.stream_names(fixture) == ["accel"]
     assert not s.truncated
     assert s.values.shape == (300, 3)
     tricky = [0x00000000, 0x80000000, 0x00800000, 0x00000001, 0x7F7FFFFF,

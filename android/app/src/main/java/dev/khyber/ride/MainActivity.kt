@@ -140,13 +140,13 @@ class MainActivity : ComponentActivity() {
                             oneDriveStatus = "Go to ${code.verificationUri} and enter ${code.userCode}"
                             withContext(Dispatchers.IO) { auth.awaitDeviceCode(code) }
                             oneDriveStatus = "OneDrive: signed in"
-                            UploadWorker.enqueue(this@MainActivity)
+                            RecompressWorker.enqueueThenUpload(this@MainActivity)
                         } catch (e: Exception) {
                             oneDriveStatus = "OneDrive sign-in failed: ${e.message}"
                         }
                     }
                 }) { Text(if (auth.signedIn) "Sign in again" else "Sign in to OneDrive") }
-                Button(onClick = { UploadWorker.enqueue(this@MainActivity) }) { Text("Upload now") }
+                Button(onClick = { RecompressWorker.enqueueThenUpload(this@MainActivity) }) { Text("Upload now") }
             }
         }
     }

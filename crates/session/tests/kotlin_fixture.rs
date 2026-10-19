@@ -28,12 +28,18 @@ fn fixture_timestamp(sample: usize) -> i64 {
 }
 
 #[test]
-#[allow(clippy::needless_range_loop)] // `i` indexes several parallel arrays.
 fn kotlin_fixture_decodes_bit_exactly() {
     let Ok(dir) = std::env::var("RIDE_KOTLIN_FIXTURE") else {
         eprintln!("RIDE_KOTLIN_FIXTURE not set, skipping");
         return;
     };
+    // The live format, and the same session after post-ride recompression (`RecompressorTest.kt`).
+    check_fixture(&dir);
+    check_fixture(&format!("{dir}-recompressed"));
+}
+
+#[allow(clippy::needless_range_loop)] // `i` indexes several parallel arrays.
+fn check_fixture(dir: &str) {
     let session = Session::open(dir).unwrap();
     assert_eq!(session.info.session_id, "kotlin-fixture");
     let read = session.read_stream("accel").unwrap();

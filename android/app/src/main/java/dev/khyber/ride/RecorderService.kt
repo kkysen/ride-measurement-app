@@ -151,7 +151,7 @@ class RecorderService : Service() {
         recordStreams = emptyList()
         wakeLock?.release()
         _state.value = State(recording = false, sessionId = null)
-        UploadWorker.enqueue(this)
+        RecompressWorker.enqueueThenUpload(this)
         super.onDestroy()
     }
 
