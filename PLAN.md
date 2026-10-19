@@ -30,16 +30,20 @@ and must not trust network (cell/WiFi) location, which can report the wrong unde
   then port proven algorithms into it.
 
 ## Phase 1: Logger app (main focus)
-Built incrementally: a working scaffold first, then one stream at a time, each milestone installable and usable on a real ride.
-1. Scaffold: Kotlin + Jetpack Compose app, Gradle build, start/stop button, foreground service + wake lock,
-   empty session directory per recording, `adb install` workflow.
-2. Session format: `.proto` schema, chunked writer with on-the-fly `zstd`, and a Python reader to inspect sessions.
-3. Accelerometer + gyro (uncalibrated, batched), with gap detection; first real ride.
-4. GNSS: raw measurements, clock, nav messages, status, location fixes.
-5. Barometer, magnetometer, light, proximity, battery/temperature.
-6. Cell info, service state, WiFi scans (only without GNSS).
-7. Manual event buttons (boarded, at station, alighted).
-8. Post-ride verified recompress, export, per-stream rate/gap report.
+Built incrementally: a barebones end-to-end pipeline first, then filled in one stream/feature at a time,
+each milestone installable and usable on a real ride.
+1. End-to-end skeleton, every stage present but minimal:
+   - App: Kotlin + Jetpack Compose, start/stop button, foreground service + wake lock, one stream (accelerometer).
+   - Format: minimal `.proto` schema and chunked `zstd` writer, one session directory per recording.
+   - Transfer: `adb pull` script.
+   - Offline: Python package that reads sessions (the offline side of the format), plus a CLI that prints a per-stream rate/gap summary and plots a stream.
+   - Tests: round-trip test that writer output decodes bit-exactly; build + tests runnable from one script.
+2. Uncalibrated gyro and accel, batched, with gap detection.
+3. GNSS: raw measurements, clock, nav messages, status, location fixes.
+4. Barometer, magnetometer, light, proximity, battery/temperature.
+5. Cell info, service state, WiFi scans (only without GNSS).
+6. Manual event buttons (boarded, at station, alighted).
+7. Post-ride verified recompress, export, fuller per-stream report.
 
 Foreground service + wake lock, runs screen-off for hours.
 One clock for everything: `elapsedRealtimeNanos`; also log GNSS clock to map to UTC.
