@@ -124,3 +124,17 @@ fn session_reads_the_same_and_info_is_untouched() {
     assert!(contents.is_clean());
     assert_eq!(contents.chunks, before);
 }
+
+#[test]
+fn keeps_original_cut_at_a_frame_boundary_mid_message() {
+    // Complete zstd frames, but the decoded content ends inside a message.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accel.zst");
+    let mut encoder = zstd::stream::Encoder::new(Vec::new(), 3).unwrap();
+    std::io::Write::write_all(&mut encoder, &[10, 1, 2, 3]).unwrap(); // claims 10 bytes, has 3
+    let bytes = encoder.finish().unwrap();
+    fs::write(&path, &bytes).unwrap();
+    let outcome = recompress_stream(&path, LEVEL);
+    assert!(matches!(outcome, Outcome::KeptOriginal { .. }), "{outcome}");
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+}

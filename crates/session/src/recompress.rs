@@ -1,7 +1,7 @@
 //! Post-ride recompression: rewrites each stream of a finished session as one zstd frame at a high level.
 //!
 //! The decoded content (the sequence of length-delimited chunks) is unchanged, so readers don't care.
-//! A stream is replaced only after its new file is synced and decodes back to exactly the same bytes;
+//! A stream is replaced only after its new file is synced and decodes to the same SHA-256 as the original;
 //! any failure, including an original that doesn't decode cleanly (e.g. a crash-truncated tail), keeps the original.
 
 use std::fs::{self, File};
@@ -11,7 +11,8 @@ use std::path::Path;
 use anyhow::Context;
 
 use crate::STREAM_EXTENSION;
-use crate::delimited::read_message;
+use crate::delimited::MAX_MESSAGE_BYTES;
+use sha2::{Digest, Sha256};
 
 pub const LEVEL: i32 = 19;
 /// Written into a session once every stream was handled; uploads wait for it.
@@ -101,16 +102,21 @@ fn recompress_via(
         },
         Err(e) => return kept(format!("reading the original failed: {e}")),
     };
-    if let Err(e) = check_clean(&original) {
+    if let Err(e) = check_complete_frames(&original) {
         return kept(format!("original doesn't decode cleanly: {e}"));
     }
-    if let Err(e) = write_recompressed(&original, tmp, level) {
-        return kept(format!("writing the new file failed: {e}"));
-    }
+    // One decoding pass over the original checks it, recompresses it, and hashes it.
+    let original_digest = match write_recompressed(&original, tmp, level) {
+        Ok(digest) => digest,
+        Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+            return kept(format!("original doesn't decode cleanly: {e}"));
+        }
+        Err(e) => return kept(format!("writing the new file failed: {e}")),
+    };
     corrupt_for_test(tmp);
-    match same_decoded(&original, tmp) {
-        Ok(true) => {}
-        Ok(false) => return kept("decoded content differs"),
+    match decoded_digest(tmp) {
+        Ok(digest) if digest == original_digest => {}
+        Ok(_) => return kept("decoded content differs"),
         Err(e) => return kept(format!("new file doesn't decode: {e}")),
     }
     let before = original.len() as u64;
@@ -131,9 +137,8 @@ fn recompress_via(
     Outcome::Replaced { before, after }
 }
 
-/// Errors unless `bytes` is entirely complete zstd frames (the stream decoder alone accepts a cut-off last frame)
-/// that decode, checksums and all, to a whole number of length-delimited messages.
-fn check_clean(bytes: &[u8]) -> io::Result<()> {
+/// Errors unless `bytes` is entirely complete zstd frames; the stream decoder alone accepts a cut-off last frame.
+fn check_complete_frames(bytes: &[u8]) -> io::Result<()> {
     let mut offset = 0;
     while offset < bytes.len() {
         match zstd::zstd_safe::find_frame_compressed_size(&bytes[offset..]) {
@@ -146,51 +151,102 @@ fn check_clean(bytes: &[u8]) -> io::Result<()> {
             }
         }
     }
-    let mut decoder = zstd::stream::read::Decoder::new(bytes)?;
-    while read_message(&mut decoder)?.is_some() {}
     Ok(())
 }
 
-fn write_recompressed(original: &[u8], tmp: &Path, level: i32) -> io::Result<()> {
+/// Decodes the original (checking frame checksums and that it's a whole number of length-delimited messages),
+/// writes it recompressed to `tmp` and syncs it, and returns the SHA-256 of the decoded content.
+fn write_recompressed(original: &[u8], tmp: &Path, level: i32) -> io::Result<[u8; 32]> {
     let file = File::create_new(tmp)?;
     let mut encoder = zstd::stream::write::Encoder::new(file, level)?;
     encoder.include_checksum(true)?;
-    io::copy(
-        &mut zstd::stream::read::Decoder::new(original)?,
-        &mut encoder,
-    )?;
-    let file = encoder.finish()?;
-    file.sync_all()
-}
-
-/// Whether the new file decodes to exactly what the original does, compared as both stream.
-fn same_decoded(original: &[u8], tmp: &Path) -> io::Result<bool> {
-    let mut a = zstd::stream::read::Decoder::new(original)?;
-    let mut b = zstd::stream::read::Decoder::new(BufReader::new(File::open(tmp)?))?;
-    let mut buf_a = vec![0u8; 1 << 16];
-    let mut buf_b = vec![0u8; 1 << 16];
+    let mut decoder = zstd::stream::read::Decoder::new(original)?;
+    let mut sha = Sha256::new();
+    let mut messages = MessageBoundaries::default();
+    let mut buf = vec![0u8; 1 << 16];
     loop {
-        let n = read_full(&mut a, &mut buf_a)?;
-        let m = read_full(&mut b, &mut buf_b)?;
-        if n != m || buf_a[..n] != buf_b[..m] {
-            return Ok(false);
-        }
-        if n == 0 {
-            return Ok(true);
+        let n = match decoder.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            // A bad checksum or corrupt frame in the original.
+            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        };
+        sha.update(&buf[..n]);
+        messages.feed(&buf[..n])?;
+        encoder.write_all(&buf[..n])?;
+    }
+    messages.finish()?;
+    encoder.finish()?.sync_all()?;
+    Ok(sha.finalize().into())
+}
+
+/// SHA-256 of what a file decodes to.
+fn decoded_digest(path: &Path) -> io::Result<[u8; 32]> {
+    let mut decoder = zstd::stream::read::Decoder::new(BufReader::new(File::open(path)?))?;
+    let mut sha = Sha256::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        match decoder.read(&mut buf)? {
+            0 => return Ok(sha.finalize().into()),
+            n => sha.update(&buf[..n]),
         }
     }
 }
 
-/// Fills `buf` unless the input ends first; returns how much it read.
-fn read_full(r: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
-    let mut n = 0;
-    while n < buf.len() {
-        match r.read(&mut buf[n..])? {
-            0 => break,
-            k => n += k,
+/// Checks a byte stream fed in pieces is a whole number of length-delimited messages,
+/// as a crash mid-chunk would leave a cut-off one.
+#[derive(Default)]
+struct MessageBoundaries {
+    /// Bytes of the current message body still to skip.
+    remaining: u64,
+    /// The length varint being read, and how many of its bytes so far.
+    varint: u64,
+    varint_bytes: u32,
+}
+
+impl MessageBoundaries {
+    fn feed(&mut self, mut bytes: &[u8]) -> io::Result<()> {
+        while !bytes.is_empty() {
+            if self.remaining > 0 {
+                let skip = self.remaining.min(bytes.len() as u64);
+                self.remaining -= skip;
+                bytes = &bytes[skip as usize..];
+                continue;
+            }
+            let byte = bytes[0];
+            bytes = &bytes[1..];
+            if self.varint_bytes >= 10 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "varint too long",
+                ));
+            }
+            self.varint |= u64::from(byte & 0x7f) << (7 * self.varint_bytes);
+            self.varint_bytes += 1;
+            if byte & 0x80 == 0 {
+                if self.varint > MAX_MESSAGE_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("message length {} exceeds {MAX_MESSAGE_BYTES}", self.varint),
+                    ));
+                }
+                self.remaining = self.varint;
+                self.varint = 0;
+                self.varint_bytes = 0;
+            }
         }
+        Ok(())
     }
-    Ok(n)
+
+    fn finish(&self) -> io::Result<()> {
+        if self.remaining > 0 || self.varint_bytes > 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ends inside a message",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Makes a rename or new file in `dir` durable.
