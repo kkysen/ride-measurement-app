@@ -1,5 +1,8 @@
 use std::io::{self, Read};
 
+/// Far above any real chunk (a 2 s chunk is tens of KB), so corrupt lengths can't trigger huge allocations.
+pub const MAX_MESSAGE_BYTES: u64 = 64 << 20;
+
 /// Reads one varint-length-prefixed message body.
 /// Returns `Ok(None)` on a clean end of input before any length byte.
 pub fn read_message(r: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
@@ -14,6 +17,12 @@ pub fn read_message(r: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
         }
         len |= u64::from(byte[0] & 0x7f) << (7 * i);
         if byte[0] & 0x80 == 0 {
+            if len > MAX_MESSAGE_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("message length {len} exceeds {MAX_MESSAGE_BYTES}; data is corrupt"),
+                ));
+            }
             let mut buf = vec![0; usize::try_from(len).map_err(io::Error::other)?];
             r.read_exact(&mut buf)?;
             return Ok(Some(buf));

@@ -16,4 +16,6 @@ prost-build.workspace = true
 protox.workspace = true
 
 [dev-dependencies]
+prost = "0.14.4"
 tempfile.workspace = true
+zstd = "0.14.3"

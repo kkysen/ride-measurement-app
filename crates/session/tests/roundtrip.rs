@@ -174,3 +174,100 @@ fn audio_stream_round_trips() {
     assert!(!read.truncated);
     assert_eq!(read.chunks, chunks);
 }
+
+mod damage {
+    use super::*;
+    use ride_session::read::{decode_stream_bytes, read_stream_file};
+
+    /// A live-format stream: one frame per chunk. Returns the bytes and each frame's start offset.
+    fn live_stream(chunks: &[SensorChunk]) -> (Vec<u8>, Vec<usize>) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut offsets = Vec::new();
+        let mut w = StreamWriter::create(dir.path(), "s").unwrap();
+        for c in chunks {
+            offsets.push(fs::metadata(w.path()).unwrap().len() as usize);
+            w.append(c).unwrap();
+        }
+        (fs::read(w.path()).unwrap(), offsets)
+    }
+
+    fn chunks(n: i64) -> Vec<SensorChunk> {
+        (0..n)
+            .map(|i| chunk(1_000_000_000 * (i + 1), 400))
+            .collect()
+    }
+
+    #[test]
+    fn corrupt_middle_frame_loses_only_that_chunk() {
+        let chunks = chunks(5);
+        let (mut bytes, offsets) = live_stream(&chunks);
+        // Flip a byte in the middle of frame 2's compressed data; the frame checksum catches it.
+        let mid = (offsets[2] + offsets[3]) / 2;
+        bytes[mid] ^= 0xff;
+        let read = decode_stream_bytes::<SensorChunk>(&bytes);
+        assert!(!read.truncated);
+        assert_eq!(read.damage.len(), 1, "{:?}", read.damage);
+        assert_eq!(read.chunks, [&chunks[..2], &chunks[3..]].concat());
+    }
+
+    #[test]
+    fn garbage_between_frames_is_skipped() {
+        let chunks = chunks(3);
+        let (bytes, offsets) = live_stream(&chunks);
+        let mut damaged = bytes[..offsets[1]].to_vec();
+        damaged.extend_from_slice(b"not zstd at all");
+        damaged.extend_from_slice(&bytes[offsets[1]..]);
+        let read = decode_stream_bytes::<SensorChunk>(&damaged);
+        assert_eq!(read.damage.len(), 1);
+        assert_eq!(read.damage[0].offset, offsets[1]);
+        assert_eq!(read.chunks, chunks);
+    }
+
+    #[test]
+    fn trailing_garbage_is_reported() {
+        let chunks = chunks(2);
+        let (mut bytes, _) = live_stream(&chunks);
+        bytes.extend_from_slice(&[0; 7]);
+        let read = decode_stream_bytes::<SensorChunk>(&bytes);
+        assert!(read.truncated);
+        assert_eq!(read.damage.len(), 1);
+        assert_eq!(read.chunks, chunks);
+    }
+
+    #[test]
+    fn truncated_single_frame_salvages_complete_chunks() {
+        // Like a recompressed file cut off by a crash: every chunk in one frame.
+        let chunks = chunks(20);
+        let mut encoder = zstd::stream::Encoder::new(Vec::new(), 19).unwrap();
+        for c in &chunks {
+            use prost::Message;
+            std::io::Write::write_all(&mut encoder, &c.encode_length_delimited_to_vec()).unwrap();
+        }
+        let bytes = encoder.finish().unwrap();
+        // Cut into the last block only; zstd emits a block's output only once the whole block is in.
+        let read = decode_stream_bytes::<SensorChunk>(&bytes[..bytes.len() - 10]);
+        assert!(read.truncated);
+        assert!(read.damage.is_empty());
+        assert!(!read.chunks.is_empty() && read.chunks.len() < chunks.len());
+        assert_eq!(read.chunks, chunks[..read.chunks.len()]);
+    }
+
+    #[test]
+    fn huge_length_prefix_is_damage_not_an_allocation() {
+        // A valid frame whose content claims a 1 TiB message.
+        let content = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x10];
+        let bytes = zstd::encode_all(&content[..], 3).unwrap();
+        let read = decode_stream_bytes::<SensorChunk>(&bytes);
+        assert_eq!(read.damage.len(), 1);
+        assert!(read.chunks.is_empty());
+    }
+
+    #[test]
+    fn empty_file_is_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.zst");
+        fs::write(&path, b"").unwrap();
+        let read = read_stream_file::<SensorChunk>(&path).unwrap();
+        assert!(read.is_clean() && read.chunks.is_empty());
+    }
+}
