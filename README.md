@@ -64,7 +64,8 @@ Recordings themselves survive an uninstall (they live in shared storage), but th
    To test this: start recording, switch away from the app, and run `adb shell am kill dev.khyber.ride`.
 
 The phone and this machine must be on the same network.
-`adb` here is the x86-64 build running under `box64`.
+`adb` here is Ubuntu's native ARM64 build (`sudo apt install adb`):
+the SDK's x86-64 `adb` crashes under `box64` when starting its server.
 
 ### 4. Record and check a ride
 
