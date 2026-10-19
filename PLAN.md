@@ -54,6 +54,11 @@ Streams:
   Confounders: weather drift (slow, ~1 hPa/h at worst), car HVAC pressurization, doors opening. To validate on real subway rides.
 - **Cell info** (`CellInfo`: cell IDs, signal strength) and **WiFi scans** (BSSIDs, RSSI):
   recorded as raw fingerprints, never as a position. We build our own station fingerprint map from labeled past rides.
+  Cell info is passive: `requestCellInfoUpdate` returns what the modem already sees (serving + neighbor cells),
+  so poll it every few seconds; it does not make the modem search and costs little.
+  Also log `ServiceState` and `SignalStrength` changes (in/out of service, RAT, registered cell),
+  which measures time-to-reconnect at each station, a useful dataset in itself.
+  Normal apps cannot trigger a network search (`requestNetworkScan` needs carrier/system privileges) or toggle airplane mode.
 - **Other cheap signals**: light sensor (tunnel detection), proximity (in pocket), battery/temperature.
   Step detection is derivable from accel, so it is not stored.
 - **Manual event button**: tap "boarded", "at station X" (picked from nearby OSM stations), "alighted".
