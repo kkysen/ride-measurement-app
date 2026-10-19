@@ -45,11 +45,35 @@ impl SensorChunk {
         accuracy: &[i32],
         written_elapsed_realtime_ns: i64,
     ) -> Self {
-        assert_eq!(
-            values.len(),
-            timestamps_ns.len() * values_per_sample as usize
+        let bits = values.iter().map(|v| v.to_bits()).collect();
+        Self::from_sample_bits(
+            timestamps_ns,
+            values_per_sample,
+            bits,
+            accuracy,
+            written_elapsed_realtime_ns,
+        )
+        .unwrap()
+    }
+
+    /// Like [`Self::from_samples`], with each value's IEEE 754 bits, as the app passes them so nothing on the way
+    /// can alter one (e.g. a NaN payload). Errors unless there are `values_per_sample` values and one accuracy
+    /// per timestamp.
+    pub fn from_sample_bits(
+        timestamps_ns: &[i64],
+        values_per_sample: u32,
+        value_bits: Vec<u32>,
+        accuracy: &[i32],
+        written_elapsed_realtime_ns: i64,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            value_bits.len() == timestamps_ns.len() * values_per_sample as usize
+                && accuracy.len() == timestamps_ns.len(),
+            "{} timestamps, {} values at {values_per_sample} per sample, {} accuracies",
+            timestamps_ns.len(),
+            value_bits.len(),
+            accuracy.len()
         );
-        assert_eq!(accuracy.len(), timestamps_ns.len());
         let mut prev = 0;
         let timestamp_deltas_ns = timestamps_ns
             .iter()
@@ -59,12 +83,12 @@ impl SensorChunk {
                 d
             })
             .collect();
-        Self {
+        Ok(Self {
             timestamp_deltas_ns,
             values_per_sample,
-            value_bits: values.iter().map(|v| v.to_bits()).collect(),
+            value_bits,
             accuracy: accuracy.to_vec(),
             written_elapsed_realtime_ns,
-        }
+        })
     }
 }

@@ -91,9 +91,21 @@ impl Fusion {
         )))))
     }
 
-    /// An Android sensor sample as delivered: `Sensor.getType()`, `SensorEvent.timestamp`, `SensorEvent.values`.
-    pub fn on_sensor(&self, sensor_type: i32, t_ns: i64, values: Vec<f32>) {
-        self.lock().on_sensor(sensor_type, t_ns, &values);
+    /// A batch of Android sensor samples as delivered (`Sensor.getType()`, each `SensorEvent.timestamp`, and their
+    /// `SensorEvent.values` back to back, `values_per_sample` each). Batched, since each call into Rust costs tens
+    /// of microseconds.
+    pub fn on_sensor_samples(
+        &self,
+        sensor_type: i32,
+        timestamps_ns: Vec<i64>,
+        values_per_sample: u32,
+        values: Vec<f32>,
+    ) {
+        let n = values_per_sample as usize;
+        let mut fusion = self.lock();
+        for (t, v) in timestamps_ns.iter().zip(values.chunks_exact(n.max(1))) {
+            fusion.on_sensor(sensor_type, *t, v);
+        }
     }
 
     /// A GPS-provider fix.
@@ -341,19 +353,27 @@ impl StreamWriter {
         self.with(|w| w.append_encoded(&chunk))
     }
 
-    /// Builds the sensor chunk accumulated in `builder` and appends it, if it has any samples.
-    pub fn append_sensor_chunk(
+    /// Builds a sensor chunk from a chunk's samples and appends it: one call per chunk, since each call into Rust
+    /// costs tens of microseconds. `value_bits` are each value's IEEE 754 bits (`Float.floatToRawIntBits`),
+    /// so they arrive unaltered.
+    pub fn append_sensor_samples(
         &self,
-        builder: Arc<SensorChunkBuilder>,
+        timestamps_ns: Vec<i64>,
+        values_per_sample: u32,
+        value_bits: Vec<u32>,
+        accuracy: Vec<i32>,
         written_elapsed_realtime_ns: i64,
     ) -> Result<(), RideError> {
-        let chunk = {
-            let mut b = builder.lock();
-            if b.is_empty() {
-                return Ok(());
-            }
-            b.build(written_elapsed_realtime_ns)
-        };
+        if timestamps_ns.is_empty() {
+            return Ok(());
+        }
+        let chunk = ride_session::SensorChunk::from_sample_bits(
+            &timestamps_ns,
+            values_per_sample,
+            value_bits,
+            &accuracy,
+            written_elapsed_realtime_ns,
+        )?;
         self.with(|w| w.append(&chunk))
     }
 
@@ -379,43 +399,6 @@ impl StreamWriter {
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("stream writer is closed"))?;
         Ok(f(w)?)
-    }
-}
-
-/// Sensor samples for the next chunk (`ride_session::write::ChunkBuilder`).
-#[derive(uniffi::Object)]
-pub struct SensorChunkBuilder(Mutex<ride_session::write::ChunkBuilder>);
-
-#[uniffi::export]
-impl SensorChunkBuilder {
-    #[uniffi::constructor]
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self(Mutex::new(Default::default())))
-    }
-
-    pub fn sample_count(&self) -> u32 {
-        self.lock().len() as u32
-    }
-
-    /// Whether a sample with `value_count` values can go in this chunk.
-    pub fn fits(&self, value_count: u32) -> bool {
-        self.lock().fits(value_count as usize)
-    }
-
-    /// `value_bits` are each value's IEEE 754 bits (`Float.floatToRawIntBits`), so they arrive unaltered.
-    pub fn add(
-        &self,
-        timestamp_ns: i64,
-        value_bits: Vec<u32>,
-        accuracy: i32,
-    ) -> Result<(), RideError> {
-        Ok(self.lock().add(timestamp_ns, &value_bits, accuracy)?)
-    }
-}
-
-impl SensorChunkBuilder {
-    fn lock(&self) -> std::sync::MutexGuard<'_, ride_session::write::ChunkBuilder> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
