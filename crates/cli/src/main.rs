@@ -38,6 +38,9 @@ enum Command {
         session: PathBuf,
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// The speed color scale; by default, chosen from the ride's top fused speed.
+        #[arg(long)]
+        scale: Option<map::Scale>,
     },
 }
 
@@ -50,9 +53,13 @@ fn main() -> anyhow::Result<()> {
             output,
             stream,
         } => wav(&Session::open(session)?, &stream, &output),
-        Command::Map { session, output } => {
+        Command::Map {
+            session,
+            output,
+            scale,
+        } => {
             let output = output.unwrap_or_else(|| session.join("map.html"));
-            map::map(&Session::open(session)?, &output)
+            map::map(&Session::open(session)?, &output, scale)
         }
     }
 }

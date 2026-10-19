@@ -30,8 +30,10 @@
   #info .muted, #legend .muted { color: var(--ink-muted); }
   #info .speed { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
   #legend { bottom: 24px; left: 12px; }
-  #legend .bar { width: 180px; height: 8px; border-radius: 4px; margin: 4px 0; }
-  #legend .row { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+  #legend select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; }
+  #legend .bands { display: flex; gap: 2px; margin: 4px 0; font-size: 11px; font-variant-numeric: tabular-nums; }
+  #legend .band { width: 28px; }
+  #legend .swatch { height: 8px; border-radius: 2px; margin-bottom: 2px; }
   #legend .gap { display: inline-block; width: 24px; border-top: 2px dashed #8a8984; vertical-align: middle; margin-right: 6px; }
 </style>
 </head>
@@ -46,15 +48,29 @@ const data = /*RIDE_DATA*/null;
 const RAMP = ["#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95", "#104281", "#0d366b"];
 const KMH = 3.6;
 
+// Lower edge of each color band, km/h, the same as the app's live map (`SpeedColors` in `LiveTrack.kt`).
+// Each scale covers its kind of ride's top speed, and a ride uses the first whose limit its top speed is within:
+// subways and commuter rail up to 200 km/h, high-speed rail up to 400 (CR450), flights up to Mach 1.
+const SCALES = [
+  { name: "rail", maxKmh: 200, bands: [0, 10, 20, 30, 40, 60, 80, 100, 130, 160] },
+  { name: "high-speed rail", maxKmh: 400, bands: [0, 25, 50, 100, 150, 200, 250, 300, 340, 380] },
+  { name: "flight", maxKmh: Infinity, bands: [0, 50, 100, 200, 300, 400, 500, 650, 800, 950] },
+];
+
 const pts = data.segments.flat();
-const speeds = pts.map(p => p[4]).filter(s => s != null).sort((a, b) => a - b);
-// The 98th percentile, so one bad fix doesn't wash out the whole scale.
-const maxSpeed = Math.max(5, speeds.length ? speeds[Math.floor(0.98 * (speeds.length - 1))] : 5);
+// The fused speed (IMU, GNSS, and stops, as the app shows live); never the raw GPS speed, which can spike.
+const speedOf = p => p[7];
+const topKmh = Math.max(0, ...pts.map(speedOf).filter(s => s != null)) * KMH;
+const autoScale = SCALES.find(s => topKmh <= s.maxKmh);
+// `ride map --scale` can preselect one; the dropdown in the legend changes it.
+let scale = SCALES.find(s => s.name === data.scale) ?? autoScale;
 
 function color(speed) {
   if (speed == null) return "#8a8984";
-  const f = Math.min(1, Math.max(0, speed / maxSpeed)) * (RAMP.length - 1);
-  return RAMP[Math.round(f)];
+  const kmh = speed * KMH;
+  let i = 0;
+  while (i + 1 < scale.bands.length && kmh >= scale.bands[i + 1]) i++;
+  return RAMP[i];
 }
 
 const map = L.map("map", { preferCanvas: true });
@@ -69,14 +85,21 @@ for (let i = 1; i < data.segments.length; i++) {
   L.polyline([[a[0], a[1]], [b[0], b[1]]], { color: "#8a8984", weight: 2, dashArray: "6 6", interactive: false }).addTo(map);
 }
 for (const seg of data.segments) {
-  const latlngs = seg.map(p => [p[0], p[1]]);
   // A white casing so the path reads on any tiles.
-  L.polyline(latlngs, { color: "#ffffff", weight: 8, opacity: 0.9, interactive: false }).addTo(map);
-  for (let i = 1; i < seg.length; i++) {
-    const s = seg[i - 1][4] != null && seg[i][4] != null ? (seg[i - 1][4] + seg[i][4]) / 2 : null;
-    L.polyline([latlngs[i - 1], latlngs[i]], { color: color(s), weight: 4, interactive: false }).addTo(map);
+  L.polyline(seg.map(p => [p[0], p[1]]), { color: "#ffffff", weight: 8, opacity: 0.9, interactive: false }).addTo(map);
+}
+const path = L.layerGroup().addTo(map);
+function drawPath() {
+  path.clearLayers();
+  for (const seg of data.segments) {
+    const latlngs = seg.map(p => [p[0], p[1]]);
+    for (let i = 1; i < seg.length; i++) {
+      const a = speedOf(seg[i - 1]), b = speedOf(seg[i]);
+      const s = a != null && b != null ? (a + b) / 2 : null;
+      L.polyline([latlngs[i - 1], latlngs[i]], { color: color(s), weight: 4, interactive: false }).addTo(path);
+    }
+    if (seg.length === 1) L.circleMarker(latlngs[0], { radius: 3, color: color(speedOf(seg[0])), interactive: false }).addTo(path);
   }
-  if (seg.length === 1) L.circleMarker(latlngs[0], { radius: 3, color: color(seg[0][4]), interactive: false }).addTo(map);
 }
 for (const e of data.events) {
   L.circleMarker([e.lat, e.lon], { radius: 6, color: "#ffffff", weight: 2, fillColor: "#1f1f1d", fillOpacity: 1 })
@@ -94,8 +117,9 @@ function show(p) {
   cursor.setLatLng([p[0], p[1]]).addTo(map);
   const time = new Date(p[3]).toLocaleTimeString();
   document.getElementById("info").innerHTML =
-    `<div class="speed">${fmt(p[4] == null ? null : p[4] * KMH, 1)} km/h</div>` +
-    `<div class="muted">${fmt(p[4], 2)} m/s ± ${fmt(p[5], 2)}</div>` +
+    `<div class="speed">${fmt(p[7] == null ? null : p[7] * KMH, 1)} km/h</div>` +
+    `<div class="muted">fused ${fmt(p[7], 2)} ± ${fmt(p[8], 2)} m/s</div>` +
+    `<div class="muted">GPS ${fmt(p[4], 2)} ± ${fmt(p[5], 2)} m/s</div>` +
     `<div class="muted">${time} · ${fmt(p[2], 0)} s in · position ± ${fmt(p[6], 0)} m</div>`;
 }
 // The fix nearest the pointer, if it's within a finger's width.
@@ -111,11 +135,28 @@ let pinned = false;
 map.on("mousemove", e => { if (!pinned) { const p = nearest(e); if (p) show(p); } });
 map.on("click", e => { const p = nearest(e); pinned = p != null; if (p) show(p); });
 
-document.getElementById("legend").innerHTML =
-  `<div>Speed (GPS)</div>` +
-  `<div class="bar" style="background: linear-gradient(to right, ${RAMP.join(",")})"></div>` +
-  `<div class="row muted"><span>0</span><span>${(maxSpeed * KMH).toFixed(0)}+ km/h</span></div>` +
-  `<div class="muted"><span class="gap"></span>no GPS</div>`;
+const legend = document.getElementById("legend");
+legend.innerHTML =
+  `<label>Speed, km/h, scale <select id="scale">` +
+  `<option value="">auto (${autoScale.name})</option>` +
+  SCALES.map(s => `<option value="${s.name}">${s.name}</option>`).join("") +
+  `</select></label>` +
+  `<div class="bands"></div>` +
+  `<div class="muted"><span class="gap"></span>no GPS · gray: no fused speed</div>`;
+const select = document.getElementById("scale");
+select.value = data.scale ?? "";
+function drawLegend() {
+  legend.querySelector(".bands").innerHTML = RAMP.map((c, i) =>
+    `<div class="band"><div class="swatch" style="background: ${c}"></div>` +
+    `<div class="muted">${scale.bands[i]}${i + 1 === scale.bands.length ? "+" : ""}</div></div>`).join("");
+}
+select.addEventListener("change", () => {
+  scale = SCALES.find(s => s.name === select.value) ?? autoScale;
+  drawPath();
+  drawLegend();
+});
+drawPath();
+drawLegend();
 document.title = `Ride map ${data.session}`;
 </script>
 </body>
