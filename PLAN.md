@@ -148,6 +148,10 @@ Shows speed, along-track distance, current/next station. Results logged, but ove
    Caveat: the car body leans outward on its suspension in proportion to unbalanced accel, which biases cant.
    Separate them with repeat rides through the same curve at different speeds (cant is fixed, deficiency scales with `v^2`),
    or directly when stopped on a curve (`phi` is then pure cant plus a tiny lean).
+   Speeds through a given curve are often similar, which makes a per-curve fit ill-conditioned,
+   so fit jointly across all curves: one suspension roll coefficient per train type shared by every curve, plus one cant per curve.
+   The spread of deficiency across many curves pins the coefficient; each curve's cant then needs only a few passes.
+   Also note the speed variation within each pass (accelerating/braking through the curve), which adds leverage.
    Switches: short yaw-rate S-curves and lateral jerk; record diverging vs straight route and speed.
    Build a per-curve database (radius, cant, max/typical speed, deficiency) from repeated rides.
 7. **Door events**: only checked while stopped.
