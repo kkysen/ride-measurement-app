@@ -5,36 +5,45 @@ import dev.khyber.ride.proto.StreamInfo
 import java.io.File
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import uniffi.ride_ffi.SensorChunkBuilder
+import uniffi.ride_ffi.StreamWriter
+import uniffi.ride_ffi.formatVersion
 import uniffi.ride_ffi.recompressSession
+import uniffi.ride_ffi.writeSessionInfo
 import uniffi.ride_ffi.recompressedMarker
 
 /**
- * Writes a session with the Kotlin writer for the Rust reader to check bit-exactly
- * (`crates/session/tests/kotlin_fixture.rs`), so both sides of the format agree.
+ * Writes a session through the app's Rust bindings, exactly as the recorders do, for the Rust and Python readers
+ * to check bit-exactly (`crates/session/tests/kotlin_fixture.rs`): values cross from Kotlin as raw bits,
+ * and nothing on the way may alter them.
  */
 class FixtureTest {
     @Test
     fun writeFixture() {
         val dir = File(System.getProperty("ride.fixtureDir") ?: "build/fixtures/kotlin-session")
         dir.deleteRecursively()
-        SessionWriter.writeSessionInfo(
-            dir,
+        dir.mkdirs()
+        writeSessionInfo(
+            dir.path,
             SessionInfo.newBuilder()
-                .setFormatVersion(FORMAT_VERSION)
+                .setFormatVersion(formatVersion().toInt())
                 .setSessionId("kotlin-fixture")
                 .addStreams(StreamInfo.newBuilder().setName("accel"))
-                .build(),
+                .build()
+                .toByteArray(),
         )
-        StreamWriter(dir, "accel").use { writer ->
-            for (c in 0 until CHUNKS) {
-                val builder = ChunkBuilder()
-                for (i in 0 until SAMPLES_PER_CHUNK) {
-                    val sample = c * SAMPLES_PER_CHUNK + i
-                    val values = FloatArray(3) { k -> fixtureValue(sample * 3 + k) }
-                    builder.add(fixtureTimestamp(sample), values, sample % 4)
+        StreamWriter.create(dir.path, "accel").use { writer ->
+            SensorChunkBuilder().use { builder ->
+                for (c in 0 until CHUNKS) {
+                    for (i in 0 until SAMPLES_PER_CHUNK) {
+                        val sample = c * SAMPLES_PER_CHUNK + i
+                        val values = FloatArray(3) { k -> fixtureValue(sample * 3 + k) }
+                        builder.add(fixtureTimestamp(sample), values.map { it.toRawBits().toUInt() }, sample % 4)
+                    }
+                    writer.appendSensorChunk(builder, c.toLong())
                 }
-                writer.append(builder.build(c.toLong()))
             }
+            writer.finish()
         }
     }
 

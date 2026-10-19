@@ -13,6 +13,8 @@ import dev.khyber.ride.proto.StreamInfo
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import uniffi.ride_ffi.SensorChunkBuilder
+import uniffi.ride_ffi.StreamWriter
 
 /**
  * Records one sensor to its own stream file, on its own thread, writing a chunk every [CHUNK_NS] of samples
@@ -31,8 +33,9 @@ class SensorStreamRecorder(
 ) : SensorEventListener2 {
     private val thread = HandlerThread("sensor-$name").apply { start() }
     private val handler = Handler(thread.looper)
-    private val writer = StreamWriter(dir, name)
-    private val builder = ChunkBuilder()
+    // The format is written by Rust (`crates/session/src/write.rs`), the same code the offline tools read with.
+    private val writer = StreamWriter.create(dir.path, name)
+    private val builder = SensorChunkBuilder()
     private var chunkStartNs = 0L
     private var lastTimestampNs = 0L
     private val continuous = sensor.reportingMode == Sensor.REPORTING_MODE_CONTINUOUS
@@ -86,7 +89,9 @@ class SensorStreamRecorder(
         handler.removeCallbacks(flushTask)
         handler.post {
             flush()
+            writer.finish()
             writer.close()
+            builder.close()
         }
         thread.quitSafely()
         thread.join()
@@ -97,14 +102,15 @@ class SensorStreamRecorder(
     }
 
     override fun onSensorChanged(event: SensorEvent) {
-        if (!builder.fits(event.values.size)) flush()
-        if (builder.size == 0) chunkStartNs = event.timestamp
+        if (!builder.fits(event.values.size.toUInt())) flush()
+        if (builder.sampleCount() == 0u) chunkStartNs = event.timestamp
         if (continuous && lastTimestampNs != 0L && sensor.minDelay > 0) {
             val dtNs = event.timestamp - lastTimestampNs
             if (dtNs > GAP_FACTOR * sensor.minDelay * 1_000L) onGap(dtNs)
         }
         lastTimestampNs = event.timestamp
-        builder.add(event.timestamp, event.values, event.accuracy)
+        // Raw bits (`floatToRawIntBits` keeps NaN payloads), so every value reaches the file exactly.
+        builder.add(event.timestamp, event.values.map { it.toRawBits().toUInt() }, event.accuracy)
         sampleCount++
         LiveSpeed.onSensorEvent(event)
         if (event.timestamp - chunkStartNs >= CHUNK_NS) flush()
@@ -140,7 +146,7 @@ class SensorStreamRecorder(
     override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
 
     private fun flush() {
-        if (builder.size > 0) writer.append(builder.build(SystemClock.elapsedRealtimeNanos()))
+        writer.appendSensorChunk(builder, SystemClock.elapsedRealtimeNanos())
     }
 
     private fun sensorInfo(): SensorInfo = SensorInfo.newBuilder()

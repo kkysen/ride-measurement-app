@@ -17,6 +17,7 @@ import android.os.Environment
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
+import android.util.Log
 import dev.khyber.ride.proto.Device
 import dev.khyber.ride.proto.ManualEvent
 import dev.khyber.ride.proto.SessionInfo
@@ -26,6 +27,9 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import uniffi.ride_ffi.coreVersion
+import uniffi.ride_ffi.formatVersion
+import uniffi.ride_ffi.writeSessionInfo
 
 /** Foreground service that keeps recording with the screen off. */
 class RecorderService : Service() {
@@ -64,6 +68,22 @@ class RecorderService : Service() {
         }
         if (audioAllowed) serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         startForeground(NOTIFICATION_ID, notification(locationAllowed), serviceType)
+        // Sessions are written by the Rust library: if it can't load, say why instead of pretending to record.
+        // Checked after `startForeground`, which Android requires promptly even of a service that then stops.
+        try {
+            coreVersion()
+        } catch (e: Throwable) {
+            Log.e("RecorderService", "Rust library failed to load; can't record", e)
+            _state.value = State(
+                recording = false,
+                sessionId = null,
+                error = "Can't record: the Rust library failed to load.\n${Log.getStackTraceString(e)}",
+            )
+            prefs.edit().putBoolean(WANTED, false).commit()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ride:recording")
             .apply { acquire() }
@@ -107,10 +127,10 @@ class RecorderService : Service() {
         radioRecorder = RadioRecorder(this, radio) { gnssRef?.lastGpsFixElapsedNs ?: 0L }
         eventsStream = events
         if (audioAllowed) audioRecorder = AudioStreamRecorder(this, dir)
-        SessionWriter.writeSessionInfo(
-            dir,
+        writeSessionInfo(
+            dir.path,
             SessionInfo.newBuilder()
-                .setFormatVersion(FORMAT_VERSION)
+                .setFormatVersion(formatVersion().toInt())
                 .setSessionId(id)
                 .setStartUnixMs(startUnixMs)
                 .setStartElapsedRealtimeNs(startElapsedNs)
@@ -125,7 +145,8 @@ class RecorderService : Service() {
                 .addAllStreams(recorders.map { it.streamInfo })
                 .addAllStreams(recordStreams.map { it.streamInfo })
                 .addAllStreams(listOfNotNull(audioRecorder?.streamInfo))
-                .build(),
+                .build()
+                .toByteArray(),
         )
         LiveTrack.reset()
         LiveSpeed.start()
@@ -181,7 +202,7 @@ class RecorderService : Service() {
             .build()
     }
 
-    data class State(val recording: Boolean, val sessionId: String?)
+    data class State(val recording: Boolean, val sessionId: String?, val error: String? = null)
 
     private data class SensorSpec(val name: String, val type: Int, val fallback: SensorSpec? = null)
 

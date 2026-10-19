@@ -8,12 +8,13 @@ import dev.khyber.ride.proto.RecordChunk
 import dev.khyber.ride.proto.StreamInfo
 import dev.khyber.ride.proto.StreamKind
 import java.io.File
+import uniffi.ride_ffi.StreamWriter
 
 /** A record stream: thread-safe [add], written as one chunk every [FLUSH_MS] on its own thread. */
 class RecordStreamRecorder(val name: String, dir: File) {
     private val thread = HandlerThread("records-$name").apply { start() }
     val handler = Handler(thread.looper)
-    private val writer = StreamWriter(dir, name)
+    private val writer = StreamWriter.create(dir.path, name)
     private val pending = ArrayList<Record>()
 
     @Volatile
@@ -47,6 +48,7 @@ class RecordStreamRecorder(val name: String, dir: File) {
         handler.removeCallbacks(flushTask)
         handler.post {
             flush()
+            writer.finish()
             writer.close()
         }
         thread.quitSafely()
@@ -55,11 +57,12 @@ class RecordStreamRecorder(val name: String, dir: File) {
 
     private fun flush() {
         if (pending.isEmpty()) return
-        writer.append(
+        writer.appendEncoded(
             RecordChunk.newBuilder()
                 .addAllRecords(pending)
                 .setWrittenElapsedRealtimeNs(SystemClock.elapsedRealtimeNanos())
-                .build(),
+                .build()
+                .toByteArray(),
         )
         pending.clear()
     }

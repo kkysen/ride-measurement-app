@@ -178,6 +178,7 @@ class MainActivity : ComponentActivity() {
             }
 
             Text(if (state.recording) "Recording ${state.sessionId}" else "Not recording")
+            state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             Button(onClick = {
                 if (state.recording) RecorderService.stop(this@MainActivity) else RecorderService.start(this@MainActivity)
             }) { Text(if (state.recording) "Stop" else "Start") }

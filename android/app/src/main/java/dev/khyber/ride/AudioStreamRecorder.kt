@@ -17,6 +17,7 @@ import dev.khyber.ride.proto.StreamInfo
 import dev.khyber.ride.proto.StreamKind
 import java.io.ByteArrayOutputStream
 import java.io.File
+import uniffi.ride_ffi.StreamWriter
 
 /**
  * Lossless mono 16-bit PCM from the microphone into the `audio` stream, one chunk per [CHUNK_FRAMES],
@@ -27,7 +28,7 @@ class AudioStreamRecorder(context: Context, dir: File) {
     private val unprocessed = context.getSystemService(AudioManager::class.java)
         .getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED) == "true"
     private val source = if (unprocessed) MediaRecorder.AudioSource.UNPROCESSED else MediaRecorder.AudioSource.VOICE_RECOGNITION
-    private val writer = StreamWriter(dir, NAME)
+    private val writer = StreamWriter.create(dir.path, NAME)
     private var record: AudioRecord? = null
     private var thread: Thread? = null
 
@@ -68,6 +69,7 @@ class AudioStreamRecorder(context: Context, dir: File) {
             stop()
             release()
         }
+        writer.finish()
         writer.close()
     }
 
@@ -79,13 +81,14 @@ class AudioStreamRecorder(context: Context, dir: File) {
         var chunkFirstFrame = 0L
         fun flush() {
             if (pcm.size() == 0) return
-            writer.append(
+            writer.appendEncoded(
                 AudioChunk.newBuilder()
                     .setFirstFrame(chunkFirstFrame)
                     .setPcmS16Le(ByteString.copyFrom(pcm.toByteArray()))
                     .addAllTimestamps(timestamps)
                     .setWrittenElapsedRealtimeNs(SystemClock.elapsedRealtimeNanos())
-                    .build(),
+                    .build()
+                    .toByteArray(),
             )
             pcm.reset()
             timestamps.clear()

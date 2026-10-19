@@ -171,13 +171,10 @@ dependencies {
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.work.runtime)
     implementation(libs.protobuf.javalite)
-    implementation("${libs.zstd.jni.get()}@aar")
     implementation("${libs.jna.get()}@aar")
     implementation(libs.osmdroid)
 
     testImplementation(libs.junit)
-    // The JVM build of zstd-jni, for unit tests on the host.
-    testImplementation(libs.zstd.jni)
     // The JVM build of JNA, for loading the host build of the Rust library in unit tests.
     testImplementation(libs.jna)
 }
