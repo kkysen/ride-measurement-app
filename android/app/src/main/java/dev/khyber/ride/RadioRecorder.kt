@@ -7,27 +7,29 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
+import android.os.PowerManager
 import android.os.SystemClock
+import android.telephony.CellIdentityNr
 import android.telephony.CellInfo
 import android.telephony.CellInfoGsm
 import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
 import android.telephony.CellInfoTdscdma
 import android.telephony.CellInfoWcdma
-import android.telephony.CellIdentityNr
 import android.telephony.CellSignalStrength
 import android.telephony.ServiceState
 import android.telephony.SignalStrength
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
 import dev.khyber.ride.proto.BatteryStatus
-import java.util.concurrent.Executor
 import dev.khyber.ride.proto.Cell
 import dev.khyber.ride.proto.CellInfoSnapshot
 import dev.khyber.ride.proto.ServiceState as PbServiceState
 import dev.khyber.ride.proto.SignalStrength as PbSignalStrength
+import dev.khyber.ride.proto.ThermalStatus
 import dev.khyber.ride.proto.WifiResult
 import dev.khyber.ride.proto.WifiScan
+import java.util.concurrent.Executor
 
 /**
  * Cell info (polled; passive, the modem doesn't search), service state, signal strength, WiFi scans, and battery,
@@ -95,11 +97,24 @@ class RadioRecorder(
         override fun onReceive(context: Context, intent: Intent) = recordBattery(intent)
     }
 
+    private val power = context.getSystemService(PowerManager::class.java)
+    private val thermalListener = PowerManager.OnThermalStatusChangedListener { recordThermal() }
+
+    private fun recordThermal() {
+        val headroom = power.getThermalHeadroom(0)
+        radio.add {
+            thermal = ThermalStatus.newBuilder().setStatus(power.currentThermalStatus)
+                .apply { if (!headroom.isNaN()) setHeadroom(headroom) }
+                .build()
+        }
+    }
+
     private val poll = object : Runnable {
         override fun run() {
             requestCellInfo()
             maybeScanWifi()
             recordBattery(null)
+            recordThermal()
             handler.postDelayed(this, POLL_MS)
         }
     }
@@ -114,6 +129,7 @@ class RadioRecorder(
         }
         context.registerReceiver(wifiReceiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION), null, handler)
         context.registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED), null, handler)
+        power.addThermalStatusListener(Executor { handler.post(it) }, thermalListener)
         handler.post(poll)
     }
 
@@ -122,6 +138,7 @@ class RadioRecorder(
         if (telephonyRegistered) telephony.unregisterTelephonyCallback(telephonyCallback)
         context.unregisterReceiver(wifiReceiver)
         context.unregisterReceiver(batteryReceiver)
+        power.removeThermalStatusListener(thermalListener)
     }
 
     @SuppressLint("MissingPermission")

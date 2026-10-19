@@ -38,6 +38,7 @@ class RecorderService : Service() {
     private var recordStreams: List<RecordStreamRecorder> = emptyList()
     private var gnssRecorder: GnssRecorder? = null
     private var radioRecorder: RadioRecorder? = null
+    private var bleRecorder: BleRecorder? = null
     private var audioRecorder: AudioStreamRecorder? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -125,6 +126,7 @@ class RecorderService : Service() {
         }
         val gnssRef = gnssRecorder
         radioRecorder = RadioRecorder(this, radio) { gnssRef?.lastGpsFixElapsedNs ?: 0L }
+        bleRecorder = BleRecorder(this, radio)
         eventsStream = events
         if (audioAllowed) audioRecorder = AudioStreamRecorder(this, dir)
         writeSessionInfo(
@@ -157,6 +159,7 @@ class RecorderService : Service() {
             android.util.Log.w("RecorderService", "no location permission; not recording GNSS", e)
         }
         radioRecorder?.start()
+        bleRecorder?.start()
         audioRecorder?.start()
         if (restarted) {
             events.add {
@@ -176,6 +179,8 @@ class RecorderService : Service() {
         gnssRecorder = null
         radioRecorder?.stop()
         radioRecorder = null
+        bleRecorder?.stop()
+        bleRecorder = null
         audioRecorder?.stop()
         audioRecorder = null
         LiveSpeed.stop()

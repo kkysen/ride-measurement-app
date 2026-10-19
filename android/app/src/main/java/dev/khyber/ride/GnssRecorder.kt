@@ -1,6 +1,7 @@
 package dev.khyber.ride
 
 import android.annotation.SuppressLint
+import android.location.GnssAntennaInfo
 import android.location.GnssMeasurementRequest
 import android.location.GnssMeasurementsEvent
 import android.location.GnssNavigationMessage
@@ -10,8 +11,11 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
 import android.os.SystemClock
+import android.util.Log
 import com.google.protobuf.ByteString
-import java.util.concurrent.Executor
+import dev.khyber.ride.proto.GnssAntennaInfo as PbGnssAntennaInfo
+import dev.khyber.ride.proto.GnssAntennaInfos
+import dev.khyber.ride.proto.GnssCapabilities as PbGnssCapabilities
 import dev.khyber.ride.proto.GnssClock as PbGnssClock
 import dev.khyber.ride.proto.GnssMeasurement as PbGnssMeasurement
 import dev.khyber.ride.proto.GnssMeasurementsEvent as PbGnssMeasurementsEvent
@@ -19,6 +23,8 @@ import dev.khyber.ride.proto.GnssNavigationMessage as PbGnssNavigationMessage
 import dev.khyber.ride.proto.GnssSatellite as PbGnssSatellite
 import dev.khyber.ride.proto.GnssStatus as PbGnssStatus
 import dev.khyber.ride.proto.Location as PbLocation
+import dev.khyber.ride.proto.SphericalCorrections
+import java.util.concurrent.Executor
 
 /**
  * Raw GNSS (`gnss` stream) and location fixes (`location` stream).
@@ -59,6 +65,27 @@ class GnssRecorder(
         LiveTrack.onGpsLocation(location)
     }
 
+    private val antennaListener = GnssAntennaInfo.Listener { infos ->
+        gnss.add { gnssAntennaInfos = GnssAntennaInfos.newBuilder().addAllAntennas(infos.map { it.toProto() }).build() }
+    }
+
+    /** Every boolean `has*` capability by name, so new Android capabilities are recorded without code changes. */
+    private fun capabilitiesProto(): PbGnssCapabilities {
+        val caps = locationManager.gnssCapabilities
+        val b = PbGnssCapabilities.newBuilder().setYearOfHardware(locationManager.gnssYearOfHardware)
+        locationManager.gnssHardwareModelName?.let { b.hardwareModelName = it }
+        for (m in caps.javaClass.methods) {
+            if (m.name.startsWith("has") && m.parameterCount == 0 && m.returnType == Boolean::class.javaPrimitiveType) {
+                try {
+                    b.putFlags(m.name.removePrefix("has"), m.invoke(caps) as Boolean)
+                } catch (e: ReflectiveOperationException) {
+                    Log.w("GnssRecorder", "capability ${m.name}", e)
+                }
+            }
+        }
+        return b.build()
+    }
+
     private val fusedListener = LocationListener { location -> locations.add { this.location = location.toProto() } }
 
     @SuppressLint("MissingPermission")
@@ -71,6 +98,11 @@ class GnssRecorder(
         )
         locationManager.registerGnssStatusCallback(executor, statusCallback)
         locationManager.registerGnssNavigationMessageCallback(executor, navigationCallback)
+        gnss.add { gnssCapabilities = capabilitiesProto() }
+        // Phase center offsets and corrections; phones without antenna info just never call back.
+        if (!locationManager.registerAntennaInfoListener(executor, antennaListener)) {
+            Log.i("GnssRecorder", "no GNSS antenna info on this phone")
+        }
         val looper = locations.handler.looper
         locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0L, 0f, gpsListener, looper)
         if (locationManager.hasProvider(LocationManager.FUSED_PROVIDER)) {
@@ -82,6 +114,7 @@ class GnssRecorder(
         locationManager.unregisterGnssMeasurementsCallback(measurementsCallback)
         locationManager.unregisterGnssStatusCallback(statusCallback)
         locationManager.unregisterGnssNavigationMessageCallback(navigationCallback)
+        locationManager.unregisterAntennaInfoListener(antennaListener)
         locationManager.removeUpdates(gpsListener)
         locationManager.removeUpdates(fusedListener)
     }
@@ -191,5 +224,33 @@ private fun Location.toProto(): PbLocation {
     if (hasVerticalAccuracy()) b.verticalAccuracyMeters = verticalAccuracyMeters
     if (hasSpeedAccuracy()) b.speedAccuracyMetersPerSecond = speedAccuracyMetersPerSecond
     if (hasBearingAccuracy()) b.bearingAccuracyDegrees = bearingAccuracyDegrees
+    return b.build()
+}
+
+private fun GnssAntennaInfo.toProto(): PbGnssAntennaInfo {
+    val o = phaseCenterOffset
+    val b = PbGnssAntennaInfo.newBuilder()
+        .setCarrierFrequencyMhz(carrierFrequencyMHz)
+        .setPhaseCenterOffsetXMm(o.xOffsetMm)
+        .setPhaseCenterOffsetXUncertaintyMm(o.xOffsetUncertaintyMm)
+        .setPhaseCenterOffsetYMm(o.yOffsetMm)
+        .setPhaseCenterOffsetYUncertaintyMm(o.yOffsetUncertaintyMm)
+        .setPhaseCenterOffsetZMm(o.zOffsetMm)
+        .setPhaseCenterOffsetZUncertaintyMm(o.zOffsetUncertaintyMm)
+    phaseCenterVariationCorrections?.let { b.phaseCenterVariationCorrections = it.toProto() }
+    signalGainCorrections?.let { b.signalGainCorrections = it.toProto() }
+    return b.build()
+}
+
+private fun GnssAntennaInfo.SphericalCorrections.toProto(): SphericalCorrections {
+    val values = correctionsArray
+    val uncertainties = correctionUncertaintiesArray
+    val b = SphericalCorrections.newBuilder()
+        .setRows(values.size)
+        .setColumns(values.firstOrNull()?.size ?: 0)
+        .setDeltaThetaDegrees(deltaTheta)
+        .setDeltaPhiDegrees(deltaPhi)
+    values.forEach { row -> row.forEach { b.addCorrections(it) } }
+    uncertainties.forEach { row -> row.forEach { b.addUncertainties(it) } }
     return b.build()
 }

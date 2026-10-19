@@ -105,6 +105,7 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.POST_NOTIFICATIONS,
                 Manifest.permission.READ_PHONE_STATE,
                 Manifest.permission.NEARBY_WIFI_DEVICES,
+                Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.RECORD_AUDIO,
             ),
         )
