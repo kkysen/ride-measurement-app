@@ -2,41 +2,68 @@ package dev.khyber.ride
 
 import android.hardware.Sensor
 import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
+import android.hardware.SensorEventListener2
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
+import android.util.Log
 import dev.khyber.ride.proto.SensorInfo
 import dev.khyber.ride.proto.StreamInfo
 import java.io.File
 
-/** Records one sensor to its own stream file, on its own thread, writing a chunk every [CHUNK_NS]. */
+/**
+ * Records one sensor to its own stream file, on its own thread, writing a chunk every [CHUNK_NS] of samples
+ * or every [CHUNK_NS] of wall time for sensors that only report on change.
+ *
+ * Batching (`maxReportLatencyUs`) is lossless as long as the hardware FIFO doesn't overflow,
+ * so latency is sized well under the FIFO, and halved whenever a gap shows up in the timestamps.
+ */
 class SensorStreamRecorder(
     private val sensorManager: SensorManager,
     private val sensor: Sensor,
     private val name: String,
     private val valuesPerSample: Int,
     dir: File,
-) : SensorEventListener {
+    /** How many sensors share the FIFO at full rate, to size the batching latency. */
+    sharingFifo: Int,
+) : SensorEventListener2 {
     private val thread = HandlerThread("sensor-$name").apply { start() }
     private val handler = Handler(thread.looper)
     private val writer = StreamWriter(dir, name)
     private val builder = ChunkBuilder(valuesPerSample)
     private var chunkStartNs = 0L
+    private var lastTimestampNs = 0L
+    private val continuous = sensor.reportingMode == Sensor.REPORTING_MODE_CONTINUOUS
+    private var maxReportLatencyUs = initialLatencyUs(sensor, sharingFifo)
+    private var reregisterAfterFlush = false
 
+    @Volatile
     var sampleCount = 0L
+        private set
+
+    @Volatile
+    var gapCount = 0L
         private set
 
     val streamInfo: StreamInfo
         get() = StreamInfo.newBuilder().setName(name).setSensor(sensorInfo()).build()
 
+    private val flushTask = object : Runnable {
+        override fun run() {
+            flush()
+            handler.postDelayed(this, CHUNK_NS / 1_000_000)
+        }
+    }
+
     fun start() {
-        sensorManager.registerListener(this, sensor, SAMPLING_PERIOD_US, MAX_REPORT_LATENCY_US, handler)
+        register()
+        handler.postDelayed(flushTask, CHUNK_NS / 1_000_000)
     }
 
     fun stop() {
         sensorManager.unregisterListener(this)
+        handler.removeCallbacks(flushTask)
         handler.post {
             flush()
             writer.close()
@@ -45,11 +72,43 @@ class SensorStreamRecorder(
         thread.join()
     }
 
+    private fun register() {
+        sensorManager.registerListener(this, sensor, SAMPLING_PERIOD_US, maxReportLatencyUs, handler)
+    }
+
     override fun onSensorChanged(event: SensorEvent) {
         if (builder.size == 0) chunkStartNs = event.timestamp
+        if (continuous && lastTimestampNs != 0L && sensor.minDelay > 0) {
+            val dtNs = event.timestamp - lastTimestampNs
+            if (dtNs > GAP_FACTOR * sensor.minDelay * 1_000L) onGap(dtNs)
+        }
+        lastTimestampNs = event.timestamp
         builder.add(event.timestamp, event.values, event.accuracy)
         sampleCount++
         if (event.timestamp - chunkStartNs >= CHUNK_NS) flush()
+    }
+
+    private fun onGap(dtNs: Long) {
+        gapCount++
+        if (maxReportLatencyUs == 0) return
+        maxReportLatencyUs /= 2
+        if (maxReportLatencyUs < MIN_LATENCY_US) maxReportLatencyUs = 0
+        Log.w("SensorStreamRecorder", "$name: ${dtNs / 1_000_000} ms gap, batching latency now $maxReportLatencyUs us")
+        // Changing latency needs a re-registration, which could drop events still in the FIFO,
+        // so drain the FIFO first and re-register once the flush completes.
+        if (!reregisterAfterFlush) {
+            reregisterAfterFlush = true
+            sensorManager.flush(this)
+        }
+    }
+
+    override fun onFlushCompleted(sensor: Sensor) {
+        if (!reregisterAfterFlush) return
+        reregisterAfterFlush = false
+        sensorManager.unregisterListener(this)
+        // The re-registration itself leaves a short gap; don't count it as another overflow.
+        lastTimestampNs = 0L
+        register()
     }
 
     override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
@@ -74,15 +133,25 @@ class SensorStreamRecorder(
         .setReportingMode(sensor.reportingMode)
         .setWakeUp(sensor.isWakeUpSensor)
         .setSamplingPeriodUs(SAMPLING_PERIOD_US)
-        .setMaxReportLatencyUs(MAX_REPORT_LATENCY_US)
+        .setMaxReportLatencyUs(maxReportLatencyUs)
         .build()
 
     companion object {
         /** Fastest rate the sensor supports. */
         const val SAMPLING_PERIOD_US = 0
-
-        /** No batching yet; that comes with gap detection. */
-        const val MAX_REPORT_LATENCY_US = 0
         const val CHUNK_NS = 2_000_000_000L
+        private const val MAX_LATENCY_US = 1_000_000
+        private const val MIN_LATENCY_US = 20_000
+        private const val GAP_FACTOR = 4
+
+        /** A quarter of the time the FIFO takes to fill at full rate, capped at [MAX_LATENCY_US]; 0 without a FIFO. */
+        fun initialLatencyUs(sensor: Sensor, sharingFifo: Int): Int {
+            if (sensor.minDelay <= 0) return 0
+            val reserved = sensor.fifoReservedEventCount
+            val events = if (reserved > 0) reserved else sensor.fifoMaxEventCount / maxOf(sharingFifo, 1)
+            if (events <= 0) return 0
+            val fillUs = events.toLong() * sensor.minDelay
+            return minOf(fillUs / 4, MAX_LATENCY_US.toLong()).toInt().let { if (it < MIN_LATENCY_US) 0 else it }
+        }
     }
 }

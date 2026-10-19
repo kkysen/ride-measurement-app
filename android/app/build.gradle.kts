@@ -12,7 +12,8 @@ android {
 
     defaultConfig {
         applicationId = "dev.khyber.ride"
-        minSdk = 31
+        // Android 14: needed for the `specialUse` fallback service type after a background restart.
+        minSdk = 34
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"

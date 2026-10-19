@@ -1,6 +1,7 @@
 package dev.khyber.ride
 
 import com.github.luben.zstd.Zstd
+import com.google.protobuf.MessageLite
 import dev.khyber.ride.proto.SensorChunk
 import dev.khyber.ride.proto.SessionInfo
 import java.io.ByteArrayOutputStream
@@ -35,7 +36,7 @@ class StreamWriter(dir: File, name: String) : AutoCloseable {
         out = FileOutputStream(file, true)
     }
 
-    fun append(chunk: SensorChunk) {
+    fun append(chunk: MessageLite) {
         val bytes = ByteArrayOutputStream().also { chunk.writeDelimitedTo(it) }.toByteArray()
         out.write(Zstd.compress(bytes, LIVE_ZSTD_LEVEL))
         out.fd.sync()

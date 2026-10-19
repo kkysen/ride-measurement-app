@@ -1,20 +1,24 @@
 package dev.khyber.ride
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.hardware.Sensor
 import android.hardware.SensorManager
+import android.location.LocationManager
 import android.os.Build
 import android.os.Environment
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import dev.khyber.ride.proto.Device
+import dev.khyber.ride.proto.ManualEvent
 import dev.khyber.ride.proto.SessionInfo
 import java.io.File
 import java.text.SimpleDateFormat
@@ -27,6 +31,9 @@ import kotlinx.coroutines.flow.StateFlow
 class RecorderService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var recorders: List<SensorStreamRecorder> = emptyList()
+    private var recordStreams: List<RecordStreamRecorder> = emptyList()
+    private var gnssRecorder: GnssRecorder? = null
+    private var radioRecorder: RadioRecorder? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -42,7 +49,16 @@ class RecorderService : Service() {
         prefs.edit().putBoolean(WANTED, true).commit()
         // The killed session's files can't be safely appended to, so a restart starts a new session that links back.
         val continues = if (restarted) prefs.getString(LAST_SESSION, null).orEmpty() else ""
-        startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        // Started from the background (a restart) without "Allow all the time", Android doesn't allow a location service,
+        // so fall back to recording everything that doesn't need location.
+        val locationAllowed = !restarted ||
+            checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val serviceType = if (locationAllowed) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+        } else {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        }
+        startForeground(NOTIFICATION_ID, notification(locationAllowed), serviceType)
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ride:recording")
             .apply { acquire() }
@@ -56,11 +72,35 @@ class RecorderService : Service() {
         prefs.edit().putString(LAST_SESSION, id).commit()
 
         val sensorManager = getSystemService(SensorManager::class.java)
-        recorders = listOfNotNull(
-            sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
-                SensorStreamRecorder(sensorManager, it, "accel", 3, dir)
-            },
-        )
+        // Uncalibrated variants carry the raw values plus the bias estimate, so calibrated ones are derivable and not stored;
+        // calibrated is the fallback only where uncalibrated doesn't exist.
+        val sensorSpecs = listOf(
+            SensorSpec("accel_uncal", Sensor.TYPE_ACCELEROMETER_UNCALIBRATED, 6, fallback = SensorSpec("accel", Sensor.TYPE_ACCELEROMETER, 3)),
+            SensorSpec("gyro_uncal", Sensor.TYPE_GYROSCOPE_UNCALIBRATED, 6, fallback = SensorSpec("gyro", Sensor.TYPE_GYROSCOPE, 3)),
+            SensorSpec("mag_uncal", Sensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED, 6, fallback = SensorSpec("mag", Sensor.TYPE_MAGNETIC_FIELD, 3)),
+            SensorSpec("pressure", Sensor.TYPE_PRESSURE, 1),
+            SensorSpec("light", Sensor.TYPE_LIGHT, 1),
+            SensorSpec("proximity", Sensor.TYPE_PROXIMITY, 1),
+        ).mapNotNull { spec ->
+            sequenceOf(spec, spec.fallback).filterNotNull()
+                .firstNotNullOfOrNull { s -> sensorManager.getDefaultSensor(s.type)?.let { s to it } }
+        }
+        val highRate = sensorSpecs.count { (_, sensor) -> sensor.reportingMode == Sensor.REPORTING_MODE_CONTINUOUS }
+        recorders = sensorSpecs.map { (spec, sensor) ->
+            SensorStreamRecorder(sensorManager, sensor, spec.name, spec.valuesPerSample, dir, sharingFifo = highRate)
+        }
+        val events = RecordStreamRecorder("events", dir)
+        val radio = RecordStreamRecorder("radio", dir)
+        recordStreams = listOf(events, radio)
+        if (locationAllowed) {
+            val gnss = RecordStreamRecorder("gnss", dir)
+            val locations = RecordStreamRecorder("location", dir)
+            recordStreams = recordStreams + listOf(gnss, locations)
+            gnssRecorder = GnssRecorder(getSystemService(LocationManager::class.java), gnss, locations)
+        }
+        val gnssRef = gnssRecorder
+        radioRecorder = RadioRecorder(this, radio) { gnssRef?.lastGpsFixElapsedNs ?: 0L }
+        eventsStream = events
         SessionWriter.writeSessionInfo(
             dir,
             SessionInfo.newBuilder()
@@ -77,35 +117,59 @@ class RecorderService : Service() {
                         .setBuildFingerprint(Build.FINGERPRINT),
                 )
                 .addAllStreams(recorders.map { it.streamInfo })
+                .addAllStreams(recordStreams.map { it.streamInfo })
                 .build(),
         )
         recorders.forEach { it.start() }
+        try {
+            gnssRecorder?.start()
+        } catch (e: SecurityException) {
+            android.util.Log.w("RecorderService", "no location permission; not recording GNSS", e)
+        }
+        radioRecorder?.start()
+        if (restarted) {
+            events.add {
+                manualEvent = ManualEvent.newBuilder()
+                    .setKind(ManualEvent.Kind.KIND_NOTE)
+                    .setText("restarted after Android stopped recording; location ${if (locationAllowed) "on" else "off"}")
+                    .build()
+            }
+        }
         _state.value = State(recording = true, sessionId = id)
         return START_STICKY
     }
 
     override fun onDestroy() {
+        eventsStream = null
+        gnssRecorder?.stop()
+        gnssRecorder = null
+        radioRecorder?.stop()
+        radioRecorder = null
         recorders.forEach { it.stop() }
         recorders = emptyList()
+        recordStreams.forEach { it.stop() }
+        recordStreams = emptyList()
         wakeLock?.release()
         _state.value = State(recording = false, sessionId = null)
         UploadWorker.enqueue(this)
         super.onDestroy()
     }
 
-    private fun notification(): Notification {
+    private fun notification(locationAllowed: Boolean): Notification {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Recording", NotificationManager.IMPORTANCE_LOW),
         )
         return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("Recording ride")
+            .setContentTitle(if (locationAllowed) "Recording ride" else "Recording ride without location")
             .setSmallIcon(android.R.drawable.presence_video_online)
             .setOngoing(true)
             .build()
     }
 
     data class State(val recording: Boolean, val sessionId: String?)
+
+    private data class SensorSpec(val name: String, val type: Int, val valuesPerSample: Int, val fallback: SensorSpec? = null)
 
     companion object {
         private const val CHANNEL_ID = "recording"
@@ -124,6 +188,17 @@ class RecorderService : Service() {
             context.getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(WANTED, false).commit()
             context.stopService(Intent(context, RecorderService::class.java))
         }
+
+        @Volatile
+        private var eventsStream: RecordStreamRecorder? = null
+
+        /** Records a manual event (boarded, at station, ...) into the current session; false if not recording. */
+        fun addEvent(kind: ManualEvent.Kind, text: String = ""): Boolean {
+            val events = eventsStream ?: return false
+            events.add { manualEvent = ManualEvent.newBuilder().setKind(kind).setText(text).build() }
+            return true
+        }
+
         private val _state = MutableStateFlow(State(recording = false, sessionId = null))
         val state: StateFlow<State> = _state
 
