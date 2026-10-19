@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -48,15 +49,23 @@ fun LiveMapScreen(onBack: () -> Unit) {
     val points by LiveTrack.points.collectAsStateWithLifecycle()
     var follow by remember { mutableStateOf(true) }
     var selected by remember { mutableStateOf<LiveTrack.Point?>(null) }
+    // Null is automatic, from the top speed so far.
+    var chosenColors by rememberSaveable { mutableStateOf<SpeedColors?>(null) }
+    val colors = chosenColors ?: SpeedColors.forTopSpeed(points.mapNotNull { it.speedMps }.maxOrNull())
 
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onBack) { Text("Back") }
             Button(onClick = { follow = true }, enabled = !follow) { Text("Follow") }
+            // Cycles automatic, then each scale.
+            Button(onClick = {
+                val choices = listOf(null) + SpeedColors.entries
+                chosenColors = choices[(choices.indexOf(chosenColors) + 1) % choices.size]
+            }) { Text("Scale: " + (chosenColors?.label ?: "auto")) }
         }
         Text(describe(selected ?: points.lastOrNull(), latest = selected == null), style = MaterialTheme.typography.bodyMedium)
         Text(
-            "Color: speed, light 0 to dark ${SpeedColors.MAX_KMH.toInt()}+ km/h; dashed: no GPS (tunnel)",
+            "Color: speed, light to dark in bands at ${colors.bandsKmh.joinToString(", ")}+ km/h (${colors.label} scale); dashed: no GPS (tunnel)",
             style = MaterialTheme.typography.bodySmall,
         )
         Box(Modifier.fillMaxWidth().weight(1f)) {
@@ -75,7 +84,7 @@ fun LiveMapScreen(onBack: () -> Unit) {
                 update = { view ->
                     if (view !is MapView) return@AndroidView
                     try {
-                        track.sync(points)
+                        track.sync(points, colors)
                         val last = points.lastOrNull()
                         if (follow && last != null) view.controller.animateTo(GeoPoint(last.lat, last.lon))
                         view.invalidate()
@@ -142,13 +151,16 @@ private class TrackOverlays {
     val casings = FolderOverlay()
     val colored = FolderOverlay()
     private var drawn = emptyList<LiveTrack.Point>()
+    private var colors = SpeedColors.RAIL
     private var casing: Polyline? = null
     private var line: Polyline? = null
     private var lineColor = 0
 
-    fun sync(points: List<LiveTrack.Point>) {
-        // A new recording: start over.
-        if (points.size < drawn.size || (drawn.isNotEmpty() && points.firstOrNull() !== drawn.first())) {
+    fun sync(points: List<LiveTrack.Point>, colors: SpeedColors) {
+        // A new recording, or a faster top speed moved the ride to a wider scale: start over.
+        val restart = points.size < drawn.size || (drawn.isNotEmpty() && points.firstOrNull() !== drawn.first())
+        if (restart || colors != this.colors) {
+            this.colors = colors
             listOf(gaps, casings, colored).forEach { it.items.clear() }
             drawn = emptyList()
             casing = null
@@ -173,7 +185,7 @@ private class TrackOverlays {
         }
         casing?.addPoint(geo)
         val speeds = listOfNotNull(prev.speedMps, p.speedMps)
-        val color = SpeedColors.of(if (speeds.size == 2) speeds.average() else null)
+        val color = colors.of(if (speeds.size == 2) speeds.average() else null)
         val current = line
         if (current != null && color == lineColor) {
             current.addPoint(geo)

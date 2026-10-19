@@ -18,7 +18,10 @@ object LiveTrack {
         val timeMs: Long,
         val lat: Double,
         val lon: Double,
-        /** The live estimate fusing IMU, GNSS, and stops, if there is one; what the map is colored by. */
+        /**
+         * The live estimate fusing IMU, GNSS, and stops, if there is one; what the map is colored by.
+         * Never the raw GPS speed, which can spike.
+         */
         val fusedSpeedMps: Double?,
         val gpsSpeedMps: Double?,
         val gpsSpeedAccuracyMps: Double?,
@@ -26,7 +29,7 @@ object LiveTrack {
         /** True if this fix starts a new segment after a gap (a tunnel), so no line is drawn to it. */
         val startsSegment: Boolean,
     ) {
-        val speedMps: Double? get() = fusedSpeedMps ?: gpsSpeedMps
+        val speedMps: Double? get() = fusedSpeedMps
     }
 
     private val _points = MutableStateFlow<List<Point>>(emptyList())
@@ -78,18 +81,37 @@ object LiveTrack {
     const val MAX_GAP_NS = 5_000_000_000L
 }
 
-/** The map's speed colors: the same light-to-dark blue ramp as `ride map`, over a fixed 0 to [MAX_KMH] km/h. */
-object SpeedColors {
-    val RAMP = intArrayOf(
-        0xFF86B6EF.toInt(), 0xFF6DA7EC.toInt(), 0xFF5598E7.toInt(), 0xFF3987E5.toInt(), 0xFF2A78D6.toInt(),
-        0xFF256ABF.toInt(), 0xFF1C5CAB.toInt(), 0xFF184F95.toInt(), 0xFF104281.toInt(), 0xFF0D366B.toInt(),
-    )
-    const val UNKNOWN = 0xFF8A8984.toInt()
-    const val MAX_KMH = 100.0
+/**
+ * The map's speed colors: the same light-to-dark blue ramp and bands as `ride map`.
+ * Bands are narrow at low speeds and wide at high ones, and fixed, so a color means the same speed on every ride.
+ * Each scale covers its kind of ride's top speed, and a ride uses the first whose limit its top speed is within:
+ * subways and commuter rail up to 200 km/h, high-speed rail up to 400 (CR450), flights up to Mach 1.
+ */
+enum class SpeedColors(
+    val label: String,
+    val maxKmh: Double,
+    /** Lower edge of each band, km/h; the last band is open-ended. */
+    val bandsKmh: IntArray,
+) {
+    RAIL("rail", 200.0, intArrayOf(0, 10, 20, 30, 40, 60, 80, 100, 130, 160)),
+    HIGH_SPEED_RAIL("high-speed rail", 400.0, intArrayOf(0, 25, 50, 100, 150, 200, 250, 300, 340, 380)),
+    FLIGHT("flight", Double.POSITIVE_INFINITY, intArrayOf(0, 50, 100, 200, 300, 400, 500, 650, 800, 950)),
+    ;
 
     fun of(speedMps: Double?): Int {
         if (speedMps == null) return UNKNOWN
-        val f = (speedMps * 3.6 / MAX_KMH).coerceIn(0.0, 1.0) * (RAMP.size - 1)
-        return RAMP[Math.round(f).toInt()]
+        val kmh = speedMps * 3.6
+        return RAMP[bandsKmh.indexOfLast { kmh >= it }.coerceAtLeast(0)]
+    }
+
+    companion object {
+        val RAMP = intArrayOf(
+            0xFF86B6EF.toInt(), 0xFF6DA7EC.toInt(), 0xFF5598E7.toInt(), 0xFF3987E5.toInt(), 0xFF2A78D6.toInt(),
+            0xFF256ABF.toInt(), 0xFF1C5CAB.toInt(), 0xFF184F95.toInt(), 0xFF104281.toInt(), 0xFF0D366B.toInt(),
+        )
+        const val UNKNOWN = 0xFF8A8984.toInt()
+
+        fun forTopSpeed(maxSpeedMps: Double?): SpeedColors =
+            entries.first { (maxSpeedMps ?: 0.0) * 3.6 <= it.maxKmh }
     }
 }
