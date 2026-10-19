@@ -1,0 +1,73 @@
+// Session format, version 1.
+//
+// A session is a directory:
+// - `session.pb`: one length-delimited `SessionInfo`.
+// - `<stream>.zst` for each stream in `SessionInfo.streams`:
+//   a concatenation of independent zstd frames, each holding exactly one length-delimited `SensorChunk`.
+//   Frames are self-contained, so a crash loses at most the frame being written.
+//
+// Length-delimited means a varint byte length followed by the message, as in `writeDelimitedTo`.
+// All values are stored bit-exactly: decoding must return exactly what Android delivered.
+syntax = "proto3";
+
+package ride.v1;
+
+option java_package = "dev.kkysen.ride.proto";
+option java_multiple_files = true;
+
+message SessionInfo {
+  uint32 format_version = 1;
+  string session_id = 2;
+  // Wall clock at the start, for humans; analysis uses `start_elapsed_realtime_ns`.
+  int64 start_unix_ms = 3;
+  // `SystemClock.elapsedRealtimeNanos()` at the start, sampled together with `start_unix_ms`.
+  int64 start_elapsed_realtime_ns = 4;
+  Device device = 5;
+  repeated StreamInfo streams = 6;
+}
+
+message Device {
+  string manufacturer = 1;
+  string model = 2;
+  int32 sdk_int = 3;
+  string build_fingerprint = 4;
+}
+
+message StreamInfo {
+  // File name without the `.zst` extension.
+  string name = 1;
+  SensorInfo sensor = 2;
+}
+
+// Everything `android.hardware.Sensor` reports, recorded as-is.
+message SensorInfo {
+  int32 type = 1;
+  string string_type = 2;
+  string name = 3;
+  string vendor = 4;
+  int32 version = 5;
+  float resolution = 6;
+  float maximum_range = 7;
+  float power_ma = 8;
+  int32 min_delay_us = 9;
+  int32 max_delay_us = 10;
+  int32 fifo_max_event_count = 11;
+  int32 fifo_reserved_event_count = 12;
+  int32 reporting_mode = 13;
+  bool wake_up = 14;
+  // Requested sampling period and batching latency.
+  int32 sampling_period_us = 15;
+  int32 max_report_latency_us = 16;
+}
+
+message SensorChunk {
+  // `SensorEvent.timestamp` of each sample: the first is absolute, each later one is the difference from the previous.
+  repeated sint64 timestamp_deltas_ns = 1;
+  uint32 values_per_sample = 2;
+  // IEEE 754 bits of `SensorEvent.values`, sample after sample, `values_per_sample` each.
+  repeated fixed32 value_bits = 3;
+  // `SensorEvent.accuracy` of each sample.
+  repeated int32 accuracy = 4;
+  // `SystemClock.elapsedRealtimeNanos()` when the chunk was written, to check the sensor timestamp base.
+  int64 written_elapsed_realtime_ns = 5;
+}
