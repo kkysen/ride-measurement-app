@@ -13,7 +13,6 @@ import dev.khyber.ride.proto.StreamInfo
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import uniffi.ride_ffi.SensorChunkBuilder
 import uniffi.ride_ffi.StreamWriter
 
 /**
@@ -35,7 +34,9 @@ class SensorStreamRecorder(
     private val handler = Handler(thread.looper)
     // The format is written by Rust (`crates/session/src/write.rs`), the same code the offline tools read with.
     private val writer = StreamWriter.create(dir.path, name)
-    private val builder = SensorChunkBuilder()
+    // The current chunk's samples, and a small batch of the same samples for live speed.
+    private val chunk = SampleBuffer()
+    private val live = SampleBuffer(LIVE_BATCH)
     private var chunkStartNs = 0L
     private var lastTimestampNs = 0L
     private val continuous = sensor.reportingMode == Sensor.REPORTING_MODE_CONTINUOUS
@@ -91,7 +92,6 @@ class SensorStreamRecorder(
             Health.guard("write $name") { flush() }
             Health.guard("close $name") { writer.finish() }
             writer.close()
-            builder.close()
         }
         thread.quitSafely()
         thread.join()
@@ -106,17 +106,17 @@ class SensorStreamRecorder(
     }
 
     private fun onSample(event: SensorEvent) {
-        if (!builder.fits(event.values.size.toUInt())) flush()
-        if (builder.sampleCount() == 0u) chunkStartNs = event.timestamp
+        if (!chunk.fits(event.values.size)) flush()
+        if (chunk.size == 0) chunkStartNs = event.timestamp
         if (continuous && lastTimestampNs != 0L && sensor.minDelay > 0) {
             val dtNs = event.timestamp - lastTimestampNs
             if (dtNs > GAP_FACTOR * sensor.minDelay * 1_000L) onGap(dtNs)
         }
         lastTimestampNs = event.timestamp
-        // Raw bits (`floatToRawIntBits` keeps NaN payloads), so every value reaches the file exactly.
-        builder.add(event.timestamp, event.values.map { it.toRawBits().toUInt() }, event.accuracy)
+        chunk.add(event)
         sampleCount++
-        LiveSpeed.onSensorEvent(event)
+        if (!live.fits(event.values.size) || live.size >= LIVE_BATCH) sendLive()
+        live.add(event)
         if (event.timestamp - chunkStartNs >= CHUNK_NS) flush()
     }
 
@@ -153,8 +153,22 @@ class SensorStreamRecorder(
 
     override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
 
+    /** Writes the chunk so far in one call into Rust; the writer keeps and retries it if the write fails. */
     private fun flush() {
-        writer.appendSensorChunk(builder, SystemClock.elapsedRealtimeNanos())
+        sendLive()
+        if (chunk.size == 0) return
+        val timestamps = chunk.timestampList().toList()
+        val bits = chunk.bitList()
+        val accuracy = chunk.accuracyList().toList()
+        val valuesPerSample = chunk.valuesPerSample.toUInt()
+        chunk.clear()
+        writer.appendSensorSamples(timestamps, valuesPerSample, bits, accuracy, SystemClock.elapsedRealtimeNanos())
+    }
+
+    private fun sendLive() {
+        if (live.size == 0) return
+        LiveSpeed.onSensorSamples(sensor.type, live.timestampList().toList(), live.valuesPerSample, live.floatList())
+        live.clear()
     }
 
     private fun sensorInfo(): SensorInfo = SensorInfo.newBuilder()
@@ -177,6 +191,8 @@ class SensorStreamRecorder(
         .build()
 
     companion object {
+        /** Samples per batch handed to live speed: a few calls a second at full rate. */
+        private const val LIVE_BATCH = 64
         /** Fastest rate the sensor supports. */
         const val SAMPLING_PERIOD_US = 0
         const val CHUNK_NS = 2_000_000_000L

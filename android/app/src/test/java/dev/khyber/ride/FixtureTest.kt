@@ -5,7 +5,6 @@ import dev.khyber.ride.proto.StreamInfo
 import java.io.File
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import uniffi.ride_ffi.SensorChunkBuilder
 import uniffi.ride_ffi.StreamWriter
 import uniffi.ride_ffi.formatVersion
 import uniffi.ride_ffi.recompressSession
@@ -33,15 +32,16 @@ class FixtureTest {
                 .toByteArray(),
         )
         StreamWriter.create(dir.path, "accel").use { writer ->
-            SensorChunkBuilder().use { builder ->
-                for (c in 0 until CHUNKS) {
-                    for (i in 0 until SAMPLES_PER_CHUNK) {
-                        val sample = c * SAMPLES_PER_CHUNK + i
-                        val values = FloatArray(3) { k -> fixtureValue(sample * 3 + k) }
-                        builder.add(fixtureTimestamp(sample), values.map { it.toRawBits().toUInt() }, sample % 4)
-                    }
-                    writer.appendSensorChunk(builder, c.toLong())
-                }
+            for (c in 0 until CHUNKS) {
+                // As `SensorStreamRecorder` does: one call per chunk, values as raw bits.
+                val samples = (0 until SAMPLES_PER_CHUNK).map { c * SAMPLES_PER_CHUNK + it }
+                writer.appendSensorSamples(
+                    samples.map { fixtureTimestamp(it) },
+                    3u,
+                    samples.flatMap { s -> (0 until 3).map { k -> fixtureValue(s * 3 + k).toRawBits().toUInt() } },
+                    samples.map { it % 4 },
+                    c.toLong(),
+                )
             }
             writer.finish()
         }

@@ -1,6 +1,5 @@
 package dev.khyber.ride
 
-import android.hardware.SensorEvent
 import android.location.Location
 import android.os.Handler
 import android.os.HandlerThread
@@ -82,13 +81,10 @@ object LiveSpeed {
         _gnss.value = null
     }
 
-    /** Called on a sensor thread; copies the values and hands them over. Rust decides what to use. */
-    fun onSensorEvent(event: SensorEvent) {
+    /** A batch of one sensor's samples, from its recorder's thread. Rust decides what to use. */
+    fun onSensorSamples(type: Int, timestampsNs: List<Long>, valuesPerSample: Int, values: List<Float>) {
         val h = handler ?: return
-        val type = event.sensor.type
-        val t = event.timestamp
-        val values = event.values.toList()
-        h.post { safely { fusion?.onSensor(type, t, values) } }
+        h.post { safely { fusion?.onSensorSamples(type, timestampsNs, valuesPerSample.toUInt(), values) } }
     }
 
     /** GPS-provider fixes only: fused fixes may mix in network location, which can be wrong underground. */

@@ -22,7 +22,7 @@ class RustCoreTest {
     fun fusion() {
         Fusion(600u).use { f ->
             // Uncalibrated accelerometer values: raw, then the bias estimate.
-            f.onSensor(35, 1L, listOf(0f, 0f, 9.8f, 0f, 0f, 0f))
+            f.onSensorSamples(35, listOf(1L), 6u, listOf(0f, 0f, 9.8f, 0f, 0f, 0f))
             for (i in 0 until 5) f.onFix(i * 1_000_000_000L, 40.0, -74.0, 10.0, 5.0, 10.0, 0.3)
             val e = f.estimate(4_000_000_000L)
             assertEquals(10.0, e.speedMps, 0.1)
