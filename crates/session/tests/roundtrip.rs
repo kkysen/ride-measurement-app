@@ -141,3 +141,36 @@ fn record_stream_round_trips() {
     assert!(!read.truncated);
     assert_eq!(read.chunks, chunks);
 }
+
+#[test]
+fn audio_stream_round_trips() {
+    use ride_session::AudioChunk;
+    use ride_session::proto::AudioTimestamp;
+
+    let dir = tempfile::tempdir().unwrap();
+    write_session(dir.path(), &[]);
+    let pcm: Vec<u8> = (0..32_000u32)
+        .flat_map(|i| ((i * 7919) as i16).to_le_bytes())
+        .collect();
+    let chunks: Vec<_> = (0..3)
+        .map(|c| AudioChunk {
+            first_frame: c * 32_000,
+            pcm_s16le: pcm.clone(),
+            timestamps: vec![AudioTimestamp {
+                frame_position: c * 32_000,
+                boottime_ns: 1_000_000_000 * (c + 1),
+            }],
+            written_elapsed_realtime_ns: c,
+        })
+        .collect();
+    let mut w = StreamWriter::create(dir.path(), "audio").unwrap();
+    for c in &chunks {
+        w.append(c).unwrap();
+    }
+    let read = Session::open(dir.path())
+        .unwrap()
+        .read_audio("audio")
+        .unwrap();
+    assert!(!read.truncated);
+    assert_eq!(read.chunks, chunks);
+}

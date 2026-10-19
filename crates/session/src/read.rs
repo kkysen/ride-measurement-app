@@ -7,7 +7,8 @@ use prost::Message;
 
 use crate::delimited::read_message;
 use crate::{
-    FORMAT_VERSION, RecordChunk, SESSION_INFO_FILE, STREAM_EXTENSION, SensorChunk, SessionInfo,
+    AudioChunk, FORMAT_VERSION, RecordChunk, SESSION_INFO_FILE, STREAM_EXTENSION, SensorChunk,
+    SessionInfo,
 };
 
 pub struct Session {
@@ -38,6 +39,11 @@ impl Session {
 
     /// Reads a sensor stream.
     pub fn read_stream(&self, name: &str) -> anyhow::Result<StreamContents> {
+        read_stream_file(&self.stream_path(name))
+    }
+
+    /// Reads an audio stream.
+    pub fn read_audio(&self, name: &str) -> anyhow::Result<StreamContents<AudioChunk>> {
         read_stream_file(&self.stream_path(name))
     }
 

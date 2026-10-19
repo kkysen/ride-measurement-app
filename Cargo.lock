@@ -598,6 +598,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ride-session",
+ "tempfile",
 ]
 
 [[package]]

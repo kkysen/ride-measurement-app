@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use ride_session::proto::record::Payload;
-use ride_session::proto::{StreamKind, manual_event};
+use ride_session::proto::{AudioInfo, StreamKind, manual_event};
 use ride_session::read::Session;
 
 #[derive(Parser)]
@@ -19,12 +19,24 @@ enum Command {
     Summary { session: PathBuf },
     /// Print one stream as CSV: timestamp_ns, accuracy, values...
     Csv { session: PathBuf, stream: String },
+    /// Export an audio stream as a WAV file, bit-exact PCM.
+    Wav {
+        session: PathBuf,
+        output: PathBuf,
+        #[arg(long, default_value = "audio")]
+        stream: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Summary { session } => summary(&Session::open(session)?),
         Command::Csv { session, stream } => csv(&Session::open(session)?, &stream),
+        Command::Wav {
+            session,
+            output,
+            stream,
+        } => wav(&Session::open(session)?, &stream, &output),
     }
 }
 
@@ -44,9 +56,16 @@ fn summary(session: &Session) -> anyhow::Result<()> {
         println!("device {} {} (SDK {})", d.manufacturer, d.model, d.sdk_int);
     }
     for stream in &info.streams {
-        if stream.kind() == StreamKind::Records {
-            record_summary(session, &stream.name)?;
-            continue;
+        match stream.kind() {
+            StreamKind::Records => {
+                record_summary(session, &stream.name)?;
+                continue;
+            }
+            StreamKind::Audio => {
+                audio_summary(session, &stream.name, stream.audio.as_ref())?;
+                continue;
+            }
+            StreamKind::Sensor => {}
         }
         let contents = session
             .read_stream(&stream.name)
@@ -126,6 +145,82 @@ fn record_summary(session: &Session, name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn audio_summary(session: &Session, name: &str, info: Option<&AudioInfo>) -> anyhow::Result<()> {
+    let contents = session
+        .read_audio(name)
+        .with_context(|| format!("stream {name}"))?;
+    let rate = info.map_or(0, |i| i.sample_rate_hz);
+    let frames: usize = contents.chunks.iter().map(|c| c.pcm_s16le.len() / 2).sum();
+    print!("{name}: {} chunks, {frames} frames", contents.chunks.len());
+    if contents.truncated {
+        print!(", TRUNCATED tail");
+    }
+    println!();
+    let mut expected = 0;
+    let mut discontinuities = 0;
+    for c in &contents.chunks {
+        if c.first_frame != expected {
+            discontinuities += 1;
+        }
+        expected = c.first_frame + (c.pcm_s16le.len() / 2) as i64;
+    }
+    let timestamps: Vec<_> = contents.chunks.iter().flat_map(|c| &c.timestamps).collect();
+    if rate > 0 {
+        print!(
+            "  {:.1} s at {rate} Hz ({})",
+            frames as f64 / f64::from(rate),
+            info.map_or("", |i| i.audio_source_name.as_str())
+        );
+    }
+    // Compare the audio clock to boot time across the stream: frames per second actually delivered.
+    if let (Some(a), Some(b)) = (timestamps.first(), timestamps.last())
+        && b.boottime_ns > a.boottime_ns
+    {
+        let measured = (b.frame_position - a.frame_position) as f64
+            / ((b.boottime_ns - a.boottime_ns) as f64 * 1e-9);
+        print!(", measured {measured:.2} Hz");
+    }
+    println!(", {discontinuities} frame discontinuities");
+    Ok(())
+}
+
+fn wav(session: &Session, stream: &str, output: &std::path::Path) -> anyhow::Result<()> {
+    use std::io::Write;
+    let info = session
+        .info
+        .streams
+        .iter()
+        .find(|s| s.name == stream)
+        .and_then(|s| s.audio.clone())
+        .with_context(|| format!("no audio stream {stream}"))?;
+    let contents = session.read_audio(stream)?;
+    let data_len: usize = contents.chunks.iter().map(|c| c.pcm_s16le.len()).sum();
+    let channels = u16::try_from(info.channels)?;
+    let rate = u32::try_from(info.sample_rate_hz)?;
+    let data_len = u32::try_from(data_len).context("audio too long for one WAV file")?;
+    let mut out = std::io::BufWriter::new(std::fs::File::create(output)?);
+    out.write_all(b"RIFF")?;
+    out.write_all(&(36 + data_len).to_le_bytes())?;
+    out.write_all(b"WAVEfmt ")?;
+    out.write_all(&16u32.to_le_bytes())?;
+    out.write_all(&1u16.to_le_bytes())?; // PCM
+    out.write_all(&channels.to_le_bytes())?;
+    out.write_all(&rate.to_le_bytes())?;
+    out.write_all(&(rate * u32::from(channels) * 2).to_le_bytes())?;
+    out.write_all(&(channels * 2).to_le_bytes())?;
+    out.write_all(&16u16.to_le_bytes())?;
+    out.write_all(b"data")?;
+    out.write_all(&data_len.to_le_bytes())?;
+    for c in &contents.chunks {
+        out.write_all(&c.pcm_s16le)?;
+    }
+    out.flush()?;
+    if contents.truncated {
+        eprintln!("warning: {stream} has a truncated tail");
+    }
+    Ok(())
+}
+
 fn payload_name(payload: Option<&Payload>) -> &'static str {
     match payload {
         None => "empty",
@@ -161,4 +256,56 @@ fn csv(session: &Session, stream: &str) -> anyhow::Result<()> {
         eprintln!("warning: {stream} has a truncated tail");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use ride_session::proto::{AudioInfo, StreamInfo, StreamKind};
+    use ride_session::read::Session;
+    use ride_session::write::{StreamWriter, write_session_info};
+    use ride_session::{AudioChunk, FORMAT_VERSION, SessionInfo};
+
+    #[test]
+    fn wav_has_header_and_exact_pcm() {
+        let dir = tempfile::tempdir().unwrap();
+        let info = SessionInfo {
+            format_version: FORMAT_VERSION,
+            streams: vec![StreamInfo {
+                name: "audio".into(),
+                kind: StreamKind::Audio.into(),
+                audio: Some(AudioInfo {
+                    sample_rate_hz: 16_000,
+                    channels: 1,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        write_session_info(dir.path(), &info).unwrap();
+        let pcm: Vec<u8> = (0..1000u16)
+            .flat_map(|i| (i.wrapping_mul(977)).to_le_bytes())
+            .collect();
+        let mut w = StreamWriter::create(dir.path(), "audio").unwrap();
+        for c in 0..2 {
+            w.append(&AudioChunk {
+                first_frame: c * 1000,
+                pcm_s16le: pcm.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        let out = dir.path().join("out.wav");
+        super::wav(&Session::open(dir.path()).unwrap(), "audio", &out).unwrap();
+        let bytes = std::fs::read(out).unwrap();
+        assert_eq!(&bytes[..4], b"RIFF");
+        assert_eq!(&bytes[8..16], b"WAVEfmt ");
+        assert_eq!(
+            u32::from_le_bytes(bytes[24..28].try_into().unwrap()),
+            16_000
+        );
+        assert_eq!(&bytes[36..40], b"data");
+        assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 4000);
+        assert_eq!(&bytes[44..], [pcm.clone(), pcm].concat());
+    }
 }
