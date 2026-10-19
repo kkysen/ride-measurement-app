@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v6.4.0
+
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      # Every build is signed with the one shared key, never a per-runner debug key (see README).
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RIDE_SIGNING_KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/signing.jks"
+          echo "RIDE_SIGNING_STOREFILE=$RUNNER_TEMP/signing.jks" >> "$GITHUB_ENV"
+
+      - name: Android build and unit tests
+        working-directory: android
+        env:
+          RIDE_SIGNING_STOREPASSWORD: ${{ secrets.RIDE_SIGNING_STOREPASSWORD }}
+          RIDE_SIGNING_KEYALIAS: ${{ secrets.RIDE_SIGNING_KEYALIAS }}
+          RIDE_SIGNING_KEYPASSWORD: ${{ secrets.RIDE_SIGNING_KEYPASSWORD }}
+          RIDE_ONEDRIVE_CLIENT_ID: ${{ vars.RIDE_ONEDRIVE_CLIENT_ID }}
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug
+
+      - name: Format cross-checks
+        env:
+          RIDE_KOTLIN_FIXTURE: ${{ github.workspace }}/android/app/build/fixtures/kotlin-session
+        run: |
+          cargo test --test kotlin_fixture
+          pipx install uv
+          cd python
+          uv venv -q .venv
+          uv pip install -q --python .venv maturin pytest
+          uv pip install -q --python .venv -e .
+          .venv/bin/pytest -q
+
+      - name: Check signing certificate
+        run: |
+          apksigner="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          "$apksigner" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk \
+            | grep -q 'SHA-256 digest: b260b5c7961dc92be8fb24e624326dc81d88c6b487f3751ca9edc9df80108a6e'
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" android/app/build/outputs/apk/debug/app-debug.apk --generate-notes
