@@ -390,6 +390,10 @@ fn payload_name(payload: Option<&Payload>) -> &'static str {
         Some(Payload::WifiScan(_)) => "wifi_scan",
         Some(Payload::ManualEvent(_)) => "manual_event",
         Some(Payload::Battery(_)) => "battery",
+        Some(Payload::GnssCapabilities(_)) => "gnss_capabilities",
+        Some(Payload::GnssAntennaInfos(_)) => "gnss_antenna_infos",
+        Some(Payload::Thermal(_)) => "thermal",
+        Some(Payload::BleScan(_)) => "ble_scan",
     }
 }
 

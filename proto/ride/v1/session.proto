@@ -116,6 +116,10 @@ message Record {
     ManualEvent manual_event = 10;
     BatteryStatus battery = 11;
     GnssMeasurementsStatus gnss_measurements_status = 12;
+    GnssCapabilities gnss_capabilities = 13;
+    GnssAntennaInfos gnss_antenna_infos = 14;
+    ThermalStatus thermal = 15;
+    BleScanResults ble_scan = 16;
   }
 }
 
@@ -323,4 +327,71 @@ message AudioChunk {
 message AudioTimestamp {
   int64 frame_position = 1;
   int64 boottime_ns = 2;
+}
+
+// `LocationManager.getGnssCapabilities`, `getGnssHardwareModelName`, and `getGnssYearOfHardware`, once per session.
+message GnssCapabilities {
+  // Every boolean capability, by its `GnssCapabilities` getter name without "has" (e.g. "MeasurementCorrections"),
+  // so new ones need no schema change.
+  map<string, bool> flags = 1;
+  optional string hardware_model_name = 2;
+  int32 year_of_hardware = 3;
+}
+
+// `LocationManager.registerAntennaInfoListener`: the antennas' phase center offsets and corrections,
+// which carrier-phase processing needs.
+message GnssAntennaInfos {
+  repeated GnssAntennaInfo antennas = 1;
+}
+
+message GnssAntennaInfo {
+  double carrier_frequency_mhz = 1;
+  // Millimeters, in the phone's frame.
+  double phase_center_offset_x_mm = 2;
+  double phase_center_offset_x_uncertainty_mm = 3;
+  double phase_center_offset_y_mm = 4;
+  double phase_center_offset_y_uncertainty_mm = 5;
+  double phase_center_offset_z_mm = 6;
+  double phase_center_offset_z_uncertainty_mm = 7;
+  optional SphericalCorrections phase_center_variation_corrections = 8;
+  optional SphericalCorrections signal_gain_corrections = 9;
+}
+
+// `GnssAntennaInfo.SphericalCorrections`: a grid over zenith (rows) and azimuth (columns), row-major.
+message SphericalCorrections {
+  int32 rows = 1;
+  int32 columns = 2;
+  repeated double corrections = 3;
+  repeated double uncertainties = 4;
+  double delta_theta_degrees = 5;
+  double delta_phi_degrees = 6;
+}
+
+// `PowerManager.getCurrentThermalStatus` and `getThermalHeadroom`: IMU bias drifts with temperature,
+// and Android exposes no IMU temperature, so this and the battery temperature stand in for it.
+message ThermalStatus {
+  int32 status = 1;
+  // `getThermalHeadroom(0)`: 1.0 is throttling; unset when Android returns NaN (e.g. called too often).
+  optional float headroom = 2;
+}
+
+// Bluetooth LE advertisements, batched by the controller.
+message BleScanResults {
+  repeated BleScanResult results = 1;
+}
+
+// `android.bluetooth.le.ScanResult`.
+message BleScanResult {
+  string address = 1;
+  int32 rssi = 2;
+  int64 timestamp_elapsed_realtime_ns = 3;
+  // The whole advertisement, as received, so any beacon format can be decoded later.
+  bytes advertising_data = 4;
+  optional int32 tx_power = 5;
+  int32 primary_phy = 6;
+  int32 secondary_phy = 7;
+  int32 advertising_sid = 8;
+  int32 periodic_advertising_interval = 9;
+  bool connectable = 10;
+  int32 data_status = 11;
 }
