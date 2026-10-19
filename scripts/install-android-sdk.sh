@@ -3,7 +3,7 @@
 set -euo pipefail
 
 cmdline_tools_build=16111833
-platform=android-36
+platform=android-37
 build_tools=36.0.0
 
 : "${ANDROID_HOME:?set ANDROID_HOME (see mise.toml)}"

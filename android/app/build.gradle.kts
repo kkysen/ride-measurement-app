@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "dev.kkysen.ride"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "dev.kkysen.ride"
