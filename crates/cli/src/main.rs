@@ -32,6 +32,12 @@ fn summary(session: &Session) -> anyhow::Result<()> {
         "session {} (format v{})",
         info.session_id, info.format_version
     );
+    if !info.continues_session_id.is_empty() {
+        println!(
+            "continues session {} (Android killed recording and it restarted)",
+            info.continues_session_id
+        );
+    }
     if let Some(d) = &info.device {
         println!("device {} {} (SDK {})", d.manufacturer, d.model, d.sdk_int);
     }

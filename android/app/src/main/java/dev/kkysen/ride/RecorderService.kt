@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.hardware.Sensor
@@ -30,7 +31,17 @@ class RecorderService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (recorders.isNotEmpty()) return START_NOT_STICKY
+        if (recorders.isNotEmpty()) return START_STICKY
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        // A null intent means Android killed the service and restarted it (`START_STICKY`).
+        val restarted = intent == null
+        if (restarted && !prefs.getBoolean(WANTED, false)) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        prefs.edit().putBoolean(WANTED, true).commit()
+        // The killed session's files can't be safely appended to, so a restart starts a new session that links back.
+        val continues = if (restarted) prefs.getString(LAST_SESSION, null).orEmpty() else ""
         startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ride:recording")
@@ -38,8 +49,11 @@ class RecorderService : Service() {
 
         val startUnixMs = System.currentTimeMillis()
         val startElapsedNs = SystemClock.elapsedRealtimeNanos()
-        val id = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date(startUnixMs))
+        val base = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date(startUnixMs))
+        val id = generateSequence(1) { it + 1 }.map { if (it == 1) base else "$base-$it" }
+            .first { !File(sessionsDir(), it).exists() }
         val dir = File(sessionsDir(), id).apply { mkdirs() }
+        prefs.edit().putString(LAST_SESSION, id).commit()
 
         val sensorManager = getSystemService(SensorManager::class.java)
         recorders = listOfNotNull(
@@ -54,6 +68,7 @@ class RecorderService : Service() {
                 .setSessionId(id)
                 .setStartUnixMs(startUnixMs)
                 .setStartElapsedRealtimeNs(startElapsedNs)
+                .setContinuesSessionId(continues)
                 .setDevice(
                     Device.newBuilder()
                         .setManufacturer(Build.MANUFACTURER)
@@ -66,7 +81,7 @@ class RecorderService : Service() {
         )
         recorders.forEach { it.start() }
         _state.value = State(recording = true, sessionId = id)
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -95,6 +110,20 @@ class RecorderService : Service() {
     companion object {
         private const val CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 1
+        private const val PREFS = "recorder"
+
+        /** Whether the user wants to be recording; only Stop clears it, so a kill by Android restarts recording. */
+        private const val WANTED = "wanted"
+        private const val LAST_SESSION = "last_session"
+
+        fun start(context: Context) {
+            context.startForegroundService(Intent(context, RecorderService::class.java))
+        }
+
+        fun stop(context: Context) {
+            context.getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(WANTED, false).commit()
+            context.stopService(Intent(context, RecorderService::class.java))
+        }
         private val _state = MutableStateFlow(State(recording = false, sessionId = null))
         val state: StateFlow<State> = _state
 

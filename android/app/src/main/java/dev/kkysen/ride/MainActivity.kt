@@ -70,8 +70,7 @@ class MainActivity : ComponentActivity() {
 
             Text(if (state.recording) "Recording ${state.sessionId}" else "Not recording")
             Button(onClick = {
-                val intent = Intent(this@MainActivity, RecorderService::class.java)
-                if (state.recording) stopService(intent) else startForegroundService(intent)
+                if (state.recording) RecorderService.stop(this@MainActivity) else RecorderService.start(this@MainActivity)
             }) { Text(if (state.recording) "Stop" else "Start") }
 
             Text(if (auth.configured) oneDriveStatus else "OneDrive: no client ID in this build")

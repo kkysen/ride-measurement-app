@@ -24,6 +24,8 @@ message SessionInfo {
   int64 start_elapsed_realtime_ns = 4;
   Device device = 5;
   repeated StreamInfo streams = 6;
+  // Set when Android killed the recording and it restarted itself: the session this one continues.
+  string continues_session_id = 7;
 }
 
 message Device {
