@@ -19,6 +19,11 @@ pub const CONSTELLATION_GPS: i32 = 1;
 const STATE_CODE_LOCK: i32 = 0x1;
 const STATE_TOW_DECODED: i32 = 0x8;
 const STATE_TOW_KNOWN: i32 = 0x4000;
+/// `GnssMeasurement.STATE_MSEC_AMBIGUOUS`: the transmit time may be off by whole milliseconds (300 km each).
+const STATE_MSEC_AMBIGUOUS: i32 = 0x10;
+/// Pseudorange residuals beyond this (m) reject the worst satellite from the position solution: uncorrected
+/// ionosphere and troposphere are tens of meters at most, so more is multipath or a bad measurement.
+const POSITION_OUTLIER_M: f64 = 60.0;
 const NANOS_PER_WEEK: i64 = 604_800_000_000_000;
 /// Doppler measurements are trusted no more than this (m/s), whatever Android says.
 const MIN_PRR_SIGMA: f64 = 0.05;
@@ -44,6 +49,8 @@ pub struct Solution {
     pub satellites_rejected: usize,
     /// Root mean square of the Doppler residuals (m/s).
     pub residual_rms: f64,
+    /// Root mean square of the pseudorange residuals of the position solution (m).
+    pub position_residual_rms: f64,
 }
 
 impl Solution {
@@ -166,9 +173,11 @@ impl Navigator {
         if sats.len() < 5 {
             return Err(NoSolution::TooFewSatellites { usable: sats.len() });
         }
-        let position = solve_position(&sats, self.last_position).ok_or(NoSolution::Singular)?;
+        let (position, position_residual_rms) =
+            solve_position(&sats, self.last_position).ok_or(NoSolution::Singular)?;
         self.last_position = Some(position);
         let mut sol = solve_velocity(&sats, position).ok_or(NoSolution::Singular)?;
+        sol.position_residual_rms = position_residual_rms;
         sol.elapsed_realtime_ns = clock.elapsed_realtime_nanos;
         self.stats.epochs_solved += 1;
         Ok(sol)
@@ -189,6 +198,7 @@ impl Navigator {
             if m.constellation_type != CONSTELLATION_GPS
                 || m.state & STATE_CODE_LOCK == 0
                 || !tow_known
+                || m.state & STATE_MSEC_AMBIGUOUS != 0
                 || m.cn0_dbhz < MIN_CN0_DBHZ
                 || !m.pseudorange_rate_meters_per_second.is_finite()
             {
@@ -271,15 +281,34 @@ fn rotated(state: &SatState, receiver: [f64; 3]) -> ([f64; 3], [f64; 3]) {
     (rot(state.position), rot(state.velocity))
 }
 
-/// Least-squares position (and clock bias) from pseudoranges, by Gauss-Newton from `start` or the earth's center.
-fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<[f64; 3]> {
+/// Least-squares position (and clock bias) from pseudoranges, by Gauss-Newton from `start` or the earth's center,
+/// dropping the worst satellite while its residual is beyond [`POSITION_OUTLIER_M`] and a redundant one remains.
+/// Returns the position and the residual RMS (m).
+fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<([f64; 3], f64)> {
+    let mut used: Vec<&Sat> = sats.iter().collect();
+    loop {
+        let (x, residuals) = gauss_newton_position(&used, start)?;
+        let (worst, worst_value) = residuals
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (i, r.abs()))
+            .max_by(|a, b| a.1.total_cmp(&b.1))?;
+        if worst_value > POSITION_OUTLIER_M && used.len() > 5 {
+            used.remove(worst);
+            continue;
+        }
+        let rms = (residuals.iter().map(|r| r * r).sum::<f64>() / residuals.len() as f64).sqrt();
+        return Some((x, rms));
+    }
+}
+
+fn gauss_newton_position(sats: &[&Sat], start: Option<[f64; 3]>) -> Option<([f64; 3], Vec<f64>)> {
     let mut x = [0.0; 4];
     if let Some(p) = start {
         x[..3].copy_from_slice(&p);
     }
-    for _ in 0..10 {
-        let rows: Vec<([f64; 4], f64, f64)> = sats
-            .iter()
+    let rows_at = |x: &[f64; 4]| -> Vec<([f64; 4], f64, f64)> {
+        sats.iter()
             .map(|s| {
                 let rx = [x[0], x[1], x[2]];
                 let (sp, _) = rotated(&s.state, rx);
@@ -288,8 +317,10 @@ fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<[f64; 3]> {
                 let u = d.map(|v| v / r);
                 ([-u[0], -u[1], -u[2], 1.0], s.pseudorange - (r + x[3]), 1.0)
             })
-            .collect();
-        let (dx, _) = weighted_least_squares(&rows)?;
+            .collect()
+    };
+    for _ in 0..10 {
+        let (dx, _) = weighted_least_squares(&rows_at(&x))?;
         for (xi, d) in x.iter_mut().zip(dx) {
             *xi += d;
         }
@@ -297,7 +328,8 @@ fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<[f64; 3]> {
             break;
         }
     }
-    Some([x[0], x[1], x[2]])
+    let residuals = rows_at(&x).iter().map(|(_, b, _)| *b).collect();
+    Some(([x[0], x[1], x[2]], residuals))
 }
 
 /// Weighted least-squares velocity and clock drift from Doppler, dropping the worst satellite while its residual
@@ -348,6 +380,7 @@ fn solve_velocity(sats: &[Sat], position: [f64; 3]) -> Option<Solution> {
             clock_drift: x[3],
             satellites_used: used.len(),
             satellites_rejected: rows.len() - used.len(),
+            position_residual_rms: 0.0,
             residual_rms: (residuals.iter().map(|r| r * r).sum::<f64>() / residuals.len() as f64)
                 .sqrt(),
         });

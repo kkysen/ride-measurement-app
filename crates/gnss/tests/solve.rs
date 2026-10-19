@@ -162,3 +162,34 @@ fn rejects_a_bad_satellite() {
         norm(sub(sol.velocity, v))
     );
 }
+
+#[test]
+fn survives_a_millisecond_pseudorange_error() {
+    let (mut nav, ephs, rx, v, up) = setup();
+    let mut event = measurements(&ephs, rx, v, 50.0, up);
+    // A transmit time off by a whole millisecond (300 km), as an ambiguous measurement can be.
+    event.measurements[0].received_sv_time_nanos += 1_000_000;
+    let sol = nav.on_measurements(&event).unwrap();
+    assert!(
+        norm(sub(sol.position, rx)) < 1.0,
+        "position off by {} m",
+        norm(sub(sol.position, rx))
+    );
+    assert!(
+        norm(sub(sol.velocity, v)) < 0.01,
+        "velocity off by {} m/s",
+        norm(sub(sol.velocity, v))
+    );
+    assert!(
+        sol.position_residual_rms < 1.0,
+        "residual {}",
+        sol.position_residual_rms
+    );
+
+    // Flagged as ambiguous, it isn't used at all.
+    let mut event = measurements(&ephs, rx, v, 50.0, up);
+    let n = event.measurements.len();
+    event.measurements[0].state |= 0x10;
+    let sol = nav.on_measurements(&event).unwrap();
+    assert_eq!(sol.satellites_used + sol.satellites_rejected, n - 1);
+}
