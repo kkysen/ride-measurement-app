@@ -2,6 +2,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use prost::Message;
 
 use crate::{SESSION_INFO_FILE, STREAM_EXTENSION, SensorChunk, SessionInfo};
@@ -18,10 +19,20 @@ pub fn write_session_info(dir: &Path, info: &SessionInfo) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Frames that couldn't be written are kept and retried, up to this much; past it, new chunks are refused
+/// (with an error) rather than letting memory run out and losing every stream.
+pub const MAX_PENDING_BYTES: usize = 256 << 20;
+
 /// Appends chunks to `<dir>/<name>.zst`, one independent zstd frame per chunk, synced after each.
+///
+/// A frame that fails to write (e.g. the disk is momentarily full) is kept and retried, in order,
+/// on the next append, so a transient error loses nothing.
+/// If a failed write left part of a frame in the file, readers skip it and resync at the retried frame.
 pub struct StreamWriter {
     path: PathBuf,
     file: File,
+    pending: std::collections::VecDeque<Vec<u8>>,
+    pending_bytes: usize,
 }
 
 impl StreamWriter {
@@ -31,7 +42,12 @@ impl StreamWriter {
             .create_new(true)
             .append(true)
             .open(&path)?;
-        Ok(Self { path, file })
+        Ok(Self {
+            path,
+            file,
+            pending: Default::default(),
+            pending_bytes: 0,
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -53,8 +69,35 @@ impl StreamWriter {
         encoder.include_checksum(true)?;
         encoder.write_all(&delimited)?;
         let frame = encoder.finish()?;
-        self.file.write_all(&frame)?;
-        self.file.sync_data()?;
+        if self.pending_bytes + frame.len() > MAX_PENDING_BYTES {
+            self.write_pending()?;
+            anyhow::bail!(
+                "{}: {} bytes still unwritten; dropping a {}-byte chunk",
+                self.path.display(),
+                self.pending_bytes,
+                frame.len()
+            );
+        }
+        self.pending_bytes += frame.len();
+        self.pending.push_back(frame);
+        self.write_pending()
+    }
+
+    /// Chunks waiting to be written after a failed write.
+    pub fn pending_chunks(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Writes and syncs pending frames in order, stopping at the first failure (which keeps it pending).
+    pub fn write_pending(&mut self) -> anyhow::Result<()> {
+        while let Some(frame) = self.pending.front() {
+            self.file
+                .write_all(frame)
+                .and_then(|()| self.file.sync_data())
+                .with_context(|| format!("writing {}", self.path.display()))?;
+            self.pending_bytes -= frame.len();
+            self.pending.pop_front();
+        }
         Ok(())
     }
 }
@@ -125,5 +168,39 @@ impl ChunkBuilder {
             accuracy: std::mem::take(&mut self.accuracy),
             written_elapsed_realtime_ns,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::read::read_stream_file;
+
+    #[test]
+    fn failed_writes_are_kept_and_retried_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = StreamWriter::create(dir.path(), "s").unwrap();
+        let chunk = |i: i64| SensorChunk::from_samples(&[i], 1, &[i as f32], &[0], i);
+        w.append(&chunk(1)).unwrap();
+        // The disk "fills up": writes fail, and the chunks wait.
+        let real = std::mem::replace(
+            &mut w.file,
+            OpenOptions::new().write(true).open("/dev/full").unwrap(),
+        );
+        assert!(w.append(&chunk(2)).is_err());
+        assert!(w.append(&chunk(3)).is_err());
+        assert_eq!(w.pending_chunks(), 2);
+        // Space again: the next append writes everything, in order.
+        w.file = real;
+        w.append(&chunk(4)).unwrap();
+        assert_eq!(w.pending_chunks(), 0);
+        let contents = read_stream_file::<SensorChunk>(w.path()).unwrap();
+        assert!(contents.is_clean());
+        let written: Vec<i64> = contents
+            .chunks
+            .iter()
+            .map(|c| c.written_elapsed_realtime_ns)
+            .collect();
+        assert_eq!(written, [1, 2, 3, 4]);
     }
 }

@@ -285,9 +285,15 @@ impl StreamWriter {
         self.with(|w| w.append(&chunk))
     }
 
-    /// Closes the file; later appends fail. (`close()` in Kotlin frees this object.)
-    pub fn finish(&self) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+    /// Writes any chunks left pending by earlier failures, then closes the file; later appends fail.
+    /// The file is closed even if the pending chunks still can't be written (that's the error).
+    /// (`close()` in Kotlin frees this object.)
+    pub fn finish(&self) -> Result<(), RideError> {
+        let w = self.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+        match w {
+            Some(mut w) => Ok(w.write_pending()?),
+            None => Ok(()),
+        }
     }
 }
 
