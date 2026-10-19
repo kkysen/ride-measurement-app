@@ -131,8 +131,12 @@ Shows speed, along-track distance, current/next station. Results logged, but ove
    it is damped when the phone is in a pocket or hand. Audio catches the higher-frequency clack and is less sensitive to how the phone is held,
    but also hears everything else. Expect accel to be enough on jointed track; add audio if the jolts get lost in damping.
    Caveat: continuously welded rail has no joints, but switches/expansion joints still give occasional landmarks.
-6. **Mode classification** (later): IMU vibration spectra, then audio.
-7. **Video** (later): visual odometry as a velocity factor; TrackSight-style localization only for routes repeated often.
+6. **Door events**: only checked while stopped.
+   Barometer: a small pressure step or transient when the car's HVAC-pressurized air meets the platform.
+   Audio (if recorded): door chime, door motors, and the HVAC sound changing as outside air and noise come in.
+   Also a small car sway in the IMU as passengers board. Gives dwell start/end and confirms a real station stop vs a signal hold.
+7. **Mode classification** (later): IMU vibration spectra, then audio.
+8. **Video** (later): visual odometry as a velocity factor; TrackSight-style localization only for routes repeated often.
 
 ## Verification
 - Logger: per-stream rate/gap report; 1 h screen-off ride without dropouts.
