@@ -271,3 +271,32 @@ mod damage {
         assert!(read.is_clean() && read.chunks.is_empty());
     }
 }
+
+#[test]
+fn chunk_builder_keeps_exact_bits_and_matches_from_samples() {
+    use ride_session::write::ChunkBuilder;
+    let tricky = tricky_values();
+    let mut b = ChunkBuilder::default();
+    let timestamps: Vec<i64> = (0..4)
+        .map(|i| 1_000_000_000 + i * 2_500_000 + i % 3)
+        .collect();
+    let mut values = Vec::new();
+    for (i, &t) in timestamps.iter().enumerate() {
+        let v: Vec<f32> = (0..3).map(|k| tricky[(i * 3 + k) % tricky.len()]).collect();
+        b.add(
+            t,
+            &v.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+            i as i32,
+        )
+        .unwrap();
+        values.extend(v);
+    }
+    assert!(!b.fits(4));
+    assert!(b.add(0, &[0; 4], 0).is_err());
+    let built = b.build(7);
+    assert!(b.is_empty() && b.fits(4));
+    assert_eq!(
+        built,
+        SensorChunk::from_samples(&timestamps, 3, &values, &[0, 1, 2, 3], 7)
+    );
+}
