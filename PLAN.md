@@ -77,6 +77,14 @@ Rule: store only what cannot be recomputed later; everything derived is regenera
 - Rough size: ~80-100 MB/h before encoding, est. ~20-40 MB/h after; about 1 GB/month at 1 h/day.
   Sessions are copied off the phone (`adb pull` or sync) and deleted after verification.
 
+## Battery
+- Main costs: GNSS with duty cycling disabled, and the CPU waking for every 400 Hz sample.
+- Use sensor batching (`maxReportLatencyUs` of a few seconds) so the hardware FIFO buffers samples and the CPU sleeps between batches;
+  this is likely the biggest single saving. Write to disk in chunks, never per sample.
+- WiFi scans are throttled by Android (4 per 2 min in the foreground); scan only near stations or when GNSS is lost.
+- Screen off during recording; live display is opt-in.
+- Expect single-digit percent per hour; measure with `dumpsys batterystats` on real rides and record battery in the session.
+
 ## Phase 2: Live analysis (light)
 Forward-only error-state EKF on the phone: IMU prediction, Doppler velocity and GPS position updates, ZUPTs.
 Shows speed, along-track distance, current/next station. Results logged, but overwritten by offline processing.
