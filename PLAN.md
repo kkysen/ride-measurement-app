@@ -27,8 +27,10 @@ and must not trust network (cell/WiFi) location, which can report the wrong unde
 - The logger stays in Kotlin: it is mostly Android API calls and file appends,
   and crossing into Rust per sensor sample would cost more than it saves.
 - The session format is defined by a `.proto` schema, not a Rust library, so every language reads it natively.
-- Prototype fusion in Python; create the Rust crate in Phase 2 when the live EKF moves to the phone,
-  then port proven algorithms into it.
+- Rust from the start for everything that must be correct and identical everywhere:
+  the session reader, format validation, lossless round-trip tests, and the summary/report CLI, exposed to Python via `pyo3`.
+- Python (on top of the Rust reader) for exploration, plots, and first drafts of fusion algorithms, where fast iteration matters.
+  Proven algorithms are ported to Rust so phone and offline share them; slow long-running ones (smoothing hours of IMU) move early.
 
 ## Phase 1: Logger app (main focus)
 Built incrementally: a barebones end-to-end pipeline first, then filled in one stream/feature at a time,
@@ -37,7 +39,8 @@ each milestone installable and usable on a real ride.
    - App: Kotlin + Jetpack Compose, start/stop button, foreground service + wake lock, one stream (accelerometer).
    - Format: minimal `.proto` schema and chunked `zstd` writer, one session directory per recording.
    - Transfer: upload finished sessions to OneDrive (see Storage), no cable.
-   - Offline: Python package that reads sessions (the offline side of the format), plus a CLI that prints a per-stream rate/gap summary and plots a stream.
+   - Offline: Rust crate that reads sessions, with a CLI printing a per-stream rate/gap summary;
+     thin Python package using it via `pyo3` to plot a stream.
    - Tests: round-trip test that writer output decodes bit-exactly; build + tests runnable from one script.
 2. Uncalibrated gyro and accel, batched, with gap detection.
 3. GNSS: raw measurements, clock, nav messages, status, location fixes.
@@ -137,7 +140,7 @@ Rule: store only what cannot be recomputed later; everything derived is regenera
 Forward-only error-state EKF on the phone: IMU prediction, Doppler velocity and GPS position updates, ZUPTs.
 Shows speed, along-track distance, current/next station. Results logged, but overwritten by offline processing.
 
-## Phase 3: Offline fusion (Python: `numpy`, `scipy`, possibly `gtsam`)
+## Phase 3: Offline fusion (prototype in Python on the Rust reader, proven parts in Rust)
 1. **GNSS**: own WLS from raw measurements, or RTKLIB with a nearby CORS base station (free RINEX) for sub-meter;
    Doppler velocity; time-differenced ADR where available.
 2. **Smoother**: error-state EKF + RTS backward pass, or factor graph. The backward pass is what solves tunnel starts:
