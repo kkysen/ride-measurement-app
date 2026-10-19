@@ -1,0 +1,7 @@
+[tools]
+java = "temurin-21"
+gradle = "9.8.1"
+
+[env]
+ANDROID_HOME = "{{env.HOME}}/Android/Sdk"
+_.path = ["{{env.HOME}}/Android/Sdk/platform-tools"]

@@ -1,0 +1,8 @@
+/target/
+/data/
+.gradle/
+build/
+local.properties
+.kotlin/
+__pycache__/
+.venv/
