@@ -4,7 +4,8 @@
 // - `session.pb`: one length-delimited `SessionInfo`.
 // - `<stream>.zst` for each stream in `SessionInfo.streams`:
 //   a concatenation of independent zstd frames, each holding exactly one length-delimited chunk:
-//   a `SensorChunk` for `STREAM_KIND_SENSOR` streams, a `RecordChunk` for `STREAM_KIND_RECORDS` streams.
+//   a `SensorChunk` for `STREAM_KIND_SENSOR` streams, a `RecordChunk` for `STREAM_KIND_RECORDS` streams,
+//   an `AudioChunk` for `STREAM_KIND_AUDIO` streams.
 //   Frames are self-contained, so a crash loses at most the frame being written.
 //
 // Length-delimited means a varint byte length followed by the message, as in `writeDelimitedTo`.
@@ -39,6 +40,7 @@ message Device {
 enum StreamKind {
   STREAM_KIND_SENSOR = 0;
   STREAM_KIND_RECORDS = 1;
+  STREAM_KIND_AUDIO = 2;
 }
 
 message StreamInfo {
@@ -47,6 +49,16 @@ message StreamInfo {
   // Set for sensor streams.
   SensorInfo sensor = 2;
   StreamKind kind = 3;
+  // Set for audio streams.
+  AudioInfo audio = 4;
+}
+
+message AudioInfo {
+  int32 sample_rate_hz = 1;
+  int32 channels = 2;
+  // `MediaRecorder.AudioSource` constant; `UNPROCESSED` when supported, so no gain control or noise suppression.
+  int32 audio_source = 3;
+  string audio_source_name = 4;
 }
 
 // Everything `android.hardware.Sensor` reports, recorded as-is.
@@ -296,4 +308,19 @@ message BatteryStatus {
   int32 voltage_mv = 6;
   optional int32 current_now_ua = 7;
   optional int32 charge_counter_uah = 8;
+}
+
+// Lossless 16-bit little-endian PCM, interleaved if multi-channel.
+message AudioChunk {
+  // Index of the first frame (sample per channel) in this chunk since the stream started.
+  int64 first_frame = 1;
+  bytes pcm_s16le = 2;
+  // `AudioRecord.getTimestamp` with `TIMEBASE_BOOTTIME`, to place frames on the elapsed realtime clock.
+  repeated AudioTimestamp timestamps = 3;
+  int64 written_elapsed_realtime_ns = 4;
+}
+
+message AudioTimestamp {
+  int64 frame_position = 1;
+  int64 boottime_ns = 2;
 }
