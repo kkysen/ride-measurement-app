@@ -378,6 +378,9 @@ message ThermalStatus {
 // Bluetooth LE advertisements, batched by the controller.
 message BleScanResults {
   repeated BleScanResult results = 1;
+  // From the scan with filters for known beacon formats, which Android keeps running with the screen off;
+  // otherwise from the unfiltered scan, which Android pauses while the screen is off.
+  bool filtered = 2;
 }
 
 // `android.bluetooth.le.ScanResult`.

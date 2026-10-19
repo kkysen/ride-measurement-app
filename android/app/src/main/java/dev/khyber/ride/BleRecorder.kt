@@ -9,6 +9,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.ParcelUuid
 import android.util.Log
 import com.google.protobuf.ByteString
 import dev.khyber.ride.proto.BleScanResult
@@ -23,15 +24,21 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
     private val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
     private var scanning = false
 
-    private val callback = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult) = record(listOf(result))
+    private inner class Callback(val filtered: Boolean) : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) = record(listOf(result), filtered)
 
-        override fun onBatchScanResults(results: MutableList<ScanResult>) = record(results)
+        override fun onBatchScanResults(results: MutableList<ScanResult>) = record(results, filtered)
 
         override fun onScanFailed(errorCode: Int) {
-            Log.w(TAG, "BLE scan failed: $errorCode")
+            Log.w(TAG, "BLE scan (filtered: $filtered) failed: $errorCode")
         }
     }
+
+    // Android pauses scans without a real filter while the screen is off (a filter with no fields doesn't count),
+    // so one scan matches known beacon formats and keeps going, and another catches everything while the screen is on,
+    // which shows the format of beacons to add here.
+    private val filteredCallback = Callback(filtered = true)
+    private val unfilteredCallback = Callback(filtered = false)
 
     @SuppressLint("MissingPermission")
     fun start() {
@@ -50,8 +57,8 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
             // Batch in the controller where it can, to save power; results keep their own timestamps.
             .apply { if (adapter.isOffloadedScanBatchingSupported) setReportDelay(REPORT_DELAY_MS) }
             .build()
-        // Android pauses scans without a filter while the screen is off; an empty filter still matches everything.
-        scanner.startScan(listOf(ScanFilter.Builder().build()), settings, callback)
+        scanner.startScan(BEACON_FILTERS, settings, filteredCallback)
+        scanner.startScan(null, settings, unfilteredCallback)
         scanning = true
     }
 
@@ -60,8 +67,10 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
         if (!scanning) return
         try {
             adapter?.bluetoothLeScanner?.run {
-                flushPendingScanResults(callback)
-                stopScan(callback)
+                for (c in listOf(filteredCallback, unfilteredCallback)) {
+                    flushPendingScanResults(c)
+                    stopScan(c)
+                }
             }
         } catch (e: IllegalStateException) {
             // Bluetooth was turned off meanwhile; the scan is already gone.
@@ -70,9 +79,9 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
     }
 
     @SuppressLint("MissingPermission")
-    private fun record(results: List<ScanResult>) {
+    private fun record(results: List<ScanResult>, filtered: Boolean) {
         if (results.isEmpty()) return
-        val batch = BleScanResults.newBuilder()
+        val batch = BleScanResults.newBuilder().setFiltered(filtered)
         for (r in results) {
             val b = BleScanResult.newBuilder()
                 .setAddress(r.device.address)
@@ -94,5 +103,16 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
     companion object {
         private const val TAG = "BleRecorder"
         private const val REPORT_DELAY_MS = 2_000L
+
+        /** Apple's company ID: iBeacon, and AltBeacon-style beacons that reuse it. */
+        private const val APPLE_COMPANY_ID = 0x004C
+
+        /** Eddystone's 16-bit service UUID. */
+        private val EDDYSTONE = ParcelUuid.fromString("0000FEAA-0000-1000-8000-00805F9B34FB")
+
+        private val BEACON_FILTERS = listOf(
+            ScanFilter.Builder().setManufacturerData(APPLE_COMPANY_ID, byteArrayOf()).build(),
+            ScanFilter.Builder().setServiceData(EDDYSTONE, byteArrayOf()).build(),
+        )
     }
 }
