@@ -231,3 +231,118 @@ pub fn recompress_session(dir: String) -> Result<Vec<StreamRecompression>, RideE
             .collect(),
     )
 }
+
+/// Writes `session.pb` in `dir` from an encoded `SessionInfo` (`ride_session::write::write_session_info`).
+#[uniffi::export]
+pub fn write_session_info(dir: String, encoded_info: Vec<u8>) -> Result<(), RideError> {
+    use prost::Message;
+    let info =
+        ride_session::SessionInfo::decode(encoded_info.as_slice()).map_err(anyhow::Error::from)?;
+    Ok(ride_session::write::write_session_info(
+        std::path::Path::new(&dir),
+        &info,
+    )?)
+}
+
+/// A stream file being recorded (`ride_session::write::StreamWriter`): one checksummed zstd frame per chunk,
+/// synced after each.
+#[derive(uniffi::Object)]
+pub struct StreamWriter(Mutex<Option<ride_session::write::StreamWriter>>);
+
+#[uniffi::export]
+impl StreamWriter {
+    /// Creates `<dir>/<name>.zst`; fails if it exists, so nothing is ever overwritten.
+    #[uniffi::constructor]
+    pub fn create(dir: String, name: String) -> Result<Arc<Self>, RideError> {
+        let w = ride_session::write::StreamWriter::create(std::path::Path::new(&dir), &name)?;
+        Ok(Arc::new(Self(Mutex::new(Some(w)))))
+    }
+
+    /// The file's path.
+    pub fn path(&self) -> String {
+        self.with(|w| Ok(w.path().display().to_string()))
+            .unwrap_or_default()
+    }
+
+    /// Appends a chunk encoded as a protobuf message (records, audio).
+    pub fn append_encoded(&self, chunk: Vec<u8>) -> Result<(), RideError> {
+        self.with(|w| w.append_encoded(&chunk))
+    }
+
+    /// Builds the sensor chunk accumulated in `builder` and appends it, if it has any samples.
+    pub fn append_sensor_chunk(
+        &self,
+        builder: Arc<SensorChunkBuilder>,
+        written_elapsed_realtime_ns: i64,
+    ) -> Result<(), RideError> {
+        let chunk = {
+            let mut b = builder.lock();
+            if b.is_empty() {
+                return Ok(());
+            }
+            b.build(written_elapsed_realtime_ns)
+        };
+        self.with(|w| w.append(&chunk))
+    }
+
+    /// Closes the file; later appends fail. (`close()` in Kotlin frees this object.)
+    pub fn finish(&self) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+    }
+}
+
+impl StreamWriter {
+    fn with<T>(
+        &self,
+        f: impl FnOnce(&mut ride_session::write::StreamWriter) -> anyhow::Result<T>,
+    ) -> Result<T, RideError> {
+        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let w = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("stream writer is closed"))?;
+        Ok(f(w)?)
+    }
+}
+
+/// Sensor samples for the next chunk (`ride_session::write::ChunkBuilder`).
+#[derive(uniffi::Object)]
+pub struct SensorChunkBuilder(Mutex<ride_session::write::ChunkBuilder>);
+
+#[uniffi::export]
+impl SensorChunkBuilder {
+    #[uniffi::constructor]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self(Mutex::new(Default::default())))
+    }
+
+    pub fn sample_count(&self) -> u32 {
+        self.lock().len() as u32
+    }
+
+    /// Whether a sample with `value_count` values can go in this chunk.
+    pub fn fits(&self, value_count: u32) -> bool {
+        self.lock().fits(value_count as usize)
+    }
+
+    /// `value_bits` are each value's IEEE 754 bits (`Float.floatToRawIntBits`), so they arrive unaltered.
+    pub fn add(
+        &self,
+        timestamp_ns: i64,
+        value_bits: Vec<u32>,
+        accuracy: i32,
+    ) -> Result<(), RideError> {
+        Ok(self.lock().add(timestamp_ns, &value_bits, accuracy)?)
+    }
+}
+
+impl SensorChunkBuilder {
+    fn lock(&self) -> std::sync::MutexGuard<'_, ride_session::write::ChunkBuilder> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// The session format version this build writes.
+#[uniffi::export]
+pub fn format_version() -> u32 {
+    ride_session::FORMAT_VERSION
+}
