@@ -51,6 +51,7 @@ class RadioRecorder(
 
     @Volatile
     private var scanRequested = false
+    private var telephonyRegistered = false
 
     private val telephonyCallback = object :
         TelephonyCallback(),
@@ -107,6 +108,7 @@ class RadioRecorder(
     fun start() {
         try {
             telephony.registerTelephonyCallback(Executor { handler.post(it) }, telephonyCallback)
+            telephonyRegistered = true
         } catch (e: SecurityException) {
             android.util.Log.w("RadioRecorder", "no phone state permission; not recording service state", e)
         }
@@ -117,7 +119,7 @@ class RadioRecorder(
 
     fun stop() {
         handler.removeCallbacks(poll)
-        telephony.unregisterTelephonyCallback(telephonyCallback)
+        if (telephonyRegistered) telephony.unregisterTelephonyCallback(telephonyCallback)
         context.unregisterReceiver(wifiReceiver)
         context.unregisterReceiver(batteryReceiver)
     }
