@@ -105,13 +105,16 @@ class MainActivity : ComponentActivity() {
         )
         setContent {
             MaterialTheme {
-                Surface(Modifier.fillMaxSize()) { Screen() }
+                Surface(Modifier.fillMaxSize()) {
+                    var showMap by remember { mutableStateOf(false) }
+                    if (showMap) LiveMapScreen(onBack = { showMap = false }) else Screen(onShowMap = { showMap = true })
+                }
             }
         }
     }
 
     @Composable
-    private fun Screen() {
+    private fun Screen(onShowMap: () -> Unit) {
         // Recording doesn't use the Rust core, so if it fails to load, show why and keep going.
         val rustCoreStatus = remember {
             try {
@@ -173,6 +176,7 @@ class MainActivity : ComponentActivity() {
             Button(onClick = {
                 if (state.recording) RecorderService.stop(this@MainActivity) else RecorderService.start(this@MainActivity)
             }) { Text(if (state.recording) "Stop" else "Start") }
+            Button(onClick = onShowMap) { Text("Map") }
 
             if (state.recording) SpeedDisplay()
             if (state.recording) EventButtons()

@@ -10,6 +10,7 @@ work = "2.12.0"
 zstd-jni = "1.5.7-24"
 junit = "4.13.2"
 jna = "5.17.0"
+osmdroid = "6.1.20"
 
 [libraries]
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose-bom" }
@@ -22,6 +23,7 @@ protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.
 protoc = { module = "com.google.protobuf:protoc", version.ref = "protobuf" }
 zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd-jni" }
 junit = { module = "junit:junit", version.ref = "junit" }
+osmdroid = { module = "org.osmdroid:osmdroid-android", version.ref = "osmdroid" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 
 [plugins]

@@ -173,6 +173,7 @@ dependencies {
     implementation(libs.protobuf.javalite)
     implementation("${libs.zstd.jni.get()}@aar")
     implementation("${libs.jna.get()}@aar")
+    implementation(libs.osmdroid)
 
     testImplementation(libs.junit)
     // The JVM build of zstd-jni, for unit tests on the host.
