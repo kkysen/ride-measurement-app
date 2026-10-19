@@ -24,8 +24,12 @@ Details for each step are in `README.md` under "Your steps".
 
 ## Tonight: 1-minute test at home
 
+- [ ] Check the bottom of the main screen says "Rust core 0.1.0". If it shows an error instead, recording still works; send me the error.
 - [ ] Tap Start, walk around for a minute (ideally near a window for GNSS), tap a couple of event buttons, tap Stop.
+- [ ] While recording, tap Map: your path should appear (once GPS has a fix) and the map should follow you.
+  If it shows an error instead, recording still works; send me the error.
 - [ ] Here: `just pull`, then `just summary data/sessions/<session>`.
+- [ ] Here: `just map data/sessions/<session>`, then open `data/sessions/<session>/map.html` in a browser.
       Expect: `accel_uncal`, `gyro_uncal`, `mag_uncal` at a few hundred Hz with 0 gaps, `pressure`, `light`, `proximity`,
       `gnss` and `location` records (if near a window), `radio` records, your events, and `audio` if on.
 - [ ] If audio was on: `just wav data/sessions/<session>` and listen to `audio.wav`.
@@ -48,6 +52,7 @@ Details for each step are in `README.md` under "Your steps".
 ## After the ride
 
 - [ ] Here: `just pull`, `just summary data/sessions/<session>` for each session.
+- [ ] Here: `just map data/sessions/<session>` for each session, and look at `map.html`.
 - [ ] If audio was on: `just wav data/sessions/<session>`, listen for rail joints, door chimes, HVAC.
 - [ ] Share the summaries (or the session directory) with me to start on analysis.
 
