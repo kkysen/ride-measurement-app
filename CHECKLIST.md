@@ -26,6 +26,7 @@ Details for each step are in `README.md` under "Your steps".
 
 - [ ] Check the bottom of the main screen says "Rust core 0.1.0". If it shows an error instead, recording still works; send me the error.
 - [ ] Tap Start, walk around for a minute (ideally near a window for GNSS), tap a couple of event buttons, tap Stop.
+- [ ] While recording, check the live speed shows (it now runs in Rust). If it shows "Live speed failed" instead, recording still works; send me the error.
 - [ ] While recording, tap Map: your path should appear (once GPS has a fix) and the map should follow you.
   If it shows an error instead, recording still works; send me the error.
 - [ ] Here: `just pull`, then `just summary data/sessions/<session>`.
