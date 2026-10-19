@@ -30,6 +30,17 @@ and must not trust network (cell/WiFi) location, which can report the wrong unde
   then port proven algorithms into it.
 
 ## Phase 1: Logger app (main focus)
+Built incrementally: a working scaffold first, then one stream at a time, each milestone installable and usable on a real ride.
+1. Scaffold: Kotlin + Jetpack Compose app, Gradle build, start/stop button, foreground service + wake lock,
+   empty session directory per recording, `adb install` workflow.
+2. Session format: `.proto` schema, chunked writer with on-the-fly `zstd`, and a Python reader to inspect sessions.
+3. Accelerometer + gyro (uncalibrated, batched), with gap detection; first real ride.
+4. GNSS: raw measurements, clock, nav messages, status, location fixes.
+5. Barometer, magnetometer, light, proximity, battery/temperature.
+6. Cell info, service state, WiFi scans (only without GNSS).
+7. Manual event buttons (boarded, at station, alighted).
+8. Post-ride verified recompress, export, per-stream rate/gap report.
+
 Foreground service + wake lock, runs screen-off for hours.
 One clock for everything: `elapsedRealtimeNanos`; also log GNSS clock to map to UTC.
 
