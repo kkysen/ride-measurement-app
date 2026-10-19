@@ -56,6 +56,9 @@ Details for each step are in `README.md` under "Your steps".
       Underground, these are the ground truth everything else is checked against.
 - [ ] Use Add note for anything notable (express skipping stations, stopped in tunnel, crowded, phone in pocket vs hand).
 - [ ] Note where the phone was (hand, pocket, bag): it changes the IMU data a lot.
+- [ ] On a B Division train (lettered lines), keep the screen on for a minute or two once:
+      Piper beacons' format isn't known yet, and only the screen-on Bluetooth scan catches unknown formats.
+      Add a note when you do, so I can find them.
 - [ ] Glance at the live speed now and then and add a note if it's clearly wrong (e.g. "says 80, train stopped").
       It's a rough display-only estimate; underground it runs on the IMU alone and resets at each stop.
 - [ ] After leaving the station: tap Stop.
