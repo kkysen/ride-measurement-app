@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# `clang` for Android ARM64, used as Cargo's linker and the `cc` crate's C compiler for `aarch64-linux-android`.
+#
+# The NDK's own compilers are x86-64 Linux only, so this uses the host's LLVM `clang` and `lld`
+# with the NDK's sysroot and ARM64 compiler runtime from `scripts/install-ndk-sysroot.sh`.
+# Plain `clang` on `$PATH` goes through `ccache` (see the dotfiles); otherwise use the newest installed LLVM.
+set -euo pipefail
+
+api=34
+ndk="${ANDROID_HOME:?set ANDROID_HOME (see mise.toml)}/ndk-sysroot/r30"
+
+clang=clang
+if ! command -v clang >/dev/null; then
+    clang="$(printf '%s\n' /usr/lib/llvm-*/bin/clang | sort -V | tail -n 1)"
+fi
+
+# `clang` finds the compiler runtime under its resource directory, `<resource>/lib/linux/`,
+# so make one with the NDK's ARM64 runtime there and the host clang's own headers.
+# The NDK's clang defaults to `compiler-rt` and `libunwind` for Android; a generic clang defaults to `libgcc`, so set them.
+resource="$ndk/resource-$("$clang" -dumpversion | cut -d. -f1)"
+if [[ ! -d "$resource" ]]; then
+    tmp="$resource.tmp.$$"
+    mkdir -p "$tmp/lib"
+    ln -s "$("$clang" -print-resource-dir)/include" "$tmp/include"
+    ln -s "$ndk/runtime" "$tmp/lib/linux"
+    mv -T "$tmp" "$resource"
+fi
+
+exec "$clang" \
+    --target="aarch64-linux-android$api" \
+    --sysroot="$ndk/sysroot" \
+    -resource-dir="$resource" \
+    -fuse-ld=lld \
+    --rtlib=compiler-rt \
+    --unwindlib=libunwind \
+    "$@"

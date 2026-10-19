@@ -1,0 +1,7 @@
+# Android ARM64, built with the host's LLVM and the NDK's sysroot (see `scripts/android-clang`).
+[target.aarch64-linux-android]
+linker = "scripts/android-clang"
+
+[env]
+CC_aarch64_linux_android = { value = "scripts/android-clang", relative = true }
+AR_aarch64_linux_android = "llvm-ar-24"
