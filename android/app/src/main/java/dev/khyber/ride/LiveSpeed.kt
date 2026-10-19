@@ -6,21 +6,42 @@ import android.location.Location
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import uniffi.ride_ffi.Estimate
+import uniffi.ride_ffi.LiveSpeedEstimator
 
-/** Runs [LiveSpeedEstimator] on its own thread during a recording and publishes the estimate for the UI. */
+/**
+ * Runs the Rust live speed estimator (`crates/fusion/src/live_speed.rs`, the same code offline tools replay)
+ * on its own thread during a recording, and publishes the estimate for the UI.
+ * Recording doesn't depend on it: if the Rust library fails, [error] says why and there's no live speed.
+ */
 object LiveSpeed {
     private var thread: HandlerThread? = null
     private var handler: Handler? = null
     private var estimator: LiveSpeedEstimator? = null
-    private val _estimate = MutableStateFlow<LiveSpeedEstimator.Estimate?>(null)
-    val estimate: StateFlow<LiveSpeedEstimator.Estimate?> = _estimate
+    private val _estimate = MutableStateFlow<Estimate?>(null)
+    val estimate: StateFlow<Estimate?> = _estimate
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error
 
     private val publish = object : Runnable {
         override fun run() {
-            _estimate.value = estimator?.estimate(SystemClock.elapsedRealtimeNanos())
+            safely { _estimate.value = estimator?.estimate(SystemClock.elapsedRealtimeNanos()) }
             handler?.postDelayed(this, PUBLISH_MS)
+        }
+    }
+
+    /** Runs a call into Rust; a failure stops live speed instead of crashing the thread and the app with it. */
+    private inline fun safely(block: () -> Unit) {
+        if (_error.value != null) return
+        try {
+            block()
+        } catch (e: Throwable) {
+            Log.e("RideLogger", "live speed failed", e)
+            _error.value = "Live speed failed (recording still works):\n${Log.getStackTraceString(e)}"
+            _estimate.value = null
         }
     }
 
@@ -30,7 +51,7 @@ object LiveSpeed {
         val t = HandlerThread("live-speed").apply { start() }
         thread = t
         handler = Handler(t.looper)
-        estimator = LiveSpeedEstimator()
+        safely { estimator = LiveSpeedEstimator() }
         handler?.post(publish)
     }
 
@@ -39,6 +60,7 @@ object LiveSpeed {
         thread?.quitSafely()
         thread = null
         handler = null
+        estimator?.let { safely { it.close() } }
         estimator = null
         _estimate.value = null
     }
@@ -56,9 +78,9 @@ object LiveSpeed {
         val t = event.timestamp
         when (event.sensor.type) {
             Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_ACCELEROMETER_UNCALIBRATED ->
-                h.post { estimator?.onAccel(t, x.toDouble(), y.toDouble(), z.toDouble()) }
+                h.post { safely { estimator?.onAccel(t, x.toDouble(), y.toDouble(), z.toDouble()) } }
             Sensor.TYPE_GYROSCOPE, Sensor.TYPE_GYROSCOPE_UNCALIBRATED ->
-                h.post { estimator?.onGyro(x.toDouble(), y.toDouble(), z.toDouble()) }
+                h.post { safely { estimator?.onGyro(x.toDouble(), y.toDouble(), z.toDouble()) } }
         }
     }
 
@@ -71,7 +93,7 @@ object LiveSpeed {
         val accuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else null
         val speed = if (location.hasSpeed()) location.speed.toDouble() else null
         val speedAccuracy = if (location.hasSpeedAccuracy()) location.speedAccuracyMetersPerSecond.toDouble() else null
-        h.post { estimator?.onGnssFix(t, lat, lon, accuracy, speed, speedAccuracy) }
+        h.post { safely { estimator?.onGnssFix(t, lat, lon, accuracy, speed, speedAccuracy) } }
     }
 
     private const val PUBLISH_MS = 500L

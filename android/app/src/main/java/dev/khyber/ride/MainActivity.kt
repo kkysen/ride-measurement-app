@@ -51,6 +51,11 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun SpeedDisplay() {
         val e by LiveSpeed.estimate.collectAsStateWithLifecycle()
+        val error by LiveSpeed.error.collectAsStateWithLifecycle()
+        error?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall)
+            return
+        }
         val estimate = e ?: return
         Column {
             Text(
@@ -61,7 +66,7 @@ class MainActivity : ComponentActivity() {
             Text(if (estimate.stopped) "stopped · $sensors" else sensors)
             Text(estimate.sinceGnssS?.let { if (it < 3) "GNSS: live" else "no GNSS for %.0f s".format(it) } ?: "no GNSS fix yet")
             if (estimate.rejected.isNotEmpty()) {
-                Text("rejected as outliers: " + estimate.rejected.entries.joinToString { "${it.key.name.lowercase()} ${it.value}" })
+                Text("rejected as outliers: " + estimate.rejected.joinToString { "${it.sensor.name.lowercase().replace('_', ' ')} ${it.count}" })
             }
         }
     }
