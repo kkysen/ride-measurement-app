@@ -839,6 +839,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ride-gnss"
+version = "0.1.0"
+dependencies = [
+ "ride-session",
+]
+
+[[package]]
 name = "ride-py"
 version = "0.1.0"
 dependencies = [

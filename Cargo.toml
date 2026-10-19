@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/session", "crates/fusion", "crates/cli", "crates/py", "crates/ffi"]
+members = ["crates/session", "crates/gnss", "crates/fusion", "crates/cli", "crates/py", "crates/ffi"]
 
 [workspace.package]
 edition = "2024"
@@ -14,6 +14,7 @@ prost = "0.14.4"
 prost-build = "0.14.4"
 protox = "0.10.0"
 ride-fusion = { path = "crates/fusion" }
+ride-gnss = { path = "crates/gnss" }
 ride-session = { path = "crates/session" }
 tempfile = "3"
 zstd = "0.14.3"
