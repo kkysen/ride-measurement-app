@@ -36,6 +36,10 @@ Details for each step are in `README.md` under "Your steps".
   If it shows an error instead, recording still works; send me the error.
 - [ ] Here: `just pull`, then `just summary data/sessions/<session>`.
 - [ ] Here: `just map data/sessions/<session>`, then open `data/sessions/<session>/map.html` in a browser.
+- [ ] Here: `just gnss data/sessions/<session>` (best done standing still by a window for a few minutes) and send me the output.
+      It's the first check of the phone solving its own velocity from raw GNSS:
+      expect navigation subframes passing parity, a few orbits, most epochs solved, and a speed near 0 if you stood still.
+      The main screen also shows "raw GNSS: ... epochs solved" while recording.
       Expect: `accel_uncal`, `gyro_uncal`, `mag_uncal` at a few hundred Hz with 0 gaps, `pressure`, `light`, `proximity`,
       `gnss` and `location` records (if near a window), `radio` records, your events, and `audio` if on.
       New: `gnss_capabilities` in `gnss`; `thermal` and `ble_scan` in `radio` (if Bluetooth is on).
