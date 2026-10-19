@@ -202,6 +202,10 @@ class LiveSpeedEstimator {
 
     /** GNSS measures speed magnitude; the filter's speed is signed along the axis, so match the sign. */
     private fun measureSpeedMagnitude(speed: Double, sigma: Double, sensor: Sensor, tNs: Long) {
+        if (speed !in 0.0..MAX_SPEED_MPS || !sigma.isFinite()) {
+            rejected[sensor] = (rejected[sensor] ?: 0) + 1
+            return
+        }
         val signed = if (v < 0 && !axisSignKnown) -speed else speed
         if (!initialized) {
             v = signed
@@ -364,6 +368,11 @@ class LiveSpeedEstimator {
         private const val MIN_DOPPLER_SIGMA_MPS = 0.1
         private const val POSITION_MAX_DT_S = 5.0
         private const val POSITION_MAX_SIGMA_MPS = 3.0
+        /**
+         * Mach 1 at sea level: nothing this records goes faster, so a faster measurement is always wrong,
+         * even as the first one or during a re-initialization, when gating can't catch it.
+         */
+        private const val MAX_SPEED_MPS = 343.0
         private const val GATE_SIGMA = 3.0
         private const val GNSS_REINIT_REJECTS = 5
         private const val RECENT_S = 3.0

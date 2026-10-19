@@ -183,4 +183,15 @@ class LiveSpeedEstimatorTest {
         assertEquals(10.0, e.speedMps, 0.3)
         assertTrue(LiveSpeedEstimator.Sensor.GNSS_POSITION in e.sensors)
     }
+
+    @Test
+    fun impossibleSpeedsAreRejectedEvenFirst() {
+        val est = LiveSpeedEstimator()
+        // A glitched first fix, then a run of them, as could otherwise force a re-initialization.
+        est.onGnssFix(0L, 0.0, 0.0, null, 500.0, 0.3)
+        for (i in 1 until 10) est.onGnssFix(i * 1_000_000_000L, 0.0, 0.0, null, if (i < 3) 10.0 else 900.0, 0.3)
+        val e = est.estimate(9_000_000_000L)
+        assertEquals(8, e.rejected[LiveSpeedEstimator.Sensor.GNSS_DOPPLER])
+        assertEquals(10.0, e.speedMps, 1.0)
+    }
 }
