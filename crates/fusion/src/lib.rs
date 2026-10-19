@@ -2,3 +2,4 @@
 
 pub mod live_speed;
 pub mod replay;
+pub mod speed_colors;

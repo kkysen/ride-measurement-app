@@ -5,6 +5,7 @@ use std::path::Path;
 use anyhow::Context;
 use ride_fusion::live_speed::Estimate;
 use ride_fusion::replay::speed_at_fixes;
+use ride_fusion::speed_colors::{RAMP_ARGB, SpeedScale, UNKNOWN_ARGB, edge_speed};
 use ride_session::proto::record::Payload;
 use ride_session::read::Session;
 use ride_session::track::{TrackPoint, gps_segments};
@@ -13,29 +14,8 @@ use serde_json::{Value, json};
 const TEMPLATE: &str = include_str!("map.html");
 const DATA_PLACEHOLDER: &str = "/*RIDE_DATA*/null";
 
-/// Color scales `ride map --scale` can choose; the same as in `map.html` and the app's `SpeedColors`.
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
-pub enum Scale {
-    /// Subways and commuter rail, up to 200 km/h.
-    Rail,
-    /// High-speed rail, up to 400 km/h.
-    HighSpeedRail,
-    /// Flights, up to Mach 1.
-    Flight,
-}
-
-impl Scale {
-    fn name(self) -> &'static str {
-        match self {
-            Scale::Rail => "rail",
-            Scale::HighSpeedRail => "high-speed rail",
-            Scale::Flight => "flight",
-        }
-    }
-}
-
 /// `scale` preselects a color scale; without one, the page picks it from the top fused speed.
-pub fn map(session: &Session, output: &Path, scale: Option<Scale>) -> anyhow::Result<()> {
+pub fn map(session: &Session, output: &Path, scale: Option<SpeedScale>) -> anyhow::Result<()> {
     let locations = session.read_records("location")?;
     warn_unclean("location", locations.truncated, locations.damage.len());
     let segments = gps_segments(&locations.chunks);
@@ -48,6 +28,7 @@ pub fn map(session: &Session, output: &Path, scale: Option<Scale>) -> anyhow::Re
     let points = fixes.len();
     // The same fused speed the app shows live, replayed from the recorded IMU and GNSS.
     let fused = speed_at_fixes(session, &fixes)?;
+    let top_speed = fused.iter().map(|e| e.speed_mps).reduce(f64::max);
     let mut fused = fused.iter();
 
     // Manual events, pinned at the nearest-in-time fix, since they have no position of their own.
@@ -87,10 +68,28 @@ pub fn map(session: &Session, output: &Path, scale: Option<Scale>) -> anyhow::Re
         "session": session.info.session_id,
         "segments": segments
             .iter()
-            .map(|s| s.iter().map(|p| point_json(p, fused.next(), start_ns)).collect::<Vec<_>>())
+            .map(|s| {
+                let mut prev: Option<Option<f64>> = None;
+                s.iter()
+                    .map(|p| {
+                        let e = fused.next();
+                        let speed = e.map(|e| e.speed_mps);
+                        // The first fix of a segment has no path into it; color it by its own speed.
+                        let edge = prev.map_or(speed, |prev| edge_speed(prev, speed));
+                        prev = Some(speed);
+                        point_json(p, e, edge, start_ns)
+                    })
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>(),
         "events": events,
-        "scale": scale.map(Scale::name),
+        // Colors and scales come from `ride_fusion::speed_colors`, the same as the app's live map;
+        // the page only looks them up.
+        "ramp": RAMP_ARGB.map(css_color),
+        "unknownColor": css_color(UNKNOWN_ARGB),
+        "scales": SpeedScale::ALL.map(|s| json!({"id": s.id(), "name": s.name(), "bandsKmh": s.bands_kmh()})),
+        "autoScale": SpeedScale::for_top_speed(top_speed).id(),
+        "scale": scale.map(SpeedScale::id),
     });
     // Embedded in a `<script>`, so a `</script>` in an event note mustn't end it.
     let data = serde_json::to_string(&data)?.replace("</", "<\\/");
@@ -106,8 +105,13 @@ pub fn map(session: &Session, output: &Path, scale: Option<Scale>) -> anyhow::Re
 }
 
 /// `[lat, lon, seconds since the first fix, UTC ms, GPS speed, GPS speed accuracy, horizontal accuracy,
-/// fused speed, fused speed sigma]`, compact for long rides.
-fn point_json(p: &TrackPoint, fused: Option<&Estimate>, start_ns: i64) -> Value {
+/// fused speed, fused speed sigma, [color band of the path into this fix, per scale]]`, compact for long rides.
+fn point_json(
+    p: &TrackPoint,
+    fused: Option<&Estimate>,
+    edge_speed: Option<f64>,
+    start_ns: i64,
+) -> Value {
     json!([
         p.latitude_degrees,
         p.longitude_degrees,
@@ -118,7 +122,12 @@ fn point_json(p: &TrackPoint, fused: Option<&Estimate>, start_ns: i64) -> Value 
         p.horizontal_accuracy_meters,
         fused.map(|e| e.speed_mps),
         fused.map(|e| e.sigma_mps),
+        SpeedScale::ALL.map(|s| s.band(edge_speed)),
     ])
+}
+
+fn css_color(argb: u32) -> String {
+    format!("#{:06x}", argb & 0xFF_FFFF)
 }
 
 fn warn_unclean(stream: &str, truncated: bool, damaged: usize) {
@@ -237,6 +246,16 @@ mod tests {
                 .iter()
                 .flat_map(|s| s.as_array().unwrap())
                 .all(|p| p[1] == -73.99)
+        );
+        // Colors and scales come from `ride_fusion::speed_colors`; the demo tops out around 70 km/h.
+        assert_eq!(data["autoScale"], "rail");
+        assert_eq!(data["ramp"].as_array().unwrap().len(), 10);
+        assert!(
+            segments[0][1][9]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|b| b.is_u64())
         );
         assert_eq!(data["events"][0]["label"], "boarded");
         assert_eq!(data["events"][1]["label"], "note: </script><b>not html</b>");

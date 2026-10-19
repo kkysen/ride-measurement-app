@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use ride_fusion::speed_colors::SpeedScale;
 use ride_session::proto::record::Payload;
 use ride_session::proto::{AudioInfo, StreamKind, manual_event};
 use ride_session::read::{Session, StreamContents};
@@ -39,8 +40,8 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
         /// The speed color scale; by default, chosen from the ride's top fused speed.
-        #[arg(long)]
-        scale: Option<map::Scale>,
+        #[arg(long, value_parser = parse_scale)]
+        scale: Option<SpeedScale>,
     },
 }
 
@@ -62,6 +63,13 @@ fn main() -> anyhow::Result<()> {
             map::map(&Session::open(session)?, &output, scale)
         }
     }
+}
+
+fn parse_scale(id: &str) -> Result<SpeedScale, String> {
+    SpeedScale::from_id(id).ok_or_else(|| {
+        let ids: Vec<_> = SpeedScale::ALL.iter().map(|s| s.id()).collect();
+        format!("expected one of {}", ids.join(", "))
+    })
 }
 
 /// Problems found while summarizing; errors fail the command, warnings don't.
