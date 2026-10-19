@@ -2,6 +2,7 @@
 
 mod delimited;
 pub mod read;
+pub mod recompress;
 pub mod track;
 pub mod write;
 

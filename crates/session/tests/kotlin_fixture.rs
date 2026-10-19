@@ -33,7 +33,7 @@ fn kotlin_fixture_decodes_bit_exactly() {
         eprintln!("RIDE_KOTLIN_FIXTURE not set, skipping");
         return;
     };
-    // The live format, and the same session after post-ride recompression (`RecompressorTest.kt`).
+    // The live format, and the same session after post-ride recompression (`FixtureTest.kt`, through the app's Rust bindings).
     check_fixture(&dir);
     check_fixture(&format!("{dir}-recompressed"));
 }
