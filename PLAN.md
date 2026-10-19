@@ -23,6 +23,13 @@ and must not trust network (cell/WiFi) location, which can report the wrong unde
   iOS has no raw GNSS and no cell/WiFi scan APIs, so iPhone rides are less accurate; raw GNSS is optional in the pipeline.
   Install: free Apple ID signing (re-sign every 7 days) for yourself, or $99/yr developer account + TestFlight for friends.
 
+## Rust core for performance-sensitive and shared code
+- Platform shells stay thin (Kotlin on Android, Swift on iOS later): sensor callbacks, UI, foreground service.
+- Shared Rust crate for anything heavy or reused: session file writer/reader, live EKF, rail-joint detection, map-matching.
+  Built for Android with `cargo-ndk`, bindings to Kotlin and Swift via `uniffi`,
+  and to Python via `pyo3`/`maturin`, so live and offline processing run the exact same code.
+- Start Phase 1 in Kotlin unless the writer shows up as a bottleneck; move code to Rust as it earns it.
+
 ## Phase 1: Logger app (main focus)
 Foreground service + wake lock, runs screen-off for hours.
 One clock for everything: `elapsedRealtimeNanos`; also log GNSS clock to map to UTC.
