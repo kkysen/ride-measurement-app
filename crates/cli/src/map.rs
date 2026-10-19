@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use anyhow::Context;
-use ride_fusion::live_speed::Estimate;
-use ride_fusion::replay::speed_at_fixes;
+use ride_fusion::fusion::SmoothedSpeed;
+use ride_fusion::replay::replay;
 use ride_fusion::speed_colors::{RAMP_ARGB, SpeedScale, UNKNOWN_ARGB, edge_speed};
 use ride_session::proto::record::Payload;
 use ride_session::read::Session;
@@ -26,10 +26,23 @@ pub fn map(session: &Session, output: &Path, scale: Option<SpeedScale>) -> anyho
         .context("no GPS fixes in this session")?;
     let fixes: Vec<&TrackPoint> = segments.iter().flatten().collect();
     let points = fixes.len();
-    // The same fused speed the app shows live, replayed from the recorded IMU and GNSS.
-    let fused = speed_at_fixes(session, &fixes)?;
-    let top_speed = fused.iter().map(|e| e.speed_mps).reduce(f64::max);
-    let mut fused = fused.iter();
+    // The app's fusion replayed over the recorded IMU, fixes, and raw GNSS, then smoothed over the whole ride.
+    let replayed = replay(session)?;
+    let g = &replayed.gnss;
+    eprintln!(
+        "raw GNSS: {} of {} epochs solved; {} ephemerides from {} navigation subframes ({} failed parity)",
+        g.epochs_solved,
+        g.epochs,
+        g.ephemerides,
+        g.subframes_ok + g.subframes_bad,
+        g.subframes_bad
+    );
+    let fused: Vec<Option<&SmoothedSpeed>> = fixes
+        .iter()
+        .map(|p| replayed.at(p.elapsed_realtime_ns))
+        .collect();
+    let top_speed = fused.iter().flatten().map(|e| e.speed_mps).reduce(f64::max);
+    let mut fused = fused.into_iter();
 
     // Manual events, pinned at the nearest-in-time fix, since they have no position of their own.
     let mut events = Vec::new();
@@ -72,7 +85,7 @@ pub fn map(session: &Session, output: &Path, scale: Option<SpeedScale>) -> anyho
                 let mut prev: Option<Option<f64>> = None;
                 s.iter()
                     .map(|p| {
-                        let e = fused.next();
+                        let e = fused.next().flatten();
                         let speed = e.map(|e| e.speed_mps);
                         // The first fix of a segment has no path into it; color it by its own speed.
                         let edge = prev.map_or(speed, |prev| edge_speed(prev, speed));
@@ -105,10 +118,10 @@ pub fn map(session: &Session, output: &Path, scale: Option<SpeedScale>) -> anyho
 }
 
 /// `[lat, lon, seconds since the first fix, UTC ms, GPS speed, GPS speed accuracy, horizontal accuracy,
-/// fused speed, fused speed sigma, [color band of the path into this fix, per scale]]`, compact for long rides.
+/// smoothed fused speed, its sigma, [color band of the path into this fix, per scale]]`, compact for long rides.
 fn point_json(
     p: &TrackPoint,
-    fused: Option<&Estimate>,
+    fused: Option<&SmoothedSpeed>,
     edge_speed: Option<f64>,
     start_ns: i64,
 ) -> Value {

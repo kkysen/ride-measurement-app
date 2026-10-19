@@ -47,3 +47,7 @@ wav session:
 # Write `<session>/map.html`: the GPS path colored by speed, with your manual events marked.
 map session:
     cargo run -q --bin ride -- map {{session}}
+
+# How well raw GNSS solves for velocity (navigation messages, ephemerides, residuals, own vs phone speed).
+gnss session:
+    cargo run -q --bin ride -- gnss {{session}}

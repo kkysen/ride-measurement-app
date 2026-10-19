@@ -1,3 +1,4 @@
+mod gnss;
 mod map;
 
 use std::path::PathBuf;
@@ -34,6 +35,9 @@ enum Command {
         #[arg(long, default_value = "audio")]
         stream: String,
     },
+    /// How well raw GNSS solves for velocity: navigation messages, ephemerides, epochs, residuals,
+    /// and the solved speed against the phone's own.
+    Gnss { session: PathBuf },
     /// Write the ride's GPS path, colored by speed, as an HTML map (default `<session>/map.html`).
     Map {
         session: PathBuf,
@@ -54,6 +58,7 @@ fn main() -> anyhow::Result<()> {
             output,
             stream,
         } => wav(&Session::open(session)?, &stream, &output),
+        Command::Gnss { session } => gnss::gnss(&Session::open(session)?),
         Command::Map {
             session,
             output,

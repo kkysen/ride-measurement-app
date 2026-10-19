@@ -96,7 +96,7 @@ function show(p) {
   const time = new Date(p[3]).toLocaleTimeString();
   document.getElementById("info").innerHTML =
     `<div class="speed">${fmt(p[7] == null ? null : p[7] * KMH, 1)} km/h</div>` +
-    `<div class="muted">fused ${fmt(p[7], 2)} ± ${fmt(p[8], 2)} m/s</div>` +
+    `<div class="muted">smoothed (IMU and GNSS) ${fmt(p[7], 2)} ± ${fmt(p[8], 2)} m/s</div>` +
     `<div class="muted">GPS ${fmt(p[4], 2)} ± ${fmt(p[5], 2)} m/s</div>` +
     `<div class="muted">${time} · ${fmt(p[2], 0)} s in · position ± ${fmt(p[6], 0)} m</div>`;
 }
@@ -120,7 +120,7 @@ legend.innerHTML =
   data.scales.map((s, i) => `<option value="${i}">${s.name}</option>`).join("") +
   `</select></label>` +
   `<div class="bands"></div>` +
-  `<div class="muted"><span class="gap"></span>no GPS · gray: no fused speed</div>`;
+  `<div class="muted"><span class="gap"></span>no GPS · gray: no smoothed speed</div>`;
 const select = document.getElementById("scale");
 select.value = data.scale == null ? "auto" : String(scale);
 function drawLegend() {
