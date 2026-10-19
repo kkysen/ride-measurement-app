@@ -36,7 +36,7 @@ each milestone installable and usable on a real ride.
 1. End-to-end skeleton, every stage present but minimal:
    - App: Kotlin + Jetpack Compose, start/stop button, foreground service + wake lock, one stream (accelerometer).
    - Format: minimal `.proto` schema and chunked `zstd` writer, one session directory per recording.
-   - Transfer: upload finished sessions to Google Drive (see Storage), no cable.
+   - Transfer: upload finished sessions to OneDrive (see Storage), no cable.
    - Offline: Python package that reads sessions (the offline side of the format), plus a CLI that prints a per-stream rate/gap summary and plots a stream.
    - Tests: round-trip test that writer output decodes bit-exactly; build + tests runnable from one script.
 2. Uncalibrated gyro and accel, batched, with gap detection.
@@ -105,10 +105,13 @@ Rule: store only what cannot be recomputed later; everything derived is regenera
   Any failure keeps the chunks and flags the session; sessions are also deleted from the phone only after the copy off it is verified the same way.
   Benchmark `zstd` vs `lz4` vs domain codecs on real rides before freezing the format; the `.proto` schema versions it.
 - Rough size: ~80-100 MB/h before encoding, est. ~20-40 MB/h after; about 1 GB/month at 1 h/day.
-- Transfer: the app uploads finished sessions to Google Drive (`drive.file` scope, so it only sees files it created),
-  in the background via `WorkManager`, on unmetered WiFi by default, resumable uploads, retried until done.
-  The phone deletes a session only after every file's Drive `md5Checksum` matches the local hash.
-  The PC pulls from Drive for analysis. ~1 GB/month fits the free 15 GB for a while; move to a paid plan or S3-style bucket later if needed.
+- Transfer: the app uploads finished sessions to cloud storage behind a small backend interface
+  (upload file resumably, get the remote hash), so providers are swappable.
+  First backend: OneDrive via Microsoft Graph (MSAL sign-in, `Files.ReadWrite.AppFolder` scope so it only touches its own app folder,
+  upload sessions for large files; needs a free Azure app registration). Google Drive or an S3-style bucket can be added later.
+  Runs in the background via `WorkManager`, on unmetered WiFi by default, retried until done.
+  The phone deletes a session only after every file's remote hash (`quickXorHash` on OneDrive) matches one computed locally.
+  The PC pulls from OneDrive (or its synced folder) for analysis.
 
 ## Battery
 - Main costs: GNSS with duty cycling disabled, and the CPU waking for every 400 Hz sample.
