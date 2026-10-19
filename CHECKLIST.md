@@ -41,6 +41,8 @@ Details for each step are in `README.md` under "Your steps".
       Underground, these are the ground truth everything else is checked against.
 - [ ] Use Add note for anything notable (express skipping stations, stopped in tunnel, crowded, phone in pocket vs hand).
 - [ ] Note where the phone was (hand, pocket, bag): it changes the IMU data a lot.
+- [ ] Glance at the live speed now and then and add a note if it's clearly wrong (e.g. "says 80, train stopped").
+      It's a rough display-only estimate; underground it runs on the IMU alone and resets at each stop.
 - [ ] After leaving the station: tap Stop.
 
 ## After the ride
@@ -53,3 +55,4 @@ Details for each step are in `README.md` under "Your steps".
 
 - [ ] OneDrive: Azure app registration, add `ride.onedriveClientId` to `~/.gradle/gradle.properties`, reinstall, sign in in the app.
 - [ ] GitHub Actions: add the four `RIDE_SIGNING_*` repository secrets (README step 6), then ask me to push.
+      They let CI sign APKs with your one key, so CI builds install over local ones; it means uploading the key to GitHub.
