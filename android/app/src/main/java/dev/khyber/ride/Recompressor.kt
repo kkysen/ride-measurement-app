@@ -61,7 +61,7 @@ object Recompressor {
                         override fun write(b: ByteArray, off: Int, len: Int) = out.write(b, off, len)
                         override fun close() = flush()
                     }
-                    val digest = ZstdOutputStream(unclosable, level).use { zout ->
+                    val digest = ZstdOutputStream(unclosable, level).setChecksum(true).use { zout ->
                         file.inputStream().use { digestOf(ZstdInputStream(it), copyTo = zout) }
                     }
                     out.fd.sync()

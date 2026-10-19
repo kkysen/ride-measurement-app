@@ -1,6 +1,6 @@
 package dev.khyber.ride
 
-import com.github.luben.zstd.Zstd
+import com.github.luben.zstd.ZstdCompressCtx
 import com.google.protobuf.MessageLite
 import dev.khyber.ride.proto.SensorChunk
 import dev.khyber.ride.proto.SessionInfo
@@ -36,13 +36,19 @@ class StreamWriter(dir: File, name: String) : AutoCloseable {
         out = FileOutputStream(file, true)
     }
 
+    // Frame checksums let readers tell a corrupted frame from valid data.
+    private val ctx = ZstdCompressCtx().setLevel(LIVE_ZSTD_LEVEL).setChecksum(true)
+
     fun append(chunk: MessageLite) {
         val bytes = ByteArrayOutputStream().also { chunk.writeDelimitedTo(it) }.toByteArray()
-        out.write(Zstd.compress(bytes, LIVE_ZSTD_LEVEL))
+        out.write(ctx.compress(bytes))
         out.fd.sync()
     }
 
-    override fun close() = out.close()
+    override fun close() {
+        out.close()
+        ctx.close()
+    }
 }
 
 /**

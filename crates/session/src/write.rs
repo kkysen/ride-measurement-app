@@ -39,10 +39,11 @@ impl StreamWriter {
     }
 
     pub fn append(&mut self, chunk: &impl Message) -> anyhow::Result<()> {
-        let frame = zstd::encode_all(
-            chunk.encode_length_delimited_to_vec().as_slice(),
-            LIVE_ZSTD_LEVEL,
-        )?;
+        // Frame checksums let readers tell a corrupted frame from valid data.
+        let mut encoder = zstd::stream::Encoder::new(Vec::new(), LIVE_ZSTD_LEVEL)?;
+        encoder.include_checksum(true)?;
+        encoder.write_all(&chunk.encode_length_delimited_to_vec())?;
+        let frame = encoder.finish()?;
         self.file.write_all(&frame)?;
         self.file.sync_data()?;
         Ok(())
