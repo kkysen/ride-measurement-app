@@ -161,6 +161,18 @@ Shows speed, along-track distance, current/next station. Results logged, but ove
 8. **Mode classification** (later): IMU vibration spectra, then audio.
 9. **Video** (later): visual odometry as a velocity factor; TrackSight-style localization only for routes repeated often.
 
+## Future: flights
+- Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
+  Airliner speed/altitude are within consumer GNSS limits (~1900 km/h, 18 km).
+- Barometer measures cabin pressure (pressurized to ~1800-2400 m equivalent), not aircraft altitude:
+  gives the climb/descent and pressurization profile, with GNSS altitude for the real one.
+- Fusion needs an aircraft motion model: free 3D, sideslip/crab allowed, no track graph or non-holonomic constraint;
+  ZUPTs only on the ground, runway/taxiway geometry from OSM as a weak prior at takeoff and landing.
+- Turns are coordinated, so the curve math gives bank angle with near-zero "cant deficiency"; flag uncoordinated turns and turbulence.
+- Ground truth: ADS-B tracks (OpenSky Network, ADS-B Exchange) give the aircraft's own GPS position, altitude, and speed about every second;
+  compare our fused trajectory against them (check each source's access terms for historical data).
+- Battery: flights are long, so power bank or lower GNSS/IMU rates if needed.
+
 ## Verification
 - Logger: per-stream rate/gap report; 1 h screen-off ride without dropouts.
 - GNSS: Doppler speed vs position-derived speed agree on open sky; stationary noise floor.
