@@ -39,3 +39,7 @@ summary session:
 
 plot session stream:
     python/.venv/bin/python -m ride.plot {{session}} {{stream}}
+
+# Export a session's audio to `<session>/audio.wav` for listening.
+wav session:
+    cargo run -q --bin ride -- wav {{session}} {{session}}/audio.wav
