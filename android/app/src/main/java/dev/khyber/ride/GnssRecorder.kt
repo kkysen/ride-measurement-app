@@ -42,7 +42,11 @@ class GnssRecorder(
 
     private val measurementsCallback = object : GnssMeasurementsEvent.Callback() {
         override fun onGnssMeasurementsReceived(event: GnssMeasurementsEvent) {
-            gnss.add { gnssMeasurements = event.toProto() }
+            val receivedNs = SystemClock.elapsedRealtimeNanos()
+            val pb = Health.guard("gnss measurements") { event.toProto() } ?: return
+            gnss.add { gnssMeasurements = pb }
+            // Live fusion solves its own velocity from these (`crates/gnss`).
+            Health.guard("gnss measurements to live speed") { LiveSpeed.onGnssMeasurements(receivedNs, pb.toByteArray()) }
         }
     }
 
@@ -54,7 +58,10 @@ class GnssRecorder(
 
     private val navigationCallback = object : GnssNavigationMessage.Callback() {
         override fun onGnssNavigationMessageReceived(message: GnssNavigationMessage) {
-            gnss.add { gnssNavigationMessage = message.toProto() }
+            val pb = Health.guard("gnss navigation messages") { message.toProto() } ?: return
+            gnss.add { gnssNavigationMessage = pb }
+            // Satellite orbits for live fusion's own velocity.
+            Health.guard("navigation messages to live speed") { LiveSpeed.onNavigationMessage(pb.toByteArray()) }
         }
     }
 

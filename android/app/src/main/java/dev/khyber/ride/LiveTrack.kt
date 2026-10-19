@@ -1,9 +1,9 @@
 package dev.khyber.ride
 
 import android.location.Location
-import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import uniffi.ride_ffi.SmoothedSpeed
 import uniffi.ride_ffi.trackMaxGapNs
 
 /**
@@ -29,8 +29,11 @@ object LiveTrack {
         val accuracyM: Double?,
         /** True if this fix starts a new segment after a gap (a tunnel), so no line is drawn to it. */
         val startsSegment: Boolean,
+        /** The smoothed speed (forward and backward passes over recent input), once smoothing has reached it. */
+        val smoothedSpeedMps: Double? = null,
     ) {
-        val speedMps: Double? get() = fusedSpeedMps
+        /** What the map is colored by: smoothed if there is one, else live. */
+        val speedMps: Double? get() = smoothedSpeedMps ?: fusedSpeedMps
     }
 
     private val _points = MutableStateFlow<List<Point>>(emptyList())
@@ -54,8 +57,27 @@ object LiveTrack {
                 if (location.hasAccuracy()) location.accuracy.toDouble() else null,
             )
         } catch (e: Throwable) {
-            Log.e("RideLogger", "live track failed", e)
+            Health.report("live track", e)
         }
+    }
+
+    /** Replaces recent points' speeds with smoothed ones at the same fix times. */
+    @Synchronized
+    fun applySmoothed(smoothed: List<SmoothedSpeed>) {
+        if (smoothed.isEmpty()) return
+        val byTime = smoothed.associate { it.elapsedRealtimeNs to it.speedMps }
+        val points = _points.value
+        var changed = false
+        val updated = points.map { p ->
+            val s = byTime[p.elapsedRealtimeNs]
+            if (s != null && s != p.smoothedSpeedMps) {
+                changed = true
+                p.copy(smoothedSpeedMps = s)
+            } else {
+                p
+            }
+        }
+        if (changed) _points.value = updated
     }
 
     @Synchronized

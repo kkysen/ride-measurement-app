@@ -120,7 +120,8 @@ private fun describe(p: LiveTrack.Point?, latest: Boolean): String {
     val time = DateFormat.getTimeInstance().format(Date(p.timeMs))
     return (if (latest) "Now ($time): " else "At $time: ") +
         "${f(p.speedMps?.times(3.6), 1)} km/h" +
-        "\nfused ${f(p.fusedSpeedMps, 2)} m/s · GPS ${f(p.gpsSpeedMps, 2)} ± ${f(p.gpsSpeedAccuracyMps, 2)} m/s" +
+        "\nsmoothed ${f(p.smoothedSpeedMps, 2)} · live ${f(p.fusedSpeedMps, 2)} · " +
+        "GPS ${f(p.gpsSpeedMps, 2)} ± ${f(p.gpsSpeedAccuracyMps, 2)} m/s" +
         " · position ± ${f(p.accuracyM, 0)} m"
 }
 
@@ -173,8 +174,9 @@ private class TrackOverlays {
     private var lineColor = 0
 
     fun sync(points: List<LiveTrack.Point>, scale: SpeedScale) {
-        // A new recording, or a faster top speed moved the ride to a wider scale: start over.
-        val restart = points.size < drawn.size || (drawn.isNotEmpty() && points.firstOrNull() !== drawn.first())
+        // A new recording, smoothing changed speeds already drawn, or a faster top speed moved the ride to a wider
+        // scale: start over. Otherwise only the new points are added.
+        val restart = points.size < drawn.size || points.subList(0, drawn.size) != drawn
         if (restart || scale != this.scale) {
             this.scale = scale
             listOf(gaps, casings, colored).forEach { it.items.clear() }

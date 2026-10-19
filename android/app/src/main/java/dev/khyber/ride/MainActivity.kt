@@ -64,6 +64,14 @@ class MainActivity : ComponentActivity() {
             )
             val sensors = estimate.sensors.sortedBy { it.ordinal }.joinToString { it.name.lowercase().replace('_', ' ') }
             Text(if (estimate.stopped) "stopped · $sensors" else sensors)
+            val gnss by LiveSpeed.gnss.collectAsStateWithLifecycle()
+            gnss?.let { g ->
+                Text(
+                    "raw GNSS: ${g.epochsSolved} of ${g.epochs} epochs solved, ${g.ephemerides} orbits " +
+                        "(${g.subframesOk} navigation subframes, ${g.subframesBad} failed parity)",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             Text(estimate.sinceGnssS?.let { if (it < 3) "GNSS: live" else "no GNSS for %.0f s".format(it) } ?: "no GNSS fix yet")
             if (estimate.rejected.isNotEmpty()) {
                 Text("rejected as outliers: " + estimate.rejected.joinToString { "${it.sensor.name.lowercase().replace('_', ' ')} ${it.count}" })

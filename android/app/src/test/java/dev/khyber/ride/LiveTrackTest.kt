@@ -28,4 +28,13 @@ class LiveTrackTest {
         add(2, gps = 900.0)
         assertEquals(listOf(3.0, null), LiveTrack.points.value.map { it.speedMps })
     }
+
+    @Test
+    fun smoothedSpeedsReplaceLiveOnesAtTheSameFixes() {
+        LiveTrack.reset()
+        add(1, fused = 3.0)
+        add(2, fused = 4.0)
+        LiveTrack.applySmoothed(listOf(uniffi.ride_ffi.SmoothedSpeed(2_000_000_000L, 5.0, 0.1)))
+        assertEquals(listOf(3.0, 5.0), LiveTrack.points.value.map { it.speedMps })
+    }
 }
