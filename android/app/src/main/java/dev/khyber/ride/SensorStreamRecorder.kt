@@ -106,6 +106,7 @@ class SensorStreamRecorder(
         lastTimestampNs = event.timestamp
         builder.add(event.timestamp, event.values, event.accuracy)
         sampleCount++
+        LiveSpeed.onSensorEvent(event)
         if (event.timestamp - chunkStartNs >= CHUNK_NS) flush()
     }
 

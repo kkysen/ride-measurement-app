@@ -127,6 +127,7 @@ class RecorderService : Service() {
                 .addAllStreams(listOfNotNull(audioRecorder?.streamInfo))
                 .build(),
         )
+        LiveSpeed.start()
         recorders.forEach { it.start() }
         try {
             gnssRecorder?.start()
@@ -155,6 +156,7 @@ class RecorderService : Service() {
         radioRecorder = null
         audioRecorder?.stop()
         audioRecorder = null
+        LiveSpeed.stop()
         recorders.forEach { it.beginStop() }
         recorders.forEach { it.stop() }
         recorders = emptyList()

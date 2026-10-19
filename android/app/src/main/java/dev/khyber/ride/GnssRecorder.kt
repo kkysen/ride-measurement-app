@@ -55,6 +55,7 @@ class GnssRecorder(
     private val gpsListener = LocationListener { location ->
         lastGpsFixElapsedNs = SystemClock.elapsedRealtimeNanos()
         locations.add { this.location = location.toProto() }
+        LiveSpeed.onGpsLocation(location)
     }
 
     private val fusedListener = LocationListener { location -> locations.add { this.location = location.toProto() } }

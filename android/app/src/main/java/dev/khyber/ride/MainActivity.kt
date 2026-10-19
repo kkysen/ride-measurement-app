@@ -47,6 +47,24 @@ class MainActivity : ComponentActivity() {
     private val backgroundLocation = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     @Composable
+    private fun SpeedDisplay() {
+        val e by LiveSpeed.estimate.collectAsStateWithLifecycle()
+        val estimate = e ?: return
+        Column {
+            Text(
+                "%.0f km/h ± %.0f".format(estimate.speedMps * 3.6, estimate.sigmaMps * 3.6),
+                style = MaterialTheme.typography.displayMedium,
+            )
+            val sensors = estimate.sensors.sortedBy { it.ordinal }.joinToString { it.name.lowercase().replace('_', ' ') }
+            Text(if (estimate.stopped) "stopped · $sensors" else sensors)
+            Text(estimate.sinceGnssS?.let { if (it < 3) "GNSS: live" else "no GNSS for %.0f s".format(it) } ?: "no GNSS fix yet")
+            if (estimate.rejected.isNotEmpty()) {
+                Text("rejected as outliers: " + estimate.rejected.entries.joinToString { "${it.key.name.lowercase()} ${it.value}" })
+            }
+        }
+    }
+
+    @Composable
     private fun EventButtons() {
         var note by remember { mutableStateOf("") }
         var last by remember { mutableStateOf("") }
@@ -145,6 +163,7 @@ class MainActivity : ComponentActivity() {
                 if (state.recording) RecorderService.stop(this@MainActivity) else RecorderService.start(this@MainActivity)
             }) { Text(if (state.recording) "Stop" else "Start") }
 
+            if (state.recording) SpeedDisplay()
             if (state.recording) EventButtons()
 
             Text(if (auth.configured) oneDriveStatus else "OneDrive: no client ID in this build")
