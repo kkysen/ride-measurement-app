@@ -39,6 +39,7 @@ import dev.khyber.ride.proto.ManualEvent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import uniffi.ride_ffi.coreVersion
 
 class MainActivity : ComponentActivity() {
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
@@ -183,6 +184,7 @@ class MainActivity : ComponentActivity() {
                 }) { Text(if (auth.signedIn) "Sign in again" else "Sign in to OneDrive") }
                 Button(onClick = { RecompressWorker.enqueueThenUpload(this@MainActivity) }) { Text("Upload now") }
             }
+            Text("App ${BuildConfig.VERSION_NAME}, Rust core ${coreVersion()}", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
