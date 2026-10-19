@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -66,6 +67,15 @@ class MainActivity : ComponentActivity() {
                     )
                 }) { Text("Grant all-files access") }
                 return@Column
+            }
+
+            if (!getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)) {
+                Text("Battery optimization can stop recording mid-ride; exempting this app makes that much less likely.")
+                Button(onClick = {
+                    startActivity(
+                        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")),
+                    )
+                }) { Text("Don't optimize battery for this app") }
             }
 
             Text(if (state.recording) "Recording ${state.sessionId}" else "Not recording")

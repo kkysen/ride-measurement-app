@@ -48,6 +48,15 @@ Recordings themselves survive an uninstall (they live in shared storage), but th
 5. `just install`.
 6. In the app: grant all-files access, location, and notifications.
 7. Recommended: Developer options > "Force full GNSS measurements" (for later GNSS logging).
+8. Keep Android from stopping recordings mid-ride:
+   - In the app, tap "Don't optimize battery for this app" (Settings > Apps > Ride Logger > Battery > Unrestricted).
+   - Turn off any manufacturer battery saver for the app (Samsung: Battery > Background usage limits, add to "Never sleeping apps";
+     Xiaomi/OnePlus/Oppo: allow autostart and background activity). See https://dontkillmyapp.com for your phone.
+   - Don't swipe the app away from recents while recording; some manufacturers kill its service when you do.
+   - Avoid Battery Saver / Ultra power saving modes while recording.
+
+   If Android still kills recording, it restarts itself and starts a new session linked to the killed one
+   (`just summary` prints `continues session ...`).
 
 The phone and this machine must be on the same network.
 `adb` here is the x86-64 build running under `box64`.
