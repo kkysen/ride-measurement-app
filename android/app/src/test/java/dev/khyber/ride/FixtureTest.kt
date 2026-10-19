@@ -24,7 +24,7 @@ class FixtureTest {
         )
         StreamWriter(dir, "accel").use { writer ->
             for (c in 0 until CHUNKS) {
-                val builder = ChunkBuilder(3)
+                val builder = ChunkBuilder()
                 for (i in 0 until SAMPLES_PER_CHUNK) {
                     val sample = c * SAMPLES_PER_CHUNK + i
                     val values = FloatArray(3) { k -> fixtureValue(sample * 3 + k) }

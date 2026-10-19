@@ -11,6 +11,8 @@ import android.util.Log
 import dev.khyber.ride.proto.SensorInfo
 import dev.khyber.ride.proto.StreamInfo
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Records one sensor to its own stream file, on its own thread, writing a chunk every [CHUNK_NS] of samples
@@ -23,7 +25,6 @@ class SensorStreamRecorder(
     private val sensorManager: SensorManager,
     private val sensor: Sensor,
     private val name: String,
-    private val valuesPerSample: Int,
     dir: File,
     /** How many sensors share the FIFO at full rate, to size the batching latency. */
     sharingFifo: Int,
@@ -31,12 +32,15 @@ class SensorStreamRecorder(
     private val thread = HandlerThread("sensor-$name").apply { start() }
     private val handler = Handler(thread.looper)
     private val writer = StreamWriter(dir, name)
-    private val builder = ChunkBuilder(valuesPerSample)
+    private val builder = ChunkBuilder()
     private var chunkStartNs = 0L
     private var lastTimestampNs = 0L
     private val continuous = sensor.reportingMode == Sensor.REPORTING_MODE_CONTINUOUS
     private var maxReportLatencyUs = initialLatencyUs(sensor, sharingFifo)
     private var reregisterAfterFlush = false
+
+    @Volatile
+    private var stopping: CountDownLatch? = null
 
     @Volatile
     var sampleCount = 0L
@@ -61,7 +65,23 @@ class SensorStreamRecorder(
         handler.postDelayed(flushTask, CHUNK_NS / 1_000_000)
     }
 
+    /**
+     * Starts draining the hardware FIFO, since unregistering drops batched events still in it.
+     * Call on every recorder before [stop], so the flushes run in parallel.
+     */
+    fun beginStop() {
+        val latch = CountDownLatch(1)
+        stopping = latch
+        handler.post {
+            if (!sensorManager.flush(this)) latch.countDown()
+        }
+    }
+
     fun stop() {
+        if (stopping == null) beginStop()
+        if (stopping?.await(STOP_FLUSH_TIMEOUT_S, TimeUnit.SECONDS) != true) {
+            Log.w("SensorStreamRecorder", "$name: FIFO flush didn't complete before stop")
+        }
         sensorManager.unregisterListener(this)
         handler.removeCallbacks(flushTask)
         handler.post {
@@ -77,6 +97,7 @@ class SensorStreamRecorder(
     }
 
     override fun onSensorChanged(event: SensorEvent) {
+        if (!builder.fits(event.values.size)) flush()
         if (builder.size == 0) chunkStartNs = event.timestamp
         if (continuous && lastTimestampNs != 0L && sensor.minDelay > 0) {
             val dtNs = event.timestamp - lastTimestampNs
@@ -103,6 +124,10 @@ class SensorStreamRecorder(
     }
 
     override fun onFlushCompleted(sensor: Sensor) {
+        stopping?.let {
+            it.countDown()
+            return
+        }
         if (!reregisterAfterFlush) return
         reregisterAfterFlush = false
         sensorManager.unregisterListener(this)
@@ -143,6 +168,7 @@ class SensorStreamRecorder(
         private const val MAX_LATENCY_US = 1_000_000
         private const val MIN_LATENCY_US = 20_000
         private const val GAP_FACTOR = 4
+        private const val STOP_FLUSH_TIMEOUT_S = 3L
 
         /** A quarter of the time the FIFO takes to fill at full rate, capped at [MAX_LATENCY_US]; 0 without a FIFO. */
         fun initialLatencyUs(sensor: Sensor, sharingFifo: Int): Int {

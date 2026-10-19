@@ -18,7 +18,7 @@ class RecompressorTest {
     private fun writeStream(dir: File, name: String, chunks: Int): File {
         StreamWriter(dir, name).use { writer ->
             for (c in 0 until chunks) {
-                val builder = ChunkBuilder(3)
+                val builder = ChunkBuilder()
                 for (i in 0 until 200) {
                     val sample = c * 200 + i
                     builder.add(1_000_000_000L + sample * 2_500_000L, FloatArray(3) { k -> FixtureTest.fixtureValue(sample * 3 + k) }, 3)

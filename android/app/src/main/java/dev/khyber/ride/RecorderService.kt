@@ -80,19 +80,19 @@ class RecorderService : Service() {
         // Uncalibrated variants carry the raw values plus the bias estimate, so calibrated ones are derivable and not stored;
         // calibrated is the fallback only where uncalibrated doesn't exist.
         val sensorSpecs = listOf(
-            SensorSpec("accel_uncal", Sensor.TYPE_ACCELEROMETER_UNCALIBRATED, 6, fallback = SensorSpec("accel", Sensor.TYPE_ACCELEROMETER, 3)),
-            SensorSpec("gyro_uncal", Sensor.TYPE_GYROSCOPE_UNCALIBRATED, 6, fallback = SensorSpec("gyro", Sensor.TYPE_GYROSCOPE, 3)),
-            SensorSpec("mag_uncal", Sensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED, 6, fallback = SensorSpec("mag", Sensor.TYPE_MAGNETIC_FIELD, 3)),
-            SensorSpec("pressure", Sensor.TYPE_PRESSURE, 1),
-            SensorSpec("light", Sensor.TYPE_LIGHT, 1),
-            SensorSpec("proximity", Sensor.TYPE_PROXIMITY, 1),
+            SensorSpec("accel_uncal", Sensor.TYPE_ACCELEROMETER_UNCALIBRATED, fallback = SensorSpec("accel", Sensor.TYPE_ACCELEROMETER)),
+            SensorSpec("gyro_uncal", Sensor.TYPE_GYROSCOPE_UNCALIBRATED, fallback = SensorSpec("gyro", Sensor.TYPE_GYROSCOPE)),
+            SensorSpec("mag_uncal", Sensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED, fallback = SensorSpec("mag", Sensor.TYPE_MAGNETIC_FIELD)),
+            SensorSpec("pressure", Sensor.TYPE_PRESSURE),
+            SensorSpec("light", Sensor.TYPE_LIGHT),
+            SensorSpec("proximity", Sensor.TYPE_PROXIMITY),
         ).mapNotNull { spec ->
             sequenceOf(spec, spec.fallback).filterNotNull()
                 .firstNotNullOfOrNull { s -> sensorManager.getDefaultSensor(s.type)?.let { s to it } }
         }
         val highRate = sensorSpecs.count { (_, sensor) -> sensor.reportingMode == Sensor.REPORTING_MODE_CONTINUOUS }
         recorders = sensorSpecs.map { (spec, sensor) ->
-            SensorStreamRecorder(sensorManager, sensor, spec.name, spec.valuesPerSample, dir, sharingFifo = highRate)
+            SensorStreamRecorder(sensorManager, sensor, spec.name, dir, sharingFifo = highRate)
         }
         val events = RecordStreamRecorder("events", dir)
         val radio = RecordStreamRecorder("radio", dir)
@@ -155,6 +155,7 @@ class RecorderService : Service() {
         radioRecorder = null
         audioRecorder?.stop()
         audioRecorder = null
+        recorders.forEach { it.beginStop() }
         recorders.forEach { it.stop() }
         recorders = emptyList()
         recordStreams.forEach { it.stop() }
@@ -179,7 +180,7 @@ class RecorderService : Service() {
 
     data class State(val recording: Boolean, val sessionId: String?)
 
-    private data class SensorSpec(val name: String, val type: Int, val valuesPerSample: Int, val fallback: SensorSpec? = null)
+    private data class SensorSpec(val name: String, val type: Int, val fallback: SensorSpec? = null)
 
     companion object {
         private const val CHANNEL_ID = "recording"

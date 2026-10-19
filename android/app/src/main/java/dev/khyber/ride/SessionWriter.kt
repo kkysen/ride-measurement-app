@@ -45,18 +45,27 @@ class StreamWriter(dir: File, name: String) : AutoCloseable {
     override fun close() = out.close()
 }
 
-/** Accumulates samples and builds delta-encoded chunks with exact `f32` bits. */
-class ChunkBuilder(private val valuesPerSample: Int) {
+/**
+ * Accumulates samples and builds delta-encoded chunks with exact `f32` bits.
+ * Every value Android delivers is kept: a chunk's `values_per_sample` is the first sample's `values.size`,
+ * and a sample of a different size needs a new chunk (see [fits]).
+ */
+class ChunkBuilder {
     private val timestamps = ArrayList<Long>()
     private val valueBits = ArrayList<Int>()
     private val accuracy = ArrayList<Int>()
+    private var valuesPerSample = 0
 
     val size get() = timestamps.size
 
+    /** Whether a sample with [valueCount] values can go in this chunk. */
+    fun fits(valueCount: Int) = size == 0 || valueCount == valuesPerSample
+
     fun add(timestampNs: Long, values: FloatArray, accuracy: Int) {
-        require(values.size >= valuesPerSample)
+        require(fits(values.size)) { "sample has ${values.size} values, chunk has $valuesPerSample" }
+        if (size == 0) valuesPerSample = values.size
         timestamps.add(timestampNs)
-        for (i in 0 until valuesPerSample) {
+        for (i in values.indices) {
             // `floatToRawIntBits` keeps NaN payloads, unlike `floatToIntBits`.
             valueBits.add(java.lang.Float.floatToRawIntBits(values[i]))
         }
