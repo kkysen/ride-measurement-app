@@ -1,4 +1,4 @@
-package dev.kkysen.ride
+package dev.khyber.ride
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -14,8 +14,8 @@ import android.os.Environment
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
-import dev.kkysen.ride.proto.Device
-import dev.kkysen.ride.proto.SessionInfo
+import dev.khyber.ride.proto.Device
+import dev.khyber.ride.proto.SessionInfo
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date

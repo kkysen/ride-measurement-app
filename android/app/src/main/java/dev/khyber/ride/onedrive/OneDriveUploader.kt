@@ -1,4 +1,4 @@
-package dev.kkysen.ride.onedrive
+package dev.khyber.ride.onedrive
 
 import java.io.File
 import java.io.RandomAccessFile

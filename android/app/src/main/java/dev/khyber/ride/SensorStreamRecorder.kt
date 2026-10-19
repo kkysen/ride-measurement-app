@@ -1,4 +1,4 @@
-package dev.kkysen.ride
+package dev.khyber.ride
 
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -7,8 +7,8 @@ import android.hardware.SensorManager
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
-import dev.kkysen.ride.proto.SensorInfo
-import dev.kkysen.ride.proto.StreamInfo
+import dev.khyber.ride.proto.SensorInfo
+import dev.khyber.ride.proto.StreamInfo
 import java.io.File
 
 /** Records one sensor to its own stream file, on its own thread, writing a chunk every [CHUNK_NS]. */

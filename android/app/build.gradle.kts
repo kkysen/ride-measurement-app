@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.kkysen.ride"
+    namespace = "dev.khyber.ride"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "dev.kkysen.ride"
+        applicationId = "dev.khyber.ride"
         minSdk = 31
         targetSdk = 36
         versionCode = 1

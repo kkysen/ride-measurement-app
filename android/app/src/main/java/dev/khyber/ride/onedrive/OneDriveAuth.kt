@@ -1,7 +1,7 @@
-package dev.kkysen.ride.onedrive
+package dev.khyber.ride.onedrive
 
 import android.content.Context
-import dev.kkysen.ride.BuildConfig
+import dev.khyber.ride.BuildConfig
 import org.json.JSONObject
 
 /**

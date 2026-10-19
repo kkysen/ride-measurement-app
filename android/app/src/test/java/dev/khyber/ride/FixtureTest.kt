@@ -1,7 +1,7 @@
-package dev.kkysen.ride
+package dev.khyber.ride
 
-import dev.kkysen.ride.proto.SessionInfo
-import dev.kkysen.ride.proto.StreamInfo
+import dev.khyber.ride.proto.SessionInfo
+import dev.khyber.ride.proto.StreamInfo
 import java.io.File
 import org.junit.Test
 

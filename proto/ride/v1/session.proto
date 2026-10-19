@@ -13,7 +13,7 @@ syntax = "proto3";
 
 package ride.v1;
 
-option java_package = "dev.kkysen.ride.proto";
+option java_package = "dev.khyber.ride.proto";
 option java_multiple_files = true;
 
 message SessionInfo {

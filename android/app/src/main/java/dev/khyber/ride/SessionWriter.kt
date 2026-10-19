@@ -1,8 +1,8 @@
-package dev.kkysen.ride
+package dev.khyber.ride
 
 import com.github.luben.zstd.Zstd
-import dev.kkysen.ride.proto.SensorChunk
-import dev.kkysen.ride.proto.SessionInfo
+import dev.khyber.ride.proto.SensorChunk
+import dev.khyber.ride.proto.SessionInfo
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream

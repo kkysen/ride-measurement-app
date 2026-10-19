@@ -1,4 +1,4 @@
-package dev.kkysen.ride.onedrive
+package dev.khyber.ride.onedrive
 
 import java.net.HttpURLConnection
 import java.net.URL

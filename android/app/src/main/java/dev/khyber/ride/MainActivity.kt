@@ -1,4 +1,4 @@
-package dev.kkysen.ride
+package dev.khyber.ride
 
 import android.Manifest
 import android.content.Intent
@@ -27,7 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.kkysen.ride.onedrive.OneDriveAuth
+import dev.khyber.ride.onedrive.OneDriveAuth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext

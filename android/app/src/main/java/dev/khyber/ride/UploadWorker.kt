@@ -1,4 +1,4 @@
-package dev.kkysen.ride
+package dev.khyber.ride
 
 import android.content.Context
 import androidx.work.Constraints
@@ -8,8 +8,8 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import dev.kkysen.ride.onedrive.OneDriveAuth
-import dev.kkysen.ride.onedrive.OneDriveUploader
+import dev.khyber.ride.onedrive.OneDriveAuth
+import dev.khyber.ride.onedrive.OneDriveUploader
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
