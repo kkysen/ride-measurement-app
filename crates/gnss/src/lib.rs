@@ -2,3 +2,4 @@
 
 pub mod ephemeris;
 pub mod lnav;
+pub mod solve;
