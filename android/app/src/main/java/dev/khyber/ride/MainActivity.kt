@@ -22,6 +22,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,6 +30,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -78,6 +80,7 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.POST_NOTIFICATIONS,
                 Manifest.permission.READ_PHONE_STATE,
                 Manifest.permission.NEARBY_WIFI_DEVICES,
+                Manifest.permission.RECORD_AUDIO,
             ),
         )
         setContent {
@@ -122,6 +125,19 @@ class MainActivity : ComponentActivity() {
                 Button(onClick = { backgroundLocation.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION) }) {
                     Text("Allow location all the time")
                 }
+            }
+
+            var audio by remember { mutableStateOf(AudioStreamRecorder.enabled(this@MainActivity)) }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Switch(
+                    checked = audio,
+                    enabled = !state.recording,
+                    onCheckedChange = {
+                        audio = it
+                        AudioStreamRecorder.setEnabled(this@MainActivity, it)
+                    },
+                )
+                Text("Record audio (lossless, ~100 MB/h; also records conversations nearby)")
             }
 
             Text(if (state.recording) "Recording ${state.sessionId}" else "Not recording")

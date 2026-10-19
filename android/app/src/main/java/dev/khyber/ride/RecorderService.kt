@@ -34,6 +34,7 @@ class RecorderService : Service() {
     private var recordStreams: List<RecordStreamRecorder> = emptyList()
     private var gnssRecorder: GnssRecorder? = null
     private var radioRecorder: RadioRecorder? = null
+    private var audioRecorder: AudioStreamRecorder? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -53,11 +54,15 @@ class RecorderService : Service() {
         // so fall back to recording everything that doesn't need location.
         val locationAllowed = !restarted ||
             checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
-        val serviceType = if (locationAllowed) {
+        // The microphone also can't be started from the background, so a restarted session records no audio.
+        val audioAllowed = !restarted && AudioStreamRecorder.enabled(this) &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        var serviceType = if (locationAllowed) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
         } else {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         }
+        if (audioAllowed) serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         startForeground(NOTIFICATION_ID, notification(locationAllowed), serviceType)
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ride:recording")
@@ -101,6 +106,7 @@ class RecorderService : Service() {
         val gnssRef = gnssRecorder
         radioRecorder = RadioRecorder(this, radio) { gnssRef?.lastGpsFixElapsedNs ?: 0L }
         eventsStream = events
+        if (audioAllowed) audioRecorder = AudioStreamRecorder(this, dir)
         SessionWriter.writeSessionInfo(
             dir,
             SessionInfo.newBuilder()
@@ -118,6 +124,7 @@ class RecorderService : Service() {
                 )
                 .addAllStreams(recorders.map { it.streamInfo })
                 .addAllStreams(recordStreams.map { it.streamInfo })
+                .addAllStreams(listOfNotNull(audioRecorder?.streamInfo))
                 .build(),
         )
         recorders.forEach { it.start() }
@@ -127,6 +134,7 @@ class RecorderService : Service() {
             android.util.Log.w("RecorderService", "no location permission; not recording GNSS", e)
         }
         radioRecorder?.start()
+        audioRecorder?.start()
         if (restarted) {
             events.add {
                 manualEvent = ManualEvent.newBuilder()
@@ -145,6 +153,8 @@ class RecorderService : Service() {
         gnssRecorder = null
         radioRecorder?.stop()
         radioRecorder = null
+        audioRecorder?.stop()
+        audioRecorder = null
         recorders.forEach { it.stop() }
         recorders = emptyList()
         recordStreams.forEach { it.stop() }
