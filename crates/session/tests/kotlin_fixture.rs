@@ -28,6 +28,7 @@ fn fixture_timestamp(sample: usize) -> i64 {
 }
 
 #[test]
+#[allow(clippy::needless_range_loop)] // `i` indexes several parallel arrays.
 fn kotlin_fixture_decodes_bit_exactly() {
     let Ok(dir) = std::env::var("RIDE_KOTLIN_FIXTURE") else {
         eprintln!("RIDE_KOTLIN_FIXTURE not set, skipping");
