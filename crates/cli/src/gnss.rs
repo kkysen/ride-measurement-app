@@ -1,6 +1,10 @@
 //! `ride gnss`: how well raw GNSS solved, to check the solver on a phone's real data.
 
+use std::collections::BTreeMap;
+
+use ride_gnss::rinex::{SESSION_ORBITS_DIR, read_session_orbits};
 use ride_gnss::solve::{Navigator, NoSolution, geodetic_to_ecef};
+use ride_gnss::system::System;
 use ride_session::proto::record::Payload;
 use ride_session::read::Session;
 use ride_session::track::GPS_PROVIDER;
@@ -14,6 +18,7 @@ struct Epoch {
     doppler_residual_rms: f64,
     pseudorange_residual_rms: f64,
     satellites: usize,
+    by_system: Vec<(System, usize)>,
     phone_speed: Option<f32>,
     /// Distance from the solved position to the phone's fix (m).
     phone_distance: Option<f64>,
@@ -34,6 +39,17 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
     }
     records.sort_by_key(|r| r.received_elapsed_realtime_ns);
     let mut nav = Navigator::default();
+    let orbits = read_session_orbits(&session.dir)?;
+    if orbits.is_empty() {
+        println!(
+            "no downloaded orbits in {SESSION_ORBITS_DIR}/ (`just orbits`): only the phone's navigation messages"
+        );
+    } else {
+        println!("{} ephemerides from {SESSION_ORBITS_DIR}/", orbits.len());
+    }
+    for eph in orbits {
+        nav.add_ephemeris(eph);
+    }
     let mut no_solution = std::collections::BTreeMap::<String, u64>::new();
     let mut solved: Vec<Epoch> = Vec::new();
     let mut phone_speed: Option<(i64, f32)> = None;
@@ -62,6 +78,7 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
                         doppler_residual_rms: sol.residual_rms,
                         pseudorange_residual_rms: sol.position_residual_rms,
                         satellites: sol.satellites_used,
+                        by_system: sol.satellites_by_system.clone(),
                         phone_speed: phone_speed.filter(|(at, _)| recent(*at)).map(|(_, s)| s),
                         phone_distance: phone_position.filter(|(at, _)| recent(*at)).map(
                             |(_, p)| {
@@ -73,9 +90,7 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
                 }
                 Err(e) => {
                     let why = match e {
-                        NoSolution::TooFewSatellites { .. } => {
-                            "too few usable GPS satellites".into()
-                        }
+                        NoSolution::TooFewSatellites { .. } => "too few usable satellites".into(),
                         other => format!("{other:?}"),
                     };
                     *no_solution.entry(why).or_default() += 1;
@@ -101,6 +116,24 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
         v[v.len() / 2]
     };
     let all = |f: fn(&Epoch) -> f64| solved.iter().map(f).collect::<Vec<_>>();
+    let mut per_system = BTreeMap::<System, Vec<f64>>::new();
+    for e in &solved {
+        for &(sys, n) in &e.by_system {
+            per_system.entry(sys).or_default().push(n as f64);
+        }
+    }
+    let per_system: Vec<String> = per_system
+        .into_iter()
+        .map(|(sys, mut v)| {
+            // Epochs without the constellation count as none.
+            v.resize(solved.len(), 0.0);
+            format!("{} {}", sys.name(), median(v))
+        })
+        .collect();
+    println!(
+        "satellites used per constellation, median: {}",
+        per_system.join(", ")
+    );
     println!(
         "satellites used: median {}; residual RMS: Doppler median {:.3} m/s, pseudorange median {:.1} m",
         median(all(|e| e.satellites as f64)),
@@ -133,4 +166,55 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// The UTC days (year and day of year) a session's GNSS covers, one per line, for downloading orbits.
+pub fn orbit_days(session: &Session) -> anyhow::Result<()> {
+    let start_ms = session.info.start_unix_ms;
+    let mut last_ns = session.info.start_elapsed_realtime_ns;
+    if session.stream_path("gnss").exists() {
+        for chunk in session.read_records("gnss")?.chunks {
+            for r in chunk.records {
+                last_ns = last_ns.max(r.received_elapsed_realtime_ns);
+            }
+        }
+    }
+    let end_ms = start_ms + (last_ns - session.info.start_elapsed_realtime_ns) / 1_000_000;
+    const DAY_MS: i64 = 86_400_000;
+    for day in start_ms.div_euclid(DAY_MS)..=end_ms.div_euclid(DAY_MS) {
+        let (year, day_of_year) = year_and_day(day);
+        println!("{year} {day_of_year:03}");
+    }
+    Ok(())
+}
+
+/// Days since 1970-01-01 as a year and day of the year (1 to 366).
+fn year_and_day(days: i64) -> (i64, i64) {
+    let mut year = 1970;
+    let mut d = days;
+    loop {
+        let len = if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+            366
+        } else {
+            365
+        };
+        if d < len {
+            return (year, d + 1);
+        }
+        d -= len;
+        year += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::year_and_day;
+
+    #[test]
+    fn days_of_year() {
+        assert_eq!(year_and_day(0), (1970, 1));
+        // 2021-04-08, and the last day of leap year 2024.
+        assert_eq!(year_and_day(18_725), (2021, 98));
+        assert_eq!(year_and_day(20_088), (2024, 366));
+    }
 }

@@ -105,6 +105,10 @@ pub fn replay(session: &Session) -> anyhow::Result<Replay> {
     events.sort_by_key(|(t, _)| *t);
 
     let mut fusion = Fusion::new(None);
+    // Downloaded orbits (`just orbits`), for constellations whose navigation messages the phone missed.
+    for eph in ride_gnss::rinex::read_session_orbits(&session.dir)? {
+        fusion.navigator_mut().add_ephemeris(eph);
+    }
     for (t, e) in events {
         match e {
             Event::Accel(a) => fusion.on_accel(t, a),

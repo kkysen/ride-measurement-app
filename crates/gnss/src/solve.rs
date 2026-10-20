@@ -50,6 +50,8 @@ pub struct Solution {
     pub clock_biases: Vec<(System, f64)>,
     pub satellites_used: usize,
     pub satellites_rejected: usize,
+    /// How many of the velocity solution's satellites each constellation gave.
+    pub satellites_by_system: Vec<(System, usize)>,
     /// Root mean square of the Doppler residuals (m/s).
     pub residual_rms: f64,
     /// Root mean square of the pseudorange residuals of the position solution (m).
@@ -447,6 +449,10 @@ fn solve_velocity(sats: &[Sat], position: [f64; 3]) -> Option<Solution> {
             velocity_covariance: std::array::from_fn(|k| cov[(k / 3) * 4 + k % 3]),
             clock_drift: x[3],
             clock_biases: Vec::new(),
+            satellites_by_system: systems_of(&used.iter().map(|&i| &sats[i]).collect::<Vec<_>>())
+                .into_iter()
+                .map(|sys| (sys, used.iter().filter(|&&i| sats[i].system == sys).count()))
+                .collect(),
             satellites_used: used.len(),
             satellites_rejected: rows.len() - used.len(),
             position_residual_rms: 0.0,
