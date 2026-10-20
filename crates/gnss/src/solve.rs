@@ -1,4 +1,4 @@
-//! Position and velocity from one epoch of Android's raw GNSS measurements (GPS so far).
+//! Position and velocity from one epoch of Android's raw GNSS measurements, from every constellation with orbits.
 //!
 //! Velocity comes from each satellite's Doppler (`pseudorange_rate`), which measures speed directly and to a few
 //! cm/s per satellite, by weighted least squares with outlier rejection. Position, from pseudoranges, is only needed
@@ -12,19 +12,17 @@ use ride_session::proto::{
 
 use crate::ephemeris::{C, GpsEphemeris, OMEGA_E, SECONDS_PER_WEEK, SatState};
 use crate::lnav::{EphemerisAssembler, TYPE_GPS_L1CA, decode_subframe};
+use crate::system::{DEFAULT_LEAP_SECONDS, NANOS_PER_WEEK, SatId, System};
 
-/// `GnssStatus.CONSTELLATION_GPS`.
-pub const CONSTELLATION_GPS: i32 = 1;
-/// `GnssMeasurement.STATE_CODE_LOCK`, `STATE_TOW_DECODED`, `STATE_TOW_KNOWN`.
-const STATE_CODE_LOCK: i32 = 0x1;
-const STATE_TOW_DECODED: i32 = 0x8;
-const STATE_TOW_KNOWN: i32 = 0x4000;
-/// `GnssMeasurement.STATE_MSEC_AMBIGUOUS`: the transmit time may be off by whole milliseconds (300 km each).
-const STATE_MSEC_AMBIGUOUS: i32 = 0x10;
+/// Signal travel times (ns) outside this are bad times: medium orbits take 64 to 100 ms,
+/// geostationary and inclined geosynchronous ones (BeiDou, QZSS) up to about 140 ms.
+const TRAVEL_NS: std::ops::Range<f64> = 0.06e9..0.15e9;
+/// Carrier frequencies (Hz) of the L1 band (GPS L1, Galileo E1, BeiDou B1, GLONASS G1).
+/// Only these are used: broadcast clocks and group delays refer to them, and other bands need other corrections.
+const L1_BAND_HZ: std::ops::Range<f32> = 1.55e9..1.61e9;
 /// Pseudorange residuals beyond this (m) reject the worst satellite from the position solution: uncorrected
 /// ionosphere and troposphere are tens of meters at most, so more is multipath or a bad measurement.
 const POSITION_OUTLIER_M: f64 = 60.0;
-const NANOS_PER_WEEK: i64 = 604_800_000_000_000;
 /// Doppler measurements are trusted no more than this (m/s), whatever Android says.
 const MIN_PRR_SIGMA: f64 = 0.05;
 /// Residuals beyond this many sigma reject the worst satellite and solve again.
@@ -45,6 +43,8 @@ pub struct Solution {
     pub velocity_covariance: [f64; 9],
     /// Receiver clock drift (m/s).
     pub clock_drift: f64,
+    /// Receiver clock bias (m) against each constellation in the position solution.
+    pub clock_biases: Vec<(System, f64)>,
     pub satellites_used: usize,
     pub satellites_rejected: usize,
     /// Root mean square of the Doppler residuals (m/s).
@@ -98,7 +98,7 @@ pub struct Stats {
 #[derive(Default)]
 pub struct Navigator {
     assembler: EphemerisAssembler,
-    ephemerides: BTreeMap<u8, Vec<GpsEphemeris>>,
+    ephemerides: BTreeMap<SatId, Vec<GpsEphemeris>>,
     /// Full GPS week from the latest clock, to resolve navigation messages' 10-bit weeks.
     week: Option<u32>,
     /// Subframes that arrived before any clock.
@@ -110,7 +110,11 @@ pub struct Navigator {
 impl Navigator {
     /// Adds an ephemeris from elsewhere (e.g. a downloaded broadcast ephemeris file).
     pub fn add_ephemeris(&mut self, eph: GpsEphemeris) {
-        let list = self.ephemerides.entry(eph.prn).or_default();
+        let id = SatId {
+            system: System::Gps,
+            svid: eph.prn,
+        };
+        let list = self.ephemerides.entry(id).or_default();
         if !list
             .iter()
             .any(|e| e.week == eph.week && e.toe == eph.toe && e.iode == eph.iode)
@@ -170,20 +174,22 @@ impl Navigator {
             }
         }
         let sats = self.satellites(clock, &event.measurements, rx_gps_ns, week);
-        if sats.len() < 5 {
+        // One more than the unknowns, to check them: position, and a clock bias per constellation.
+        let needed = 4 + systems_of(&sats.iter().collect::<Vec<_>>()).len();
+        if sats.len() < needed {
             return Err(NoSolution::TooFewSatellites { usable: sats.len() });
         }
-        let (position, position_residual_rms) =
-            solve_position(&sats, self.last_position).ok_or(NoSolution::Singular)?;
-        self.last_position = Some(position);
-        let mut sol = solve_velocity(&sats, position).ok_or(NoSolution::Singular)?;
-        sol.position_residual_rms = position_residual_rms;
+        let fix = solve_position(&sats, self.last_position).ok_or(NoSolution::Singular)?;
+        self.last_position = Some(fix.position);
+        let mut sol = solve_velocity(&sats, fix.position).ok_or(NoSolution::Singular)?;
+        sol.clock_biases = fix.clock_biases;
+        sol.position_residual_rms = fix.residual_rms;
         sol.elapsed_realtime_ns = clock.elapsed_realtime_nanos;
         self.stats.epochs_solved += 1;
         Ok(sol)
     }
 
-    /// Usable GPS measurements with their satellites' states, one per satellite (the strongest signal).
+    /// Usable measurements with their satellites' states, one per satellite (the strongest L1-band signal).
     fn satellites(
         &self,
         clock: &GnssClock,
@@ -192,41 +198,48 @@ impl Navigator {
         week: u32,
     ) -> Vec<Sat> {
         let bias = clock.bias_nanos.unwrap_or(0.0);
-        let mut best: BTreeMap<u8, Sat> = BTreeMap::new();
+        let leap_seconds = clock.leap_second.unwrap_or(DEFAULT_LEAP_SECONDS);
+        let mut best: BTreeMap<SatId, Sat> = BTreeMap::new();
         for m in measurements {
-            let tow_known = m.state & (STATE_TOW_DECODED | STATE_TOW_KNOWN) != 0;
-            if m.constellation_type != CONSTELLATION_GPS
-                || m.state & STATE_CODE_LOCK == 0
-                || !tow_known
-                || m.state & STATE_MSEC_AMBIGUOUS != 0
+            let Some(system) = System::from_android(m.constellation_type) else {
+                continue;
+            };
+            if !system.time_known(m.state)
                 || m.cn0_dbhz < MIN_CN0_DBHZ
                 || !m.pseudorange_rate_meters_per_second.is_finite()
+                || m.carrier_frequency_hz
+                    .is_some_and(|f| !L1_BAND_HZ.contains(&f))
             {
                 continue;
             }
-            let Ok(prn) = u8::try_from(m.svid) else {
+            let Ok(svid) = u8::try_from(m.svid) else {
                 continue;
             };
-            // Receive time of week (ns, with sub-ns parts kept as f64), and transmit time in the satellite's clock.
-            let rx_tow_ns =
-                rx_gps_ns.rem_euclid(NANOS_PER_WEEK) as f64 + m.time_offset_nanos - bias;
-            let tx_tow_ns = m.received_sv_time_nanos as f64;
-            let mut travel_ns = rx_tow_ns - tx_tow_ns;
-            if travel_ns < -(NANOS_PER_WEEK as f64) / 2.0 {
-                travel_ns += NANOS_PER_WEEK as f64;
-            }
-            // GPS signals take 64 to 90 ms; anything else is a bad time.
-            if !(0.06e9..0.1e9).contains(&travel_ns) {
+            let id = SatId { system, svid };
+            // Receive time as the system counts it (ns, with sub-ns parts kept as f64),
+            // less the transmit time in the satellite's clock, wrapped into the system's week (or day).
+            let period = system.period_ns() as f64;
+            let rx_ns = system.time_of_period_ns(rx_gps_ns, leap_seconds) as f64
+                + m.time_offset_nanos
+                - bias;
+            let travel_ns = (rx_ns - m.received_sv_time_nanos as f64 + period / 2.0)
+                .rem_euclid(period)
+                - period / 2.0;
+            if !TRAVEL_NS.contains(&travel_ns) {
                 continue;
             }
-            let t_sv = tx_tow_ns * 1e-9;
-            let Some(eph) = self.ephemeris(prn, week, t_sv) else {
+            // Transmit time in the satellite's clock, as GPS seconds of week.
+            let rx_tow_ns =
+                rx_gps_ns.rem_euclid(NANOS_PER_WEEK) as f64 + m.time_offset_nanos - bias;
+            let t_sv = (rx_tow_ns - travel_ns) * 1e-9;
+            let Some(eph) = self.ephemeris(id, week, t_sv) else {
                 continue;
             };
             // Satellite clock time to GPS time, then the satellite's state at transmission.
             let dt = eph.state_at(t_sv).clock_bias;
             let state = eph.state_at(t_sv - dt);
             let sat = Sat {
+                system,
                 state,
                 pseudorange: travel_ns * 1e-9 * C + C * (state.clock_bias - eph.tgd),
                 prr: m.pseudorange_rate_meters_per_second + C * state.clock_drift,
@@ -235,18 +248,18 @@ impl Navigator {
                     .max(MIN_PRR_SIGMA),
                 cn0: m.cn0_dbhz,
             };
-            if best.get(&prn).is_none_or(|b| b.cn0 < sat.cn0) {
-                best.insert(prn, sat);
+            if best.get(&id).is_none_or(|b| b.cn0 < sat.cn0) {
+                best.insert(id, sat);
             }
         }
         best.into_values().collect()
     }
 
-    /// The ephemeris for `prn` valid at `t` (seconds of `week`) with the closest `toe`.
-    fn ephemeris(&self, prn: u8, week: u32, t: f64) -> Option<&GpsEphemeris> {
+    /// The ephemeris for `id` valid at `t` (GPS seconds of `week`) with the closest `toe`.
+    fn ephemeris(&self, id: SatId, week: u32, t: f64) -> Option<&GpsEphemeris> {
         let at = f64::from(week) * SECONDS_PER_WEEK + t;
         self.ephemerides
-            .get(&prn)?
+            .get(&id)?
             .iter()
             .filter(|e| e.sv_health == 0)
             .map(|e| {
@@ -263,6 +276,7 @@ impl Navigator {
 
 #[derive(Clone, Copy, Debug)]
 struct Sat {
+    system: System,
     state: SatState,
     /// Corrected for the satellite clock and group delay (m).
     pseudorange: f64,
@@ -281,33 +295,63 @@ fn rotated(state: &SatState, receiver: [f64; 3]) -> ([f64; 3], [f64; 3]) {
     (rot(state.position), rot(state.velocity))
 }
 
-/// Least-squares position (and clock bias) from pseudoranges, by Gauss-Newton from `start` or the earth's center,
-/// dropping the worst satellite while its residual is beyond [`POSITION_OUTLIER_M`] and a redundant one remains.
-/// Returns the position and the residual RMS (m).
-fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<([f64; 3], f64)> {
+/// The constellations among `sats`, in order: each one's clock bias is an unknown of the position solution.
+fn systems_of(sats: &[&Sat]) -> Vec<System> {
+    let mut systems: Vec<System> = sats.iter().map(|s| s.system).collect();
+    systems.sort();
+    systems.dedup();
+    systems
+}
+
+struct PositionSolution {
+    position: [f64; 3],
+    /// Receiver clock bias against each constellation (m).
+    clock_biases: Vec<(System, f64)>,
+    /// Root mean square of the pseudorange residuals (m).
+    residual_rms: f64,
+}
+
+/// Least-squares position (and a clock bias per constellation) from pseudoranges, by Gauss-Newton from `start`
+/// or the earth's center, dropping the worst satellite while its residual is beyond [`POSITION_OUTLIER_M`]
+/// and a redundant one remains.
+fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<PositionSolution> {
     let mut used: Vec<&Sat> = sats.iter().collect();
     loop {
-        let (x, residuals) = gauss_newton_position(&used, start)?;
+        let systems = systems_of(&used);
+        let unknowns = 3 + systems.len();
+        if used.len() <= unknowns {
+            return None;
+        }
+        let (x, residuals) = gauss_newton_position(&used, &systems, start)?;
         let (worst, worst_value) = residuals
             .iter()
             .enumerate()
             .map(|(i, r)| (i, r.abs()))
             .max_by(|a, b| a.1.total_cmp(&b.1))?;
-        if worst_value > POSITION_OUTLIER_M && used.len() > 5 {
+        if worst_value > POSITION_OUTLIER_M && used.len() > unknowns + 1 {
             used.remove(worst);
             continue;
         }
         let rms = (residuals.iter().map(|r| r * r).sum::<f64>() / residuals.len() as f64).sqrt();
-        return Some((x, rms));
+        return Some(PositionSolution {
+            position: [x[0], x[1], x[2]],
+            clock_biases: systems.into_iter().zip(x[3..].iter().copied()).collect(),
+            residual_rms: rms,
+        });
     }
 }
 
-fn gauss_newton_position(sats: &[&Sat], start: Option<[f64; 3]>) -> Option<([f64; 3], Vec<f64>)> {
-    let mut x = [0.0; 4];
+/// Returns the unknowns (position, then each of `systems`' clock bias) and the residuals.
+fn gauss_newton_position(
+    sats: &[&Sat],
+    systems: &[System],
+    start: Option<[f64; 3]>,
+) -> Option<(Vec<f64>, Vec<f64>)> {
+    let mut x = vec![0.0; 3 + systems.len()];
     if let Some(p) = start {
         x[..3].copy_from_slice(&p);
     }
-    let rows_at = |x: &[f64; 4]| -> Vec<([f64; 4], f64, f64)> {
+    let rows_at = |x: &[f64]| -> Vec<(Vec<f64>, f64, f64)> {
         sats.iter()
             .map(|s| {
                 let rx = [x[0], x[1], x[2]];
@@ -315,13 +359,17 @@ fn gauss_newton_position(sats: &[&Sat], start: Option<[f64; 3]>) -> Option<([f64
                 let d = sub(&sp, &rx);
                 let r = norm(&d);
                 let u = d.map(|v| v / r);
-                ([-u[0], -u[1], -u[2], 1.0], s.pseudorange - (r + x[3]), 1.0)
+                let k = 3 + systems.iter().position(|&sys| sys == s.system).unwrap();
+                let mut a = vec![0.0; x.len()];
+                a[..3].copy_from_slice(&[-u[0], -u[1], -u[2]]);
+                a[k] = 1.0;
+                (a, s.pseudorange - (r + x[k]), 1.0)
             })
             .collect()
     };
     for _ in 0..10 {
         let (dx, _) = weighted_least_squares(&rows_at(&x))?;
-        for (xi, d) in x.iter_mut().zip(dx) {
+        for (xi, d) in x.iter_mut().zip(&dx) {
             *xi += d;
         }
         if norm(&[dx[0], dx[1], dx[2]]) < 1e-3 {
@@ -329,13 +377,13 @@ fn gauss_newton_position(sats: &[&Sat], start: Option<[f64; 3]>) -> Option<([f64
         }
     }
     let residuals = rows_at(&x).iter().map(|(_, b, _)| *b).collect();
-    Some(([x[0], x[1], x[2]], residuals))
+    Some((x, residuals))
 }
 
 /// Weighted least-squares velocity and clock drift from Doppler, dropping the worst satellite while its residual
 /// is beyond [`OUTLIER_SIGMA`], as long as one more satellite than unknowns remains to check the rest.
 fn solve_velocity(sats: &[Sat], position: [f64; 3]) -> Option<Solution> {
-    let rows: Vec<([f64; 4], f64, f64)> = sats
+    let rows: Vec<(Vec<f64>, f64, f64)> = sats
         .iter()
         .map(|s| {
             let (sp, sv) = rotated(&s.state, position);
@@ -344,7 +392,7 @@ fn solve_velocity(sats: &[Sat], position: [f64; 3]) -> Option<Solution> {
             let u = d.map(|v| v / r);
             // prr = (v_sat - v_rx) . u + drift, so prr - v_sat . u = -u . v_rx + drift.
             (
-                [-u[0], -u[1], -u[2], 1.0],
+                vec![-u[0], -u[1], -u[2], 1.0],
                 s.prr - dot(&sv, &u),
                 1.0 / (s.prr_sigma * s.prr_sigma),
             )
@@ -352,7 +400,7 @@ fn solve_velocity(sats: &[Sat], position: [f64; 3]) -> Option<Solution> {
         .collect();
     let mut used: Vec<usize> = (0..rows.len()).collect();
     loop {
-        let subset: Vec<_> = used.iter().map(|&i| rows[i]).collect();
+        let subset: Vec<_> = used.iter().map(|&i| rows[i].clone()).collect();
         let (x, cov) = weighted_least_squares(&subset)?;
         let normalized: Vec<f64> = subset
             .iter()
@@ -378,6 +426,7 @@ fn solve_velocity(sats: &[Sat], position: [f64; 3]) -> Option<Solution> {
             velocity: [x[0], x[1], x[2]],
             velocity_covariance: std::array::from_fn(|k| cov[(k / 3) * 4 + k % 3]),
             clock_drift: x[3],
+            clock_biases: Vec::new(),
             satellites_used: used.len(),
             satellites_rejected: rows.len() - used.len(),
             position_residual_rms: 0.0,
@@ -387,50 +436,53 @@ fn solve_velocity(sats: &[Sat], position: [f64; 3]) -> Option<Solution> {
     }
 }
 
-/// Solves min sum w (a.x - b)^2 for 4 unknowns; returns x and its covariance (A^T W A)^-1.
-fn weighted_least_squares(rows: &[([f64; 4], f64, f64)]) -> Option<([f64; 4], [f64; 16])> {
-    let mut n = [0.0; 16];
-    let mut rhs = [0.0; 4];
+/// Solves min sum w (a.x - b)^2; returns x and its covariance (A^T W A)^-1, row-major.
+fn weighted_least_squares(rows: &[(Vec<f64>, f64, f64)]) -> Option<(Vec<f64>, Vec<f64>)> {
+    let n = rows.first()?.0.len();
+    let mut normal = vec![0.0; n * n];
+    let mut rhs = vec![0.0; n];
     for (a, b, w) in rows {
-        for i in 0..4 {
+        for i in 0..n {
             rhs[i] += w * a[i] * b;
-            for j in 0..4 {
-                n[4 * i + j] += w * a[i] * a[j];
+            for j in 0..n {
+                normal[n * i + j] += w * a[i] * a[j];
             }
         }
     }
-    let inv = invert4(&n)?;
-    let x = std::array::from_fn(|i| (0..4).map(|j| inv[4 * i + j] * rhs[j]).sum());
+    let inv = invert(&normal, n)?;
+    let x = (0..n)
+        .map(|i| (0..n).map(|j| inv[n * i + j] * rhs[j]).sum())
+        .collect();
     Some((x, inv))
 }
 
-/// Inverse of a 4x4 matrix by Gauss-Jordan elimination with partial pivoting.
-fn invert4(m: &[f64; 16]) -> Option<[f64; 16]> {
-    let mut a = *m;
-    let mut inv = [0.0; 16];
-    for i in 0..4 {
-        inv[5 * i] = 1.0;
+/// Inverse of an n x n matrix by Gauss-Jordan elimination with partial pivoting.
+fn invert(m: &[f64], n: usize) -> Option<Vec<f64>> {
+    let mut a = m.to_vec();
+    let mut inv = vec![0.0; n * n];
+    for i in 0..n {
+        inv[(n + 1) * i] = 1.0;
     }
-    for col in 0..4 {
+    for col in 0..n {
         let pivot =
-            (col..4).max_by(|&i, &j| a[4 * i + col].abs().total_cmp(&a[4 * j + col].abs()))?;
-        if a[4 * pivot + col].abs() < 1e-12 {
+            (col..n).max_by(|&i, &j| a[n * i + col].abs().total_cmp(&a[n * j + col].abs()))?;
+        if a[n * pivot + col].abs() < 1e-12 {
             return None;
         }
-        for k in 0..4 {
-            a.swap(4 * col + k, 4 * pivot + k);
-            inv.swap(4 * col + k, 4 * pivot + k);
+        for k in 0..n {
+            a.swap(n * col + k, n * pivot + k);
+            inv.swap(n * col + k, n * pivot + k);
         }
-        let p = a[4 * col + col];
-        for k in 0..4 {
-            a[4 * col + k] /= p;
-            inv[4 * col + k] /= p;
+        let p = a[n * col + col];
+        for k in 0..n {
+            a[n * col + k] /= p;
+            inv[n * col + k] /= p;
         }
-        for row in (0..4).filter(|&r| r != col) {
-            let f = a[4 * row + col];
-            for k in 0..4 {
-                a[4 * row + k] -= f * a[4 * col + k];
-                inv[4 * row + k] -= f * inv[4 * col + k];
+        for row in (0..n).filter(|&r| r != col) {
+            let f = a[n * row + col];
+            for k in 0..n {
+                a[n * row + k] -= f * a[n * col + k];
+                inv[n * row + k] -= f * inv[n * col + k];
             }
         }
     }
