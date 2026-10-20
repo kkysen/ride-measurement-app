@@ -11,6 +11,7 @@ use ride_session::proto::{
 };
 
 use crate::ephemeris::{C, Ephemeris, OMEGA_E, SECONDS_PER_WEEK, SatState};
+use crate::inav::{self, TYPE_GAL_I};
 use crate::lnav::{EphemerisAssembler, TYPE_GPS_L1CA, TYPE_QZS_L1CA, decode_subframe};
 use crate::system::{DEFAULT_LEAP_SECONDS, NANOS_PER_WEEK, SatId, System};
 
@@ -100,6 +101,7 @@ pub struct Stats {
 #[derive(Default)]
 pub struct Navigator {
     assembler: EphemerisAssembler,
+    galileo: inav::EphemerisAssembler,
     ephemerides: BTreeMap<SatId, Vec<Ephemeris>>,
     /// Full GPS week from the latest clock, to resolve navigation messages' 10-bit weeks.
     week: Option<u32>,
@@ -121,14 +123,26 @@ impl Navigator {
     }
 
     pub fn on_navigation_message(&mut self, msg: &GnssNavigationMessage) {
+        let Ok(svid) = u8::try_from(msg.svid) else {
+            return;
+        };
         let system = match msg.r#type {
             TYPE_GPS_L1CA => System::Gps,
             // QZSS L1 C/A has GPS's LNAV format and time.
             TYPE_QZS_L1CA => System::Qzss,
+            TYPE_GAL_I => {
+                match inav::decode_page(&msg.data) {
+                    Ok(word) => {
+                        self.stats.subframes_ok += 1;
+                        if let Some(eph) = self.galileo.add(svid, word) {
+                            self.add_ephemeris(eph);
+                        }
+                    }
+                    Err(_) => self.stats.subframes_bad += 1,
+                }
+                return;
+            }
             _ => return,
-        };
-        let Ok(svid) = u8::try_from(msg.svid) else {
-            return;
         };
         let sat = SatId { system, svid };
         match decode_subframe(&msg.data) {
