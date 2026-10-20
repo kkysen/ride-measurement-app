@@ -140,26 +140,26 @@ fn drive_with_ground_truth() {
     ];
     println!("{} epochs, {} with ground truth", events.len(), truth.len());
     println!(
-        "systems                          solved  sats  horizontal m (median, 95%)  velocity m/s (median, 95%)"
+        "systems                          solved  sats  horizontal m (median, 95%)  velocity km/h (median, 95%)"
     );
     let mut results = Vec::new();
     for set in sets {
         let r = solve(set, &orbits, &events, &truth);
         let names: Vec<&str> = set.iter().map(|s| s.name()).collect();
         println!(
-            "{:32} {:6} {:5.1}  {:8.1} {:8.1}               {:8.3} {:8.3}",
+            "{:32} {:6} {:5.1}  {:8.1} {:8.1}               {:8.2} {:8.2}",
             names.join("+"),
             r.solved,
             r.satellites,
             r.horizontal_median,
             r.horizontal_p95,
-            r.velocity_median,
-            r.velocity_p95
+            r.velocity_median * 3.6,
+            r.velocity_p95 * 3.6
         );
         results.push(r);
     }
 
-    // Measured on this drive (GPS alone: 4.3 m and 0.092 m/s at the median), with some margin.
+    // Measured on this drive (GPS alone: 4.3 m and 0.092 m/s, 0.33 km/h, at the median), with some margin.
     let gps = &results[0];
     assert!(gps.solved * 10 >= events.len() * 9);
     assert!(gps.horizontal_median < 5.5 && gps.velocity_median < 0.11);

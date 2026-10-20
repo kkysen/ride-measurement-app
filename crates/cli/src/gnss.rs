@@ -9,6 +9,9 @@ use ride_session::proto::record::Payload;
 use ride_session::read::Session;
 use ride_session::track::GPS_PROVIDER;
 
+/// Speeds are computed in m/s and shown in km/h.
+const KMH_PER_MPS: f64 = 3.6;
+
 /// The phone's own fix values count as "at the same time" within this.
 const SAME_TIME_NS: i64 = 1_500_000_000;
 
@@ -195,16 +198,16 @@ pub fn gnss(session: &Session, decoded_only: bool) -> anyhow::Result<()> {
         })
         .collect();
     println!(
-        "velocity: satellites median {} ({}), Doppler residual RMS median {:.3} m/s",
+        "velocity: satellites median {} ({}), Doppler residual RMS median {:.2} km/h",
         median(velocities.iter().map(|v| v.satellites as f64).collect()),
         per_system.join(", "),
-        median(velocities.iter().map(|v| v.residual_rms).collect())
+        median(velocities.iter().map(|v| v.residual_rms).collect()) * KMH_PER_MPS
     );
     let speeds: Vec<f64> = velocities.iter().map(|v| v.speed).collect();
     println!(
-        "own speed: median {:.2} m/s, max {:.2} m/s",
-        median(speeds.clone()),
-        speeds.iter().copied().fold(0.0, f64::max)
+        "own speed: median {:.1} km/h, max {:.1} km/h",
+        median(speeds.clone()) * KMH_PER_MPS,
+        speeds.iter().copied().fold(0.0, f64::max) * KMH_PER_MPS
     );
     let diffs: Vec<f64> = velocities
         .iter()
@@ -212,9 +215,9 @@ pub fn gnss(session: &Session, decoded_only: bool) -> anyhow::Result<()> {
         .collect();
     if !diffs.is_empty() {
         println!(
-            "own minus phone speed: median {:.3} m/s, median absolute {:.3} m/s, over {} epochs",
-            median(diffs.clone()),
-            median(diffs.iter().map(|d| d.abs()).collect()),
+            "own minus phone speed: median {:.2} km/h, median absolute {:.2} km/h, over {} epochs",
+            median(diffs.clone()) * KMH_PER_MPS,
+            median(diffs.iter().map(|d| d.abs()).collect()) * KMH_PER_MPS,
             diffs.len()
         );
     }
