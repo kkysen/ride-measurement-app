@@ -84,6 +84,9 @@ const AXIS_GNSS_MAX_ACCEL_MPS2: f64 = 1.5;
 const AXIS_GNSS_MAX_SIGMA_MPS: f64 = 0.5;
 const AXIS_GNSS_MAX_DT_S: f64 = 1.5;
 const AXIS_GNSS_MIN_CROSS: f64 = 0.01;
+/// Both GNSS speeds of a change must be at least this (m/s): near a standstill, a speed's magnitude is mostly noise
+/// (on that ride, 2 to 7 km/h jitter at stations), and its changes would turn the axis at every stop.
+const AXIS_GNSS_MIN_SPEED_MPS: f64 = 3.0;
 /// Process noise: unmodeled along-axis acceleration (m/s^2 per sqrt(s)), and bias random walk.
 const ACCEL_NOISE: f64 = 0.3;
 const BIAS_WALK: f64 = 0.005;
@@ -434,7 +437,9 @@ impl LiveSpeedEstimator {
     }
 
     fn on_doppler_speed(&mut self, t_ns: i64, speed: f64, sigma: f64) {
-        if let Some((t0, v0, s0)) = self.prev_doppler {
+        if let Some((t0, v0, s0)) = self.prev_doppler
+            && v0.min(speed) >= AXIS_GNSS_MIN_SPEED_MPS
+        {
             self.learn_axis_from_gnss(t_ns - t0, speed - v0, s0.max(sigma));
         }
         // Speed change between fixes vs integrated along-axis acceleration fixes the axis sign.
