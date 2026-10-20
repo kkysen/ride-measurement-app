@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -96,7 +97,8 @@ fun LiveMapScreen(onBack: () -> Unit) {
             ) + "dark gray: no live speed; dashed: no GPS (tunnel)",
             style = MaterialTheme.typography.bodySmall,
         )
-        Box(Modifier.fillMaxWidth().weight(1f)) {
+        // The map view draws past its own bounds (over the text above, and flickering below while tiles load).
+        Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
             val track = remember { TrackOverlays() }
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
@@ -104,6 +106,7 @@ fun LiveMapScreen(onBack: () -> Unit) {
                     // A map failure shows as text here; it can't affect recording.
                     try {
                         newMapView(context, track, onDrag = { follow = false }, onTap = { selected = it })
+                            .apply { clipToOutline = true }
                     } catch (e: Throwable) {
                         Log.e("RideLogger", "map failed", e)
                         TextView(context).apply { text = "Map failed to load:\n${Log.getStackTraceString(e)}" }

@@ -51,11 +51,11 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
     @SuppressLint("MissingPermission")
     private fun startScans() {
         if (context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-            Log.i(TAG, "no Bluetooth scan permission; not recording BLE")
+            Health.report("ble", IllegalStateException("no Nearby devices permission: not recording beacons"))
             return
         }
         val scanner = adapter?.takeIf { it.isEnabled }?.bluetoothLeScanner ?: run {
-            Log.i(TAG, "Bluetooth off or missing; not recording BLE")
+            Health.report("ble", IllegalStateException("Bluetooth is off: not recording beacons (turn it on and restart)"))
             return
         }
         val settings = ScanSettings.Builder()

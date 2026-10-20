@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -58,8 +59,15 @@ class MainActivity : ComponentActivity() {
         }
         val estimate = e ?: return
         Column {
+            val kmh = estimate.speedMps * 3.6
+            val sigmaKmh = estimate.sigmaMps * 3.6
             Text(
-                "%.0f km/h ± %.0f".format(estimate.speedMps * 3.6, estimate.sigmaMps * 3.6),
+                when {
+                    estimate.stopped -> "0 km/h"
+                    // Within its uncertainty of standing still: a number would suggest motion that may not be there.
+                    kmh < sigmaKmh -> "under %.0f km/h".format(kmh + sigmaKmh)
+                    else -> "%.0f km/h ± %.0f".format(kmh, sigmaKmh)
+                },
                 style = MaterialTheme.typography.displayMedium,
             )
             // Along the direction of travel: negative is braking.
@@ -89,19 +97,35 @@ class MainActivity : ComponentActivity() {
             last = if (RecorderService.addEvent(kind, text)) "Marked: $label" else "Not recording"
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Tap these as things happen: each marks the moment in the recording, " +
+                    "so speeds can be matched to real events afterwards.",
+                style = MaterialTheme.typography.bodySmall,
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { add(ManualEvent.Kind.KIND_BOARDED, "boarded") }) { Text("Boarded") }
-                Button(onClick = { add(ManualEvent.Kind.KIND_ALIGHTED, "alighted") }) { Text("Alighted") }
+                Button(onClick = { add(ManualEvent.Kind.KIND_BOARDED, "boarded") }, Modifier.weight(1f)) { Text("Boarded") }
+                Button(onClick = { add(ManualEvent.Kind.KIND_ALIGHTED, "alighted") }, Modifier.weight(1f)) { Text("Alighted") }
             }
+            Text("You got on or off a train.", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { add(ManualEvent.Kind.KIND_AT_STATION, "at station", note).also { note = "" } }) {
-                    Text("At station")
-                }
-                Button(onClick = { add(ManualEvent.Kind.KIND_DOORS_OPEN, "doors open") }) { Text("Doors open") }
-                Button(onClick = { add(ManualEvent.Kind.KIND_DOORS_CLOSED, "doors closed") }) { Text("Doors closed") }
+                Button(onClick = { add(ManualEvent.Kind.KIND_DOORS_OPEN, "doors open") }, Modifier.weight(1f)) { Text("Doors open") }
+                Button(onClick = { add(ManualEvent.Kind.KIND_DOORS_CLOSED, "doors closed") }, Modifier.weight(1f)) { Text("Doors closed") }
             }
+            Text(
+                "The train's doors opened or closed: marks exactly when it stopped and is about to leave.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(
+                onClick = { add(ManualEvent.Kind.KIND_AT_STATION, "at station", note).also { note = "" } },
+                Modifier.fillMaxWidth(),
+            ) { Text("At station") }
+            Text(
+                "The train is at a station: type its name below first, so the ride can be matched to the map.",
+                style = MaterialTheme.typography.bodySmall,
+            )
             OutlinedTextField(note, { note = it }, label = { Text("Station name or note (optional)") })
             Button(onClick = { add(ManualEvent.Kind.KIND_NOTE, "note", note).also { note = "" } }) { Text("Add note") }
+            Text("Anything else worth knowing later, e.g. \"screen on for beacons\" or \"phone in pocket\".", style = MaterialTheme.typography.bodySmall)
             if (last.isNotEmpty()) Text(last)
         }
     }
@@ -122,15 +146,19 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) {
-                    var showMap by remember { mutableStateOf(false) }
-                    if (showMap) LiveMapScreen(onBack = { showMap = false }) else Screen(onShowMap = { showMap = true })
+                    var page by remember { mutableStateOf("main") }
+                    when (page) {
+                        "map" -> LiveMapScreen(onBack = { page = "main" })
+                        "rides" -> PastRidesScreen(onBack = { page = "main" })
+                        else -> Screen(onShowMap = { page = "map" }, onShowRides = { page = "rides" })
+                    }
                 }
             }
         }
     }
 
     @Composable
-    private fun Screen(onShowMap: () -> Unit) {
+    private fun Screen(onShowMap: () -> Unit, onShowRides: () -> Unit) {
         // Recording doesn't use the Rust core, so if it fails to load, show why and keep going.
         val rustCoreStatus = remember {
             try {
@@ -204,7 +232,10 @@ class MainActivity : ComponentActivity() {
             Button(onClick = {
                 if (state.recording) RecorderService.stop(this@MainActivity) else RecorderService.start(this@MainActivity)
             }) { Text(if (state.recording) "Stop" else "Start") }
-            Button(onClick = onShowMap) { Text("Map") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onShowMap) { Text("Map") }
+                Button(onClick = onShowRides) { Text("Past rides") }
+            }
 
             if (state.recording) SpeedDisplay()
             if (state.recording) EventButtons()
