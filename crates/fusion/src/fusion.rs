@@ -199,11 +199,9 @@ pub struct Fusion {
     measured: VecDeque<i64>,
     measured_ns: Option<i64>,
     smoothed_measured_ns: Option<i64>,
-    /// The whole ride's distance (m) by the forward speed at each sample time, trapezoidally,
-    /// from the first sample to the last, and the last one's time and speed.
-    distance_m: f64,
-    first_sample_ns: Option<i64>,
-    last_sample: Option<(i64, f64)>,
+    /// The distance (m) covered by the frozen values (trapezoidally), from the first one's time
+    /// to the last one's, whose time and speed the window's distance continues from.
+    frozen_distance: Distance,
 }
 
 impl Default for Fusion {
@@ -244,9 +242,7 @@ impl Fusion {
             measured: VecDeque::new(),
             measured_ns: None,
             smoothed_measured_ns: None,
-            distance_m: 0.0,
-            first_sample_ns: None,
-            last_sample: None,
+            frozen_distance: Distance::default(),
         }
     }
 
@@ -366,16 +362,8 @@ impl Fusion {
         }
         self.buffer(t_ns, kept);
         if sample {
-            let e = self.estimator.estimate(t_ns);
-            let speed = if e.stopped { 0.0 } else { e.speed_mps };
-            if let Some((t, v)) = self.last_sample.filter(|&(t, _)| t_ns > t) {
-                self.distance_m += (v + speed) / 2.0 * (t_ns - t) as f64 * 1e-9;
-            }
-            if self.last_sample.is_none_or(|(t, _)| t_ns > t) {
-                self.last_sample = Some((t_ns, speed));
-            }
-            self.first_sample_ns.get_or_insert(t_ns);
-            self.forward.push_back((t_ns, e));
+            self.forward
+                .push_back((t_ns, self.estimator.estimate(t_ns)));
         }
         if self.window_ns.is_some() {
             let next = *self.next_smooth_ns.get_or_insert(t_ns);
@@ -450,6 +438,7 @@ impl Fusion {
                         },
                     ),
                 };
+                self.frozen_distance.add(&value);
                 self.frozen.push(value);
                 self.forward.pop_front();
             }
@@ -460,11 +449,16 @@ impl Fusion {
         }
     }
 
-    /// The whole ride's average speed (m/s) by the forward pass, stops included, once it covers any time.
+    /// The whole ride's average smoothed speed (m/s), stops included, once it covers any time:
+    /// live, the window's part changes as smoothing re-runs, so a tunnel's is corrected by the fix after it.
     pub fn average_speed_mps(&self) -> Option<f64> {
-        let first = self.first_sample_ns?;
-        let (last, _) = self.last_sample?;
-        (last > first).then(|| self.distance_m / ((last - first) as f64 * 1e-9))
+        let mut distance = self.frozen_distance;
+        if self.window_ns.is_none() {
+            self.smooth_window().iter().for_each(|s| distance.add(s));
+        } else {
+            self.recent.iter().for_each(|s| distance.add(s));
+        }
+        distance.average_mps()
     }
 
     /// Smoothed speeds at every fix and sample time so far: those frozen as they left the window, then the
@@ -520,6 +514,35 @@ impl Fusion {
         }
         out.reverse();
         out
+    }
+}
+
+/// Distance (m) along smoothed speeds, trapezoidally between their times; values out of time order are skipped.
+#[derive(Clone, Copy, Debug, Default)]
+struct Distance {
+    meters: f64,
+    first_ns: Option<i64>,
+    last: Option<(i64, f64)>,
+}
+
+impl Distance {
+    fn add(&mut self, s: &SmoothedSpeed) {
+        let t = s.elapsed_realtime_ns;
+        let v = s.speed_mps.max(0.0);
+        match self.last {
+            Some((last_t, _)) if t <= last_t => return,
+            Some((last_t, last_v)) => {
+                self.meters += (last_v + v) / 2.0 * (t - last_t) as f64 * 1e-9
+            }
+            None => self.first_ns = Some(t),
+        }
+        self.last = Some((t, v));
+    }
+
+    fn average_mps(&self) -> Option<f64> {
+        let first = self.first_ns?;
+        let (last, _) = self.last?;
+        (last > first).then(|| self.meters / ((last - first) as f64 * 1e-9))
     }
 }
 
