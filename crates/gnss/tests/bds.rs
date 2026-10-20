@@ -272,3 +272,29 @@ fn bch_catches_single_bit_errors() {
         }
     }
 }
+
+/// Through the navigator, as the app feeds it: D1 for a medium-orbit satellite, D2 for a geostationary one.
+#[test]
+fn navigator_decodes_beidou_messages() {
+    use ride_gnss::bds::{TYPE_BDS_D1, TYPE_BDS_D2};
+    use ride_gnss::solve::Navigator;
+    use ride_session::proto::GnssNavigationMessage;
+
+    let ephs = beidou();
+    let meo = ephs.iter().find(|e| !is_geo(e.sat.svid)).unwrap();
+    let geo = ephs.iter().find(|e| is_geo(e.sat.svid)).unwrap();
+    let mut nav = Navigator::default();
+    for (e, r#type) in [(meo, TYPE_BDS_D1), (geo, TYPE_BDS_D2)] {
+        for sf in encode(e, (e.toe as u64).saturating_sub(1800)) {
+            nav.on_navigation_message(&GnssNavigationMessage {
+                svid: i32::from(e.sat.svid),
+                r#type,
+                data: android_bytes(&sf, true, false),
+                ..Default::default()
+            });
+        }
+    }
+    let d = &nav.stats.decoding[&System::Beidou];
+    assert_eq!((d.ok, d.bad, d.ephemerides), (13, 0, 2));
+    assert_eq!(nav.beidou_interleaved(), Some(true));
+}

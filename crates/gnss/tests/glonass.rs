@@ -180,3 +180,37 @@ fn hamming_catches_single_bit_errors() {
     }
     assert_eq!(decode_string(&s[..10]), Err(GlonassError::TooShort));
 }
+
+/// Through the navigator, as the app feeds it: strings that arrive before any clock wait for one to date them.
+#[test]
+fn navigator_dates_strings_from_the_first_clock() {
+    use ride_gnss::glonass::TYPE_GLO_L1CA;
+    use ride_gnss::solve::Navigator;
+    use ride_gnss::system::System;
+    use ride_session::proto::{GnssClock, GnssMeasurementsEvent, GnssNavigationMessage};
+
+    let e = &glonass()[0];
+    let mut nav = Navigator::default();
+    for s in encode(e) {
+        nav.on_navigation_message(&GnssNavigationMessage {
+            svid: i32::from(e.sat.svid),
+            r#type: TYPE_GLO_L1CA,
+            data: s,
+            ..Default::default()
+        });
+    }
+    assert_eq!(nav.stats.decoding[&System::Glonass].ephemerides, 0);
+    let rx_ns = ((f64::from(e.week) * WEEK_S + e.tb) * 1e9) as i64;
+    let time_nanos = 1_000_000_000_000;
+    let _ = nav.on_measurements(&GnssMeasurementsEvent {
+        clock: Some(GnssClock {
+            time_nanos,
+            full_bias_nanos: Some(time_nanos - rx_ns),
+            leap_second: Some(LEAP_SECONDS),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let d = &nav.stats.decoding[&System::Glonass];
+    assert_eq!((d.ok, d.bad, d.ephemerides), (4, 0, 1));
+}

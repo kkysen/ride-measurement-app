@@ -122,6 +122,15 @@ pub enum NoSolution {
     Singular,
 }
 
+/// One constellation's navigation messages: how many passed their checks, how many failed,
+/// and how many ephemerides they gave.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Decoding {
+    pub ok: u64,
+    pub bad: u64,
+    pub ephemerides: u64,
+}
+
 /// Counters for diagnostics (`ride gnss`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
@@ -130,6 +139,8 @@ pub struct Stats {
     pub ephemerides: u64,
     /// Of those, how many came from the phone's navigation messages.
     pub ephemerides_decoded: u64,
+    /// Navigation messages and the ephemerides decoded from them, per constellation.
+    pub decoding: BTreeMap<System, Decoding>,
     pub epochs: u64,
     /// Epochs with a position, a velocity, or both.
     pub epochs_solved: u64,
@@ -175,12 +186,14 @@ impl Navigator {
     }
 
     fn add(&mut self, eph: Ephemeris, decoded: bool) {
+        let system = eph.sat().system;
         let list = self.ephemerides.entry(eph.sat()).or_default();
         if !list.iter().any(|(e, d)| *d == decoded && e.same_as(&eph)) {
             list.push((eph, decoded));
             self.stats.ephemerides += 1;
             if decoded {
                 self.stats.ephemerides_decoded += 1;
+                self.stats.decoding.entry(system).or_default().ephemerides += 1;
             }
         }
     }
@@ -196,19 +209,19 @@ impl Navigator {
             TYPE_GAL_I => {
                 match inav::decode_page(&msg.data) {
                     Ok(word) => {
-                        self.stats.subframes_ok += 1;
+                        self.count(System::Galileo, true);
                         if let Some(eph) = self.galileo.add(svid, word) {
                             self.add_decoded(eph);
                         }
                     }
-                    Err(_) => self.stats.subframes_bad += 1,
+                    Err(_) => self.count(System::Galileo, false),
                 }
                 return;
             }
             glonass::TYPE_GLO_L1CA => {
                 match glonass::decode_string(&msg.data) {
                     Ok(s) => {
-                        self.stats.subframes_ok += 1;
+                        self.count(System::Glonass, true);
                         match self.clock_gps_s {
                             Some((t, leap)) => {
                                 if let Some(eph) = self.glonass.add(svid, s, t, leap) {
@@ -221,14 +234,14 @@ impl Navigator {
                             None => {}
                         }
                     }
-                    Err(_) => self.stats.subframes_bad += 1,
+                    Err(_) => self.count(System::Glonass, false),
                 }
                 return;
             }
             bds::TYPE_BDS_D1 | bds::TYPE_BDS_D2 => {
                 match bds::decode_subframe(&msg.data, &mut self.beidou_interleaved) {
                     Ok(sf) => {
-                        self.stats.subframes_ok += 1;
+                        self.count(System::Beidou, true);
                         let eph = if msg.r#type == bds::TYPE_BDS_D1 {
                             self.beidou.add_d1(svid, sf)
                         } else {
@@ -238,7 +251,7 @@ impl Navigator {
                             self.add_decoded(eph);
                         }
                     }
-                    Err(_) => self.stats.subframes_bad += 1,
+                    Err(_) => self.count(System::Beidou, false),
                 }
                 return;
             }
@@ -247,7 +260,7 @@ impl Navigator {
         let sat = SatId { system, svid };
         match decode_subframe(&msg.data) {
             Ok(sf) => {
-                self.stats.subframes_ok += 1;
+                self.count(system, true);
                 match self.week {
                     Some(week) => {
                         if let Some(eph) = self.assembler.add(sat, sf, week) {
@@ -258,8 +271,25 @@ impl Navigator {
                     None => {}
                 }
             }
-            Err(_) => self.stats.subframes_bad += 1,
+            Err(_) => self.count(system, false),
         }
+    }
+
+    /// Counts a navigation message that passed or failed its checks.
+    fn count(&mut self, system: System, ok: bool) {
+        let d = self.stats.decoding.entry(system).or_default();
+        if ok {
+            self.stats.subframes_ok += 1;
+            d.ok += 1;
+        } else {
+            self.stats.subframes_bad += 1;
+            d.bad += 1;
+        }
+    }
+
+    /// Whether Android delivers BeiDou words interleaved, once a subframe has settled it.
+    pub fn beidou_interleaved(&self) -> Option<bool> {
+        self.beidou_interleaved
     }
 
     /// A position near the receiver (e.g. the phone's last fix), used until a pseudorange solution exists.

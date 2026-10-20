@@ -124,6 +124,25 @@ pub fn gnss(session: &Session, decoded_only: bool) -> anyhow::Result<()> {
         "navigation subframes: {} passed parity, {} failed; {} ephemerides ({} decoded from them)",
         s.subframes_ok, s.subframes_bad, s.ephemerides, s.ephemerides_decoded
     );
+    for (system, d) in &s.decoding {
+        println!(
+            "  {}: {} messages passed their checks, {} failed; {} ephemerides decoded",
+            system.name(),
+            d.ok,
+            d.bad,
+            d.ephemerides
+        );
+    }
+    if s.decoding.contains_key(&System::Beidou) {
+        println!(
+            "  BeiDou words arrive {}",
+            match nav.beidou_interleaved() {
+                Some(true) => "interleaved, as transmitted",
+                Some(false) => "de-interleaved",
+                None => "either way so far (no subframe has settled which)",
+            }
+        );
+    }
     println!(
         "epochs: {} of {} solved: {} with a position, {} with a velocity ({} from an earlier position)",
         s.epochs_solved,
