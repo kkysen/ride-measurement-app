@@ -302,6 +302,9 @@ message ManualEvent {
     KIND_DOORS_OPEN = 5;
     // Tapped once the doors have finished closing: the train leaves a few seconds after.
     KIND_DOORS_CLOSED = 6;
+    // Tapped the moment the train comes to a stop, and the moment it starts moving again.
+    KIND_TRAIN_STOPPED = 7;
+    KIND_TRAIN_STARTED = 8;
   }
   Kind kind = 1;
   string text = 2;

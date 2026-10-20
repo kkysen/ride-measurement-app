@@ -109,6 +109,18 @@ class MainActivity : ComponentActivity() {
             }
             Text("You got on or off a train.", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { add(ManualEvent.Kind.KIND_TRAIN_STOPPED, "train stopped") }, Modifier.weight(1f)) {
+                    Text("Train stopped")
+                }
+                Button(onClick = { add(ManualEvent.Kind.KIND_TRAIN_STARTED, "train started") }, Modifier.weight(1f)) {
+                    Text("Train started")
+                }
+            }
+            Text(
+                "The moment the train comes to a stop, and the moment it starts moving again, anywhere, not just at stations.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { add(ManualEvent.Kind.KIND_DOORS_OPEN, "doors opening") }, Modifier.weight(1f)) { Text("Doors opening") }
                 Button(onClick = { add(ManualEvent.Kind.KIND_DOORS_CLOSED, "doors closed") }, Modifier.weight(1f)) { Text("Doors closed") }
             }
