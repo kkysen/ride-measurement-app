@@ -10,7 +10,7 @@ use ride_session::proto::{
     GnssClock, GnssMeasurement, GnssMeasurementsEvent, GnssNavigationMessage,
 };
 
-use crate::ephemeris::{C, KeplerEphemeris, OMEGA_E, SECONDS_PER_WEEK, SatState};
+use crate::ephemeris::{C, Ephemeris, OMEGA_E, SECONDS_PER_WEEK, SatState};
 use crate::lnav::{EphemerisAssembler, TYPE_GPS_L1CA, decode_subframe};
 use crate::system::{DEFAULT_LEAP_SECONDS, NANOS_PER_WEEK, SatId, System};
 
@@ -100,7 +100,7 @@ pub struct Stats {
 #[derive(Default)]
 pub struct Navigator {
     assembler: EphemerisAssembler,
-    ephemerides: BTreeMap<SatId, Vec<KeplerEphemeris>>,
+    ephemerides: BTreeMap<SatId, Vec<Ephemeris>>,
     /// Full GPS week from the latest clock, to resolve navigation messages' 10-bit weeks.
     week: Option<u32>,
     /// Subframes that arrived before any clock.
@@ -111,12 +111,10 @@ pub struct Navigator {
 
 impl Navigator {
     /// Adds an ephemeris from elsewhere (e.g. a downloaded broadcast ephemeris file).
-    pub fn add_ephemeris(&mut self, eph: KeplerEphemeris) {
-        let list = self.ephemerides.entry(eph.sat).or_default();
-        if !list
-            .iter()
-            .any(|e| e.week == eph.week && e.toe == eph.toe && e.iode == eph.iode)
-        {
+    pub fn add_ephemeris(&mut self, eph: impl Into<Ephemeris>) {
+        let eph = eph.into();
+        let list = self.ephemerides.entry(eph.sat()).or_default();
+        if !list.iter().any(|e| e.same_as(&eph)) {
             list.push(eph);
             self.stats.ephemerides += 1;
         }
@@ -217,6 +215,10 @@ impl Navigator {
             let Ok(svid) = u8::try_from(m.svid) else {
                 continue;
             };
+            // GLONASS reports its frequency channel (93 to 106) instead when it doesn't know the slot.
+            if system == System::Glonass && svid > 27 {
+                continue;
+            }
             let id = SatId { system, svid };
             // Receive time as the system counts it (ns, with sub-ns parts kept as f64),
             // less the transmit time in the satellite's clock, wrapped into the system's week (or day).
@@ -243,7 +245,7 @@ impl Navigator {
             let sat = Sat {
                 system,
                 state,
-                pseudorange: travel_ns * 1e-9 * C + C * (state.clock_bias - eph.tgd),
+                pseudorange: travel_ns * 1e-9 * C + C * (state.clock_bias - eph.tgd()),
                 pseudorange_sigma: (m.received_sv_time_uncertainty_nanos as f64 * 1e-9 * C)
                     .max(MIN_PSEUDORANGE_SIGMA),
                 prr: m.pseudorange_rate_meters_per_second + C * state.clock_drift,
@@ -260,14 +262,14 @@ impl Navigator {
     }
 
     /// The ephemeris for `id` valid at `t` (GPS seconds of `week`) with the closest `toe`.
-    fn ephemeris(&self, id: SatId, week: u32, t: f64) -> Option<&KeplerEphemeris> {
+    fn ephemeris(&self, id: SatId, week: u32, t: f64) -> Option<&Ephemeris> {
         let at = f64::from(week) * SECONDS_PER_WEEK + t;
         self.ephemerides
             .get(&id)?
             .iter()
-            .filter(|e| e.sv_health == 0)
+            .filter(|e| e.healthy())
             .map(|e| (e, (at - e.toe_gps_seconds()).abs()))
-            .filter(|&(_, d)| d <= 4.0 * 3600.0)
+            .filter(|&(e, d)| d <= e.valid_for())
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(e, _)| e)
     }

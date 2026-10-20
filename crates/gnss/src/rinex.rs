@@ -1,8 +1,8 @@
 //! Broadcast ephemerides from RINEX navigation files (version 2 for GPS, version 3 for any constellation),
 //! e.g. the IGS daily merged `BRDM00DLR_S_*_MN.rnx`, to solve without navigation messages from the phone.
 
-use crate::ephemeris::KeplerEphemeris;
-use crate::system::{SatId, System};
+use crate::ephemeris::{Ephemeris, GlonassEphemeris, KeplerEphemeris, SECONDS_PER_WEEK};
+use crate::system::{DEFAULT_LEAP_SECONDS, SatId, System};
 
 /// Galileo `Data sources` bit 9: the clock is for E5b and E1, as I/NAV (the E1 navigation message) broadcasts.
 const GALILEO_INAV_CLOCK: u32 = 1 << 9;
@@ -11,15 +11,27 @@ const GALILEO_E1B_HEALTH: u8 = 0b111;
 /// Android numbers QZSS satellites from 193; RINEX from 1.
 const QZSS_FIRST_SVID: u8 = 193;
 
-/// Every Keplerian ephemeris in a RINEX navigation file (GPS, QZSS, Galileo I/NAV, BeiDou).
+/// GLONASS slots are 1 to 24, with a few more for spares.
+const GLONASS_MAX_SLOT: u8 = 27;
+
+/// Every ephemeris in a RINEX navigation file (GPS, QZSS, Galileo I/NAV, BeiDou, GLONASS).
 /// Records of other constellations, and ones that don't parse, are skipped.
-pub fn read_nav(text: &str) -> Vec<KeplerEphemeris> {
+pub fn read_nav(text: &str) -> Vec<Ephemeris> {
     let version: f64 = text
         .lines()
         .next()
         .and_then(|l| l.get(..9))
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(0.0);
+    let leap_seconds = text
+        .lines()
+        .take_while(|l| !l.contains("END OF HEADER"))
+        .find(|l| {
+            l.get(60..)
+                .is_some_and(|label| label.starts_with("LEAP SECONDS"))
+        })
+        .and_then(|l| l.get(..6)?.trim().parse().ok())
+        .unwrap_or(DEFAULT_LEAP_SECONDS);
     let body: Vec<&str> = text
         .lines()
         .skip_while(|l| !l.contains("END OF HEADER"))
@@ -40,9 +52,9 @@ pub fn read_nav(text: &str) -> Vec<KeplerEphemeris> {
         .iter()
         .filter_map(|r| {
             if version >= 3.0 {
-                record_v3(r)
+                record_v3(r, leap_seconds)
             } else {
-                record_v2(r)
+                record_v2(r).map(Ephemeris::from)
             }
         })
         .collect()
@@ -76,18 +88,33 @@ fn values(lines: &[&str], first_column: usize, indent: usize) -> Option<Vec<f64>
 }
 
 /// Seconds into the week (from Sunday 00:00, as GPS and BeiDou weeks start) of a calendar date and time.
+#[cfg(test)]
 fn seconds_of_week(year: i64, month: i64, day: i64, h: i64, m: i64, s: f64) -> f64 {
+    week_and_seconds(year, month, day, h, m, s).1
+}
+
+/// The week since 1980-01-06 (GPS's week 0) and seconds into it of a calendar date and time.
+fn week_and_seconds(year: i64, month: i64, day: i64, h: i64, m: i64, s: f64) -> (i64, f64) {
     // Days since 1970-01-01 (Howard Hinnant's days_from_civil); 1970-01-04 was a Sunday.
     let y = if month <= 2 { year - 1 } else { year };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
     let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    (days - 3).rem_euclid(7) as f64 * 86_400.0 + (h * 3600 + m * 60) as f64 + s
+    // 1980-01-06 is day 3657.
+    let days = era * 146_097 + doe - 719_468 - 3657;
+    (
+        days.div_euclid(7),
+        days.rem_euclid(7) as f64 * 86_400.0 + (h * 3600 + m * 60) as f64 + s,
+    )
 }
 
 fn epoch(fields: &str) -> Option<f64> {
+    Some(epoch_week(fields)?.1)
+}
+
+/// A record's epoch as a week since 1980-01-06 and seconds into it.
+fn epoch_week(fields: &str) -> Option<(i64, f64)> {
     let p: Vec<&str> = fields.split_whitespace().collect();
     if p.len() < 6 {
         return None;
@@ -97,7 +124,7 @@ fn epoch(fields: &str) -> Option<f64> {
         year += if year >= 80 { 1900 } else { 2000 };
     }
     let i = |k: usize| p[k].parse::<i64>().ok();
-    Some(seconds_of_week(
+    Some(week_and_seconds(
         year,
         i(1)?,
         i(2)?,
@@ -121,9 +148,10 @@ fn record_v2(lines: &[&str]) -> Option<KeplerEphemeris> {
     )
 }
 
-fn record_v3(lines: &[&str]) -> Option<KeplerEphemeris> {
+fn record_v3(lines: &[&str], leap_seconds: i32) -> Option<Ephemeris> {
     let first = lines.first()?;
     let system = match first.get(..1)? {
+        "R" => return glonass(lines, leap_seconds).map(Ephemeris::from),
         "G" => System::Gps,
         "J" => System::Qzss,
         "E" => System::Galileo,
@@ -136,7 +164,39 @@ fn record_v3(lines: &[&str]) -> Option<KeplerEphemeris> {
         _ => number,
     };
     let toc = epoch(first.get(3..23)?)?;
-    kepler(SatId { system, svid }, toc, &values(lines, 23, 4)?)
+    kepler(SatId { system, svid }, toc, &values(lines, 23, 4)?).map(Ephemeris::from)
+}
+
+/// A GLONASS record (RINEX 3.04 table A10): its epoch is `tb` in UTC; positions are in km.
+fn glonass(lines: &[&str], leap_seconds: i32) -> Option<GlonassEphemeris> {
+    let first = lines.first()?;
+    let slot: u8 = first.get(1..3)?.trim().parse().ok()?;
+    if !(1..=GLONASS_MAX_SLOT).contains(&slot) || lines.len() < 4 {
+        return None;
+    }
+    let (mut week, utc) = epoch_week(first.get(3..23)?)?;
+    let v = values(&lines[..4], 23, 4)?;
+    let mut tb = utc + f64::from(leap_seconds);
+    if tb >= SECONDS_PER_WEEK {
+        tb -= SECONDS_PER_WEEK;
+        week += 1;
+    }
+    let km = |k: usize| v[k] * 1000.0;
+    Some(GlonassEphemeris {
+        sat: SatId {
+            system: System::Glonass,
+            svid: slot,
+        },
+        frequency_channel: v[10] as i8,
+        healthy: v[6] == 0.0,
+        week: u32::try_from(week).ok()?,
+        tb,
+        clock_bias: v[0],
+        clock_rate: v[1],
+        position: [km(3), km(7), km(11)],
+        velocity: [km(4), km(8), km(12)],
+        acceleration: [km(5), km(9), km(13)],
+    })
 }
 
 /// The broadcast orbit fields, in the order every Keplerian record has them (RINEX 3.04 table A6 and on).

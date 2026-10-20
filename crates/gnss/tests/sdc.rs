@@ -125,10 +125,11 @@ fn drive_with_ground_truth() {
     );
     let events = raw_epochs(&log);
     use System::*;
-    let sets: [&[System]; 4] = [
+    let sets: [&[System]; 5] = [
         &[Gps],
         &[Gps, Galileo],
         &[Gps, Beidou],
+        &[Gps, Glonass],
         &[Gps, Glonass, Qzss, Beidou, Galileo],
     ];
     println!("{} epochs, {} with ground truth", events.len(), truth.len());
@@ -152,10 +153,10 @@ fn drive_with_ground_truth() {
         results.push(r);
     }
 
-    // Measured on this drive (GPS alone: 6.4 m and 0.092 m/s at the median), with some margin.
+    // Measured on this drive (GPS alone: 4.3 m and 0.092 m/s at the median), with some margin.
     let gps = &results[0];
     assert!(gps.solved * 10 >= events.len() * 9);
-    assert!(gps.horizontal_median < 8.0 && gps.velocity_median < 0.12);
+    assert!(gps.horizontal_median < 5.5 && gps.velocity_median < 0.11);
     for (set, r) in sets.iter().zip(&results).skip(1) {
         // Each constellation adds satellites and makes nothing worse.
         assert!(r.solved >= gps.solved, "{set:?}");
@@ -171,5 +172,5 @@ fn drive_with_ground_truth() {
         assert!(r.velocity_median <= gps.velocity_median + 0.005, "{set:?}");
     }
     let all = results.last().unwrap();
-    assert!(all.horizontal_median < 6.0 && all.velocity_median < 0.09);
+    assert!(all.horizontal_median < 4.0 && all.velocity_median < 0.08);
 }

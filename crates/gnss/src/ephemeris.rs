@@ -206,3 +206,174 @@ impl KeplerEphemeris {
         }
     }
 }
+
+/// PZ-90 gravitational constant (m^3/s^2), equatorial radius (m), second zonal harmonic, and earth rotation
+/// rate (rad/s), as the GLONASS ICD gives them for orbit integration.
+const MU_GLONASS: f64 = 3.986_004_4e14;
+const A_E_GLONASS: f64 = 6_378_136.0;
+const J2_GLONASS: f64 = 1.082_625_7e-3;
+const OMEGA_E_GLONASS: f64 = 7.292_115e-5;
+/// Integration step (s): RK4's error at this step is far below a millimeter over 15 minutes.
+const GLONASS_STEP: f64 = 30.0;
+/// A GLONASS ephemeris is broadcast every 30 minutes and good for 15 minutes either side; allow a little more.
+const GLONASS_VALID_S: f64 = 20.0 * 60.0;
+
+/// One GLONASS satellite's broadcast state and clock: position, velocity, and the moon's and sun's acceleration
+/// in PZ-90 (taken as WGS 84, within centimeters) at `tb`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlonassEphemeris {
+    pub sat: SatId,
+    /// Frequency channel, -7 to 6.
+    pub frequency_channel: i8,
+    pub healthy: bool,
+    /// GPS week and seconds of week of the reference time `tb`.
+    pub week: u32,
+    pub tb: f64,
+    /// Clock offset at `tb` (s, RINEX's -TauN) and its relative rate (GammaN).
+    pub clock_bias: f64,
+    pub clock_rate: f64,
+    pub position: [f64; 3],
+    pub velocity: [f64; 3],
+    pub acceleration: [f64; 3],
+}
+
+impl GlonassEphemeris {
+    fn derivative(&self, s: &[f64; 6]) -> [f64; 6] {
+        let [x, y, z, vx, vy, vz] = *s;
+        let r2 = x * x + y * y + z * z;
+        let r = r2.sqrt();
+        let mu_r3 = MU_GLONASS / (r2 * r);
+        let j = 1.5 * J2_GLONASS * MU_GLONASS * A_E_GLONASS * A_E_GLONASS / (r2 * r2 * r);
+        let z2 = 5.0 * z * z / r2;
+        let w2 = OMEGA_E_GLONASS * OMEGA_E_GLONASS;
+        let a = self.acceleration;
+        [
+            vx,
+            vy,
+            vz,
+            -mu_r3 * x - j * x * (1.0 - z2) + w2 * x + 2.0 * OMEGA_E_GLONASS * vy + a[0],
+            -mu_r3 * y - j * y * (1.0 - z2) + w2 * y - 2.0 * OMEGA_E_GLONASS * vx + a[1],
+            -mu_r3 * z - j * z * (3.0 - z2) + a[2],
+        ]
+    }
+
+    /// Position and velocity at `dt` seconds from `tb`, by fourth-order Runge-Kutta.
+    fn integrate(&self, dt: f64) -> [f64; 6] {
+        let mut s = [
+            self.position[0],
+            self.position[1],
+            self.position[2],
+            self.velocity[0],
+            self.velocity[1],
+            self.velocity[2],
+        ];
+        let steps = (dt.abs() / GLONASS_STEP).ceil().max(1.0);
+        let h = dt / steps;
+        let add = |s: &[f64; 6], k: &[f64; 6], f: f64| -> [f64; 6] {
+            std::array::from_fn(|i| s[i] + f * k[i])
+        };
+        for _ in 0..steps as usize {
+            let k1 = self.derivative(&s);
+            let k2 = self.derivative(&add(&s, &k1, h / 2.0));
+            let k3 = self.derivative(&add(&s, &k2, h / 2.0));
+            let k4 = self.derivative(&add(&s, &k3, h));
+            s = std::array::from_fn(|i| {
+                s[i] + h / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i])
+            });
+        }
+        s
+    }
+
+    pub fn toe_gps_seconds(&self) -> f64 {
+        f64::from(self.week) * SECONDS_PER_WEEK + self.tb
+    }
+
+    /// The satellite's state at GPS seconds-of-week `t` (a transmit time, in GPS time).
+    pub fn state_at(&self, t: f64) -> SatState {
+        let dt = week_diff(t, self.tb);
+        let s = self.integrate(dt);
+        SatState {
+            position: [s[0], s[1], s[2]],
+            velocity: [s[3], s[4], s[5]],
+            clock_bias: self.clock_bias + self.clock_rate * dt,
+            clock_drift: self.clock_rate,
+        }
+    }
+}
+
+/// A broadcast ephemeris of either kind.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Ephemeris {
+    Kepler(KeplerEphemeris),
+    Glonass(GlonassEphemeris),
+}
+
+impl From<KeplerEphemeris> for Ephemeris {
+    fn from(e: KeplerEphemeris) -> Self {
+        Self::Kepler(e)
+    }
+}
+
+impl From<GlonassEphemeris> for Ephemeris {
+    fn from(e: GlonassEphemeris) -> Self {
+        Self::Glonass(e)
+    }
+}
+
+impl Ephemeris {
+    pub fn sat(&self) -> SatId {
+        match self {
+            Self::Kepler(e) => e.sat,
+            Self::Glonass(e) => e.sat,
+        }
+    }
+
+    pub fn healthy(&self) -> bool {
+        match self {
+            Self::Kepler(e) => e.sv_health == 0,
+            Self::Glonass(e) => e.healthy,
+        }
+    }
+
+    /// The reference time, as GPS seconds since the GPS epoch.
+    pub fn toe_gps_seconds(&self) -> f64 {
+        match self {
+            Self::Kepler(e) => e.toe_gps_seconds(),
+            Self::Glonass(e) => e.toe_gps_seconds(),
+        }
+    }
+
+    /// How far from the reference time the ephemeris may be used (s).
+    pub fn valid_for(&self) -> f64 {
+        match self {
+            Self::Kepler(_) => 4.0 * 3600.0,
+            Self::Glonass(_) => GLONASS_VALID_S,
+        }
+    }
+
+    /// Group delay (s) of the L1-band signal; GLONASS's clock already refers to L1.
+    pub fn tgd(&self) -> f64 {
+        match self {
+            Self::Kepler(e) => e.tgd,
+            Self::Glonass(_) => 0.0,
+        }
+    }
+
+    pub fn state_at(&self, t: f64) -> SatState {
+        match self {
+            Self::Kepler(e) => e.state_at(t),
+            Self::Glonass(e) => e.state_at(t),
+        }
+    }
+
+    /// Whether two ephemerides are the same broadcast (repeated in a file or by several messages).
+    pub fn same_as(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Kepler(a), Self::Kepler(b)) => {
+                a.week == b.week && a.toe == b.toe && a.iode == b.iode
+            }
+            (Self::Glonass(a), Self::Glonass(b)) => a.week == b.week && a.tb == b.tb,
+            _ => false,
+        }
+    }
+}

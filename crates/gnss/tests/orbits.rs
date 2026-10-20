@@ -50,7 +50,7 @@ fn broadcast_orbits_match_precise_orbits() {
     // 00:00 on Thursday, in GPS seconds of week.
     let t0 = 4.0 * 86_400.0;
     for eph in &ephemerides {
-        let sp3 = &precise[&eph.sat.svid];
+        let sp3 = &precise[&eph.sat().svid];
         assert_eq!(sp3.len(), 9);
         for (k, p) in sp3.iter().enumerate() {
             let s = eph.state_at(t0 + 900.0 * k as f64);
@@ -58,17 +58,17 @@ fn broadcast_orbits_match_precise_orbits() {
             // Broadcast orbits are good to a few meters, and they're for the antenna phase center
             // while SP3 is the center of mass (1 to 2.5 m apart on these satellite blocks); 0.1 to 6.7 m here.
             // A math error would be kilometers off.
-            assert!(err < 8.0, "{} at {} min: {err:.2} m", eph.sat, 15 * k);
+            assert!(err < 8.0, "{} at {} min: {err:.2} m", eph.sat(), 15 * k);
         }
         // Velocity at 01:00 against the derivative of the precise orbit there.
         let v = eph.state_at(t0 + 3600.0).velocity;
         let v_ref = lagrange_derivative_at_middle(sp3, 900.0);
         let err = norm(std::array::from_fn(|c| v[c] - v_ref[c]));
-        assert!(err < 0.01, "{} velocity off by {err:.4} m/s", eph.sat);
+        assert!(err < 0.01, "{} velocity off by {err:.4} m/s", eph.sat());
         assert!(
             (2_000.0..4_500.0).contains(&norm(v)),
             "G{:02} speed {}",
-            eph.sat,
+            eph.sat(),
             norm(v)
         );
     }
