@@ -2,6 +2,7 @@
 
 use ride_gnss::ephemeris::{C, Ephemeris, OMEGA_E};
 use ride_gnss::solve::{Navigator, geodetic_to_ecef};
+use ride_gnss::system::System;
 use ride_session::proto::{GnssClock, GnssMeasurement, GnssMeasurementsEvent};
 
 const WEEK: i64 = 1590;
@@ -38,12 +39,25 @@ fn measurements(
     drift: f64,
     up: [f64; 3],
 ) -> GnssMeasurementsEvent {
-    let rx_gps_ns = WEEK * 604_800_000_000_000 + (TOW * 1e9) as i64;
+    measurements_at(WEEK, TOW, ephs, rx, v, drift, up)
+}
+
+/// The same at GPS week `week`, seconds of week `tow`, for GPS and Galileo (whose times count like GPS's).
+fn measurements_at(
+    week: i64,
+    tow: f64,
+    ephs: &[Ephemeris],
+    rx: [f64; 3],
+    v: [f64; 3],
+    drift: f64,
+    up: [f64; 3],
+) -> GnssMeasurementsEvent {
+    let rx_gps_ns = week * 604_800_000_000_000 + (tow * 1e9) as i64;
     let time_nanos = 1_000_000_000_000;
     let mut ms = Vec::new();
     for e in ephs {
         // Solve the transmit time: the signal leaves at t_tx and arrives at TOW.
-        let mut t_tx = TOW - 0.075;
+        let mut t_tx = tow - 0.075;
         let mut state = e.state_at(t_tx);
         let mut pos = state.position;
         for _ in 0..5 {
@@ -55,7 +69,7 @@ fn measurements(
                 -th.sin() * state.position[0] + th.cos() * state.position[1],
                 state.position[2],
             ];
-            t_tx = TOW - norm(sub(pos, rx)) / C;
+            t_tx = tow - norm(sub(pos, rx)) / C;
         }
         let th = OMEGA_E * norm(sub(pos, rx)) / C;
         let vel = [
@@ -72,7 +86,10 @@ fn measurements(
         let prr = dot(sub(vel, v), los) + drift - C * state.clock_drift;
         ms.push(GnssMeasurement {
             svid: i32::from(e.sat().svid),
-            constellation_type: 1,
+            constellation_type: match e.sat().system {
+                System::Galileo => 6,
+                _ => 1,
+            },
             state: 0x1 | 0x8,
             received_sv_time_nanos: (t_sv * 1e9).round() as i64,
             cn0_dbhz: 40.0,
@@ -124,24 +141,25 @@ fn recovers_position_and_velocity() {
     let n = event.measurements.len();
     assert!(n >= 6, "only {n} satellites visible");
     let sol = nav.on_measurements(&event).unwrap();
+    let (pos, vel) = (sol.position.clone().unwrap(), sol.velocity.clone().unwrap());
     assert!(
-        norm(sub(sol.position, rx)) < 1.0,
+        norm(sub(pos.position, rx)) < 1.0,
         "position off by {} m",
-        norm(sub(sol.position, rx))
+        norm(sub(pos.position, rx))
     );
     assert!(
-        norm(sub(sol.velocity, v)) < 0.01,
+        norm(sub(vel.velocity, v)) < 0.01,
         "velocity off by {} m/s",
-        norm(sub(sol.velocity, v))
+        norm(sub(vel.velocity, v))
     );
-    assert!((sol.clock_drift - 50.0).abs() < 0.01);
-    assert!((sol.speed() - norm(v)).abs() < 0.01);
+    assert!((vel.clock_drift - 50.0).abs() < 0.01);
+    assert!((vel.speed() - norm(v)).abs() < 0.01);
     assert!(
-        sol.speed_sigma() > 0.0 && sol.speed_sigma() < 0.2,
+        vel.speed_sigma() > 0.0 && vel.speed_sigma() < 0.2,
         "sigma {}",
-        sol.speed_sigma()
+        vel.speed_sigma()
     );
-    assert_eq!((sol.satellites_used, sol.satellites_rejected), (n, 0));
+    assert_eq!((vel.satellites_used, vel.satellites_rejected), (n, 0));
     assert_eq!(sol.elapsed_realtime_ns, Some(123));
 }
 
@@ -153,11 +171,12 @@ fn rejects_a_bad_satellite() {
     // Multipath or a tracking glitch: one satellite's Doppler 3 m/s off.
     event.measurements[0].pseudorange_rate_meters_per_second += 3.0;
     let sol = nav.on_measurements(&event).unwrap();
-    assert_eq!((sol.satellites_used, sol.satellites_rejected), (n - 1, 1));
+    let vel = sol.velocity.clone().unwrap();
+    assert_eq!((vel.satellites_used, vel.satellites_rejected), (n - 1, 1));
     assert!(
-        norm(sub(sol.velocity, v)) < 0.01,
+        norm(sub(vel.velocity, v)) < 0.01,
         "velocity off by {} m/s",
-        norm(sub(sol.velocity, v))
+        norm(sub(vel.velocity, v))
     );
 }
 
@@ -168,26 +187,77 @@ fn survives_a_millisecond_pseudorange_error() {
     // A transmit time off by a whole millisecond (300 km), as an ambiguous measurement can be.
     event.measurements[0].received_sv_time_nanos += 1_000_000;
     let sol = nav.on_measurements(&event).unwrap();
+    let (pos, vel) = (sol.position.clone().unwrap(), sol.velocity.clone().unwrap());
     assert!(
-        norm(sub(sol.position, rx)) < 1.0,
+        norm(sub(pos.position, rx)) < 1.0,
         "position off by {} m",
-        norm(sub(sol.position, rx))
+        norm(sub(pos.position, rx))
     );
     assert!(
-        norm(sub(sol.velocity, v)) < 0.01,
+        norm(sub(vel.velocity, v)) < 0.01,
         "velocity off by {} m/s",
-        norm(sub(sol.velocity, v))
+        norm(sub(vel.velocity, v))
     );
-    assert!(
-        sol.position_residual_rms < 1.0,
-        "residual {}",
-        sol.position_residual_rms
-    );
+    assert!(pos.residual_rms < 1.0, "residual {}", pos.residual_rms);
 
     // Flagged as ambiguous, it isn't used at all.
     let mut event = measurements(&ephs, rx, v, 50.0, up);
     let n = event.measurements.len();
     event.measurements[0].state |= 0x10;
     let sol = nav.on_measurements(&event).unwrap();
-    assert_eq!(sol.satellites_used + sol.satellites_rejected, n - 1);
+    let vel = sol.velocity.clone().unwrap();
+    assert_eq!(vel.satellites_used + vel.satellites_rejected, n - 1);
+}
+
+/// Five satellites from two constellations: too few for position (3 coordinates, 2 clock biases, and one to
+/// check them), enough for velocity (3 components, 1 clock drift, and one to check), which uses the last
+/// position instead; even 500 m off, the directions to the satellites barely change.
+#[test]
+fn velocity_solves_when_position_cannot() {
+    // 2021-04-08 21:30 GPS time: GPS week 2152, Thursday.
+    let (week, tow) = (2152, 4.0 * 86_400.0 + 21.5 * 3600.0);
+    let ephs: Vec<Ephemeris> =
+        ride_gnss::rinex::read_nav(include_str!("data/BRDM00DLR_S_20210980000-21h.rnx"))
+            .into_iter()
+            .filter(|e| e.healthy() && matches!(e.sat().system, System::Gps | System::Galileo))
+            .collect();
+    let (lat, lon) = (40.75, -73.99);
+    let rx = geodetic_to_ecef(lat, lon, 10.0);
+    let [east, north, up] = enu(lat, lon);
+    let v = std::array::from_fn(|k| 15.0 * east[k] - 8.0 * north[k]);
+    let mut event = measurements_at(week, tow, &ephs, rx, v, 30.0, up);
+    // One measurement per satellite (the excerpt repeats Galileo ephemerides), then 1 GPS and 4 Galileo.
+    let mut seen = std::collections::BTreeSet::new();
+    event
+        .measurements
+        .retain(|m| seen.insert((m.constellation_type, m.svid)));
+    let mut gps = 0;
+    let mut galileo = 0;
+    event.measurements.retain(|m| {
+        let count = if m.constellation_type == 1 {
+            &mut gps
+        } else {
+            &mut galileo
+        };
+        *count += 1;
+        *count <= if m.constellation_type == 1 { 1 } else { 4 }
+    });
+    assert_eq!((gps.min(1), galileo.min(4)), (1, 4), "too few visible");
+
+    let mut nav = Navigator::default();
+    for e in &ephs {
+        nav.add_ephemeris(e.clone());
+    }
+    nav.set_approximate_position(std::array::from_fn(|k| rx[k] + 500.0 * east[k]));
+    let sol = nav.on_measurements(&event).unwrap();
+    assert!(sol.position.is_none());
+    let vel = sol.velocity.unwrap();
+    assert!(!vel.with_this_position);
+    assert!(
+        norm(sub(vel.velocity, v)) < 0.05,
+        "velocity off by {} m/s",
+        norm(sub(vel.velocity, v))
+    );
+    assert_eq!(nav.stats.positions_solved, 0);
+    assert_eq!(nav.stats.velocities_solved, 1);
 }

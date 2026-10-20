@@ -33,32 +33,48 @@ const OUTLIER_SIGMA: f64 = 4.0;
 /// Weaker signals than this are too noisy and multipath-prone to use.
 const MIN_CN0_DBHZ: f64 = 20.0;
 
-/// One epoch's solution.
+/// One epoch's solution: position and velocity, each solved on its own, so either can fail without the other.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Solution {
     /// The epoch on the elapsed realtime clock, if Android gave it.
     pub elapsed_realtime_ns: Option<i64>,
+    /// From this epoch's pseudoranges, if there were enough.
+    pub position: Option<PositionSolution>,
+    /// From this epoch's Doppler, if there were enough, with the directions to the satellites from this epoch's
+    /// position or else the latest one (meters or even kilometers off barely change them).
+    pub velocity: Option<VelocitySolution>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PositionSolution {
     /// ECEF (m).
     pub position: [f64; 3],
+    /// Receiver clock bias (m) against each constellation.
+    pub clock_biases: Vec<(System, f64)>,
+    pub satellites_used: usize,
+    /// Root mean square of the pseudorange residuals (m).
+    pub residual_rms: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VelocitySolution {
     /// ECEF (m/s).
     pub velocity: [f64; 3],
     /// Covariance of `velocity` (m^2/s^2), row-major.
     pub velocity_covariance: [f64; 9],
     /// Receiver clock drift (m/s).
     pub clock_drift: f64,
-    /// Receiver clock bias (m) against each constellation in the position solution.
-    pub clock_biases: Vec<(System, f64)>,
     pub satellites_used: usize,
     pub satellites_rejected: usize,
-    /// How many of the velocity solution's satellites each constellation gave.
+    /// How many of the satellites used each constellation gave.
     pub satellites_by_system: Vec<(System, usize)>,
     /// Root mean square of the Doppler residuals (m/s).
     pub residual_rms: f64,
-    /// Root mean square of the pseudorange residuals of the position solution (m).
-    pub position_residual_rms: f64,
+    /// Whether the directions to the satellites came from this epoch's own position.
+    pub with_this_position: bool,
 }
 
-impl Solution {
+impl VelocitySolution {
     pub fn speed(&self) -> f64 {
         norm(&self.velocity)
     }
@@ -96,7 +112,10 @@ pub struct Stats {
     pub subframes_bad: u64,
     pub ephemerides: u64,
     pub epochs: u64,
+    /// Epochs with a position, a velocity, or both.
     pub epochs_solved: u64,
+    pub positions_solved: u64,
+    pub velocities_solved: u64,
 }
 
 /// Keeps ephemerides from navigation messages and solves epochs of measurements.
@@ -190,19 +209,30 @@ impl Navigator {
             }
         }
         let sats = self.satellites(clock, &event.measurements, rx_gps_ns, week);
-        // One more than the unknowns, to check them: position, and a clock bias per constellation.
-        let needed = 4 + systems_of(&sats.iter().collect::<Vec<_>>()).len();
-        if sats.len() < needed {
+        // Position needs one more satellite than its unknowns (position, and a clock bias per constellation),
+        // velocity one more than its own (velocity and clock drift): each is tried whatever the other did.
+        let position = solve_position(&sats, self.last_position);
+        if let Some(p) = &position {
+            self.last_position = Some(p.position);
+            self.stats.positions_solved += 1;
+        }
+        let velocity = self.last_position.and_then(|at| {
+            let mut v = solve_velocity(&sats, at)?;
+            v.with_this_position = position.is_some();
+            Some(v)
+        });
+        if velocity.is_some() {
+            self.stats.velocities_solved += 1;
+        }
+        if position.is_none() && velocity.is_none() {
             return Err(NoSolution::TooFewSatellites { usable: sats.len() });
         }
-        let fix = solve_position(&sats, self.last_position).ok_or(NoSolution::Singular)?;
-        self.last_position = Some(fix.position);
-        let mut sol = solve_velocity(&sats, fix.position).ok_or(NoSolution::Singular)?;
-        sol.clock_biases = fix.clock_biases;
-        sol.position_residual_rms = fix.residual_rms;
-        sol.elapsed_realtime_ns = clock.elapsed_realtime_nanos;
         self.stats.epochs_solved += 1;
-        Ok(sol)
+        Ok(Solution {
+            elapsed_realtime_ns: clock.elapsed_realtime_nanos,
+            position,
+            velocity,
+        })
     }
 
     /// Usable measurements with their satellites' states, one per satellite (the strongest L1-band signal).
@@ -321,14 +351,6 @@ fn systems_of(sats: &[&Sat]) -> Vec<System> {
     systems
 }
 
-struct PositionSolution {
-    position: [f64; 3],
-    /// Receiver clock bias against each constellation (m).
-    clock_biases: Vec<(System, f64)>,
-    /// Root mean square of the pseudorange residuals (m).
-    residual_rms: f64,
-}
-
 /// Weighted least-squares position (and a clock bias per constellation) from pseudoranges, by Gauss-Newton from `start`
 /// or the earth's center, dropping the worst satellite while its residual is beyond [`POSITION_OUTLIER_M`]
 /// and a redundant one remains.
@@ -354,6 +376,7 @@ fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<PositionSolut
         return Some(PositionSolution {
             position: [x[0], x[1], x[2]],
             clock_biases: systems.into_iter().zip(x[3..].iter().copied()).collect(),
+            satellites_used: used.len(),
             residual_rms: rms,
         });
     }
@@ -404,7 +427,11 @@ fn gauss_newton_position(
 
 /// Weighted least-squares velocity and clock drift from Doppler, dropping the worst satellite while its residual
 /// is beyond [`OUTLIER_SIGMA`], as long as one more satellite than unknowns remains to check the rest.
-fn solve_velocity(sats: &[Sat], position: [f64; 3]) -> Option<Solution> {
+fn solve_velocity(sats: &[Sat], position: [f64; 3]) -> Option<VelocitySolution> {
+    // Velocity and clock drift, and one more to check them.
+    if sats.len() < 5 {
+        return None;
+    }
     let rows: Vec<(Vec<f64>, f64, f64)> = sats
         .iter()
         .map(|s| {
@@ -442,20 +469,17 @@ fn solve_velocity(sats: &[Sat], position: [f64; 3]) -> Option<Solution> {
             .zip(&subset)
             .map(|(n, (_, _, w))| n / w.sqrt())
             .collect();
-        return Some(Solution {
-            elapsed_realtime_ns: None,
-            position,
+        return Some(VelocitySolution {
             velocity: [x[0], x[1], x[2]],
             velocity_covariance: std::array::from_fn(|k| cov[(k / 3) * 4 + k % 3]),
             clock_drift: x[3],
-            clock_biases: Vec::new(),
             satellites_by_system: systems_of(&used.iter().map(|&i| &sats[i]).collect::<Vec<_>>())
                 .into_iter()
                 .map(|sys| (sys, used.iter().filter(|&&i| sats[i].system == sys).count()))
                 .collect(),
             satellites_used: used.len(),
             satellites_rejected: rows.len() - used.len(),
-            position_residual_rms: 0.0,
+            with_this_position: false,
             residual_rms: (residuals.iter().map(|r| r * r).sum::<f64>() / residuals.len() as f64)
                 .sqrt(),
         });

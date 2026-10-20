@@ -94,20 +94,26 @@ fn solve(
             continue;
         };
         let [east, north, _] = enu(t.ecef);
-        let d: [f64; 3] = std::array::from_fn(|k| sol.position[k] - t.ecef[k]);
-        horizontal.push(dot(d, east).hypot(dot(d, north)));
-        let v = [dot(sol.velocity, east), dot(sol.velocity, north)];
-        velocity.push((v[0] - t.velocity[0]).hypot(v[1] - t.velocity[1]));
-        satellites += sol.satellites_used;
+        if let Some(p) = &sol.position {
+            let d: [f64; 3] = std::array::from_fn(|k| p.position[k] - t.ecef[k]);
+            horizontal.push(dot(d, east).hypot(dot(d, north)));
+        }
+        if let Some(v) = &sol.velocity {
+            let en = [dot(v.velocity, east), dot(v.velocity, north)];
+            velocity.push((en[0] - t.velocity[0]).hypot(en[1] - t.velocity[1]));
+            satellites += v.satellites_used;
+        }
     }
-    let solved = horizontal.len();
+    // Epochs with both, at least: position and velocity solve independently.
+    let solved = horizontal.len().min(velocity.len());
+    let satellites = satellites as f64 / velocity.len() as f64;
     Result {
         solved,
         horizontal_median: percentile(horizontal.clone(), 0.5),
         horizontal_p95: percentile(horizontal, 0.95),
         velocity_median: percentile(velocity.clone(), 0.5),
         velocity_p95: percentile(velocity, 0.95),
-        satellites: satellites as f64 / solved as f64,
+        satellites,
     }
 }
 

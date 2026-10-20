@@ -12,15 +12,20 @@ use ride_session::track::GPS_PROVIDER;
 /// The phone's own fix values count as "at the same time" within this.
 const SAME_TIME_NS: i64 = 1_500_000_000;
 
-/// One solved epoch, with the phone's own fix at about the same time for comparison.
-struct Epoch {
+/// One epoch's velocity, with the phone's own speed at about the same time for comparison.
+struct Velocity {
     speed: f64,
-    doppler_residual_rms: f64,
-    pseudorange_residual_rms: f64,
+    residual_rms: f64,
     satellites: usize,
     by_system: Vec<(System, usize)>,
+    with_this_position: bool,
     phone_speed: Option<f32>,
-    /// Distance from the solved position to the phone's fix (m).
+}
+
+/// One epoch's position, with its distance from the phone's own fix at about the same time (m).
+struct Position {
+    residual_rms: f64,
+    satellites: usize,
     phone_distance: Option<f64>,
 }
 
@@ -51,7 +56,8 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
         nav.add_ephemeris(eph);
     }
     let mut no_solution = std::collections::BTreeMap::<String, u64>::new();
-    let mut solved: Vec<Epoch> = Vec::new();
+    let mut velocities: Vec<Velocity> = Vec::new();
+    let mut positions: Vec<Position> = Vec::new();
     let mut phone_speed: Option<(i64, f32)> = None;
     let mut phone_position: Option<(i64, [f64; 3])> = None;
     for r in &records {
@@ -73,20 +79,29 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
             Some(Payload::GnssMeasurements(m)) => match nav.on_measurements(m) {
                 Ok(sol) => {
                     let recent = |at: i64| (t - at).abs() < SAME_TIME_NS;
-                    solved.push(Epoch {
-                        speed: sol.speed(),
-                        doppler_residual_rms: sol.residual_rms,
-                        pseudorange_residual_rms: sol.position_residual_rms,
-                        satellites: sol.satellites_used,
-                        by_system: sol.satellites_by_system.clone(),
-                        phone_speed: phone_speed.filter(|(at, _)| recent(*at)).map(|(_, s)| s),
-                        phone_distance: phone_position.filter(|(at, _)| recent(*at)).map(
-                            |(_, p)| {
-                                let d: [f64; 3] = std::array::from_fn(|k| sol.position[k] - p[k]);
-                                (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
-                            },
-                        ),
-                    });
+                    if let Some(v) = &sol.velocity {
+                        velocities.push(Velocity {
+                            speed: v.speed(),
+                            residual_rms: v.residual_rms,
+                            satellites: v.satellites_used,
+                            by_system: v.satellites_by_system.clone(),
+                            with_this_position: v.with_this_position,
+                            phone_speed: phone_speed.filter(|(at, _)| recent(*at)).map(|(_, s)| s),
+                        });
+                    }
+                    if let Some(p) = &sol.position {
+                        positions.push(Position {
+                            residual_rms: p.residual_rms,
+                            satellites: p.satellites_used,
+                            phone_distance: phone_position.filter(|(at, _)| recent(*at)).map(
+                                |(_, fix)| {
+                                    let d: [f64; 3] =
+                                        std::array::from_fn(|k| p.position[k] - fix[k]);
+                                    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+                                },
+                            ),
+                        });
+                    }
                 }
                 Err(e) => {
                     let why = match e {
@@ -104,58 +119,68 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
         "navigation subframes: {} passed parity, {} failed; {} ephemerides",
         s.subframes_ok, s.subframes_bad, s.ephemerides
     );
-    println!("epochs: {} of {} solved", s.epochs_solved, s.epochs);
+    println!(
+        "epochs: {} of {} solved: {} with a position, {} with a velocity ({} from an earlier position)",
+        s.epochs_solved,
+        s.epochs,
+        s.positions_solved,
+        s.velocities_solved,
+        velocities.iter().filter(|v| !v.with_this_position).count()
+    );
     for (why, n) in &no_solution {
         println!("  {n} unsolved: {why}");
     }
-    if solved.is_empty() {
-        return Ok(());
-    }
     let median = |mut v: Vec<f64>| {
         v.sort_by(f64::total_cmp);
-        v[v.len() / 2]
+        v.get(v.len() / 2).copied().unwrap_or(f64::NAN)
     };
-    let all = |f: fn(&Epoch) -> f64| solved.iter().map(f).collect::<Vec<_>>();
+    if !positions.is_empty() {
+        println!(
+            "position: satellites median {}, pseudorange residual RMS median {:.1} m",
+            median(positions.iter().map(|p| p.satellites as f64).collect()),
+            median(positions.iter().map(|p| p.residual_rms).collect())
+        );
+        let distances: Vec<f64> = positions.iter().filter_map(|p| p.phone_distance).collect();
+        if !distances.is_empty() {
+            println!(
+                "own position from the phone's fix: median {:.1} m, max {:.1} m",
+                median(distances.clone()),
+                distances.iter().copied().fold(0.0, f64::max)
+            );
+        }
+    }
+    if velocities.is_empty() {
+        return Ok(());
+    }
     let mut per_system = BTreeMap::<System, Vec<f64>>::new();
-    for e in &solved {
-        for &(sys, n) in &e.by_system {
+    for v in &velocities {
+        for &(sys, n) in &v.by_system {
             per_system.entry(sys).or_default().push(n as f64);
         }
     }
     let per_system: Vec<String> = per_system
         .into_iter()
-        .map(|(sys, mut v)| {
+        .map(|(sys, mut n)| {
             // Epochs without the constellation count as none.
-            v.resize(solved.len(), 0.0);
-            format!("{} {}", sys.name(), median(v))
+            n.resize(velocities.len(), 0.0);
+            format!("{} {}", sys.name(), median(n))
         })
         .collect();
     println!(
-        "satellites used per constellation, median: {}",
-        per_system.join(", ")
+        "velocity: satellites median {} ({}), Doppler residual RMS median {:.3} m/s",
+        median(velocities.iter().map(|v| v.satellites as f64).collect()),
+        per_system.join(", "),
+        median(velocities.iter().map(|v| v.residual_rms).collect())
     );
-    println!(
-        "satellites used: median {}; residual RMS: Doppler median {:.3} m/s, pseudorange median {:.1} m",
-        median(all(|e| e.satellites as f64)),
-        median(all(|e| e.doppler_residual_rms)),
-        median(all(|e| e.pseudorange_residual_rms))
-    );
-    let distances: Vec<f64> = solved.iter().filter_map(|e| e.phone_distance).collect();
-    if !distances.is_empty() {
-        println!(
-            "own position from the phone's fix: median {:.1} m, max {:.1} m",
-            median(distances.clone()),
-            distances.iter().copied().fold(0.0, f64::max)
-        );
-    }
+    let speeds: Vec<f64> = velocities.iter().map(|v| v.speed).collect();
     println!(
         "own speed: median {:.2} m/s, max {:.2} m/s",
-        median(all(|e| e.speed)),
-        all(|e| e.speed).into_iter().fold(0.0, f64::max)
+        median(speeds.clone()),
+        speeds.iter().copied().fold(0.0, f64::max)
     );
-    let diffs: Vec<f64> = solved
+    let diffs: Vec<f64> = velocities
         .iter()
-        .filter_map(|e| e.phone_speed.map(|p| e.speed - f64::from(p)))
+        .filter_map(|v| v.phone_speed.map(|p| v.speed - f64::from(p)))
         .collect();
     if !diffs.is_empty() {
         println!(

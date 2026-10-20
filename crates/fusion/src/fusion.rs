@@ -189,7 +189,7 @@ impl Fusion {
         self.navigator.on_navigation_message(msg);
     }
 
-    /// Raw measurements received at `received_ns`; returns the velocity solution if there was one.
+    /// Raw measurements received at `received_ns`; returns the solution if there was one.
     pub fn on_gnss_measurements(
         &mut self,
         received_ns: i64,
@@ -197,10 +197,12 @@ impl Fusion {
     ) -> Option<Solution> {
         let sol = self.navigator.on_measurements(event).ok()?;
         let t = sol.elapsed_realtime_ns.unwrap_or(received_ns);
-        let (speed, sigma) = (sol.speed(), sol.speed_sigma());
-        self.estimator.on_gnss_speed(t, speed, sigma);
-        self.last_own_solution_ns = Some(t);
-        self.buffer(t, Input::Speed(speed, sigma));
+        if let Some(v) = &sol.velocity {
+            let (speed, sigma) = (v.speed(), v.speed_sigma());
+            self.estimator.on_gnss_speed(t, speed, sigma);
+            self.last_own_solution_ns = Some(t);
+            self.buffer(t, Input::Speed(speed, sigma));
+        }
         Some(sol)
     }
 

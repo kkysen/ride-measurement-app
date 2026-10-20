@@ -5,7 +5,7 @@
 mod common;
 
 use common::{dot, enu, raw_epochs};
-use ride_gnss::solve::{Navigator, geodetic_to_ecef};
+use ride_gnss::solve::{Navigator, PositionSolution, VelocitySolution, geodetic_to_ecef};
 
 const LOG: &str = include_str!("data/gnsslogger_2016_06_30_21_26_07.txt");
 
@@ -37,7 +37,10 @@ fn real_phone_at_rest() {
     let events = raw_epochs(LOG);
     let solutions: Vec<_> = events
         .iter()
-        .filter_map(|e| nav.on_measurements(e).ok())
+        .filter_map(|e| {
+            let s = nav.on_measurements(e).ok()?;
+            Some((s.position?, s.velocity?))
+        })
         .collect();
     assert!(
         solutions.len() * 10 >= events.len() * 9,
@@ -51,14 +54,14 @@ fn real_phone_at_rest() {
     // which we don't correct for (it delays the signals, so mostly up).
     let fix = phone_fix();
     let n = solutions.len() as f64;
-    let mean = |f: &dyn Fn(&ride_gnss::solve::Solution, usize) -> f64| -> [f64; 3] {
+    let mean = |f: &dyn Fn(&(PositionSolution, VelocitySolution), usize) -> f64| -> [f64; 3] {
         std::array::from_fn(|k| solutions.iter().map(|s| f(s, k)).sum::<f64>() / n)
     };
     let [east, north, up] = enu(fix);
-    let offset = mean(&|s, k| s.position[k] - fix[k]);
+    let offset = mean(&|s, k| s.0.position[k] - fix[k]);
     let horizontal = dot(offset, east).hypot(dot(offset, north));
     let vertical = dot(offset, up);
-    let velocity = mean(&|s, k| s.velocity[k]);
+    let velocity = mean(&|s, k| s.1.velocity[k]);
     let drift = dot(velocity, velocity).sqrt();
     println!(
         "mean offset {horizontal:.1} m horizontal, {vertical:.1} m up; mean velocity {drift:.3} m/s"
@@ -78,12 +81,12 @@ fn real_phone_at_rest() {
         .iter()
         .map(|s| {
             (0..3)
-                .map(|k| (s.position[k] - fix[k]).powi(2))
+                .map(|k| (s.0.position[k] - fix[k]).powi(2))
                 .sum::<f64>()
                 .sqrt()
         })
         .collect();
-    let speeds: Vec<f64> = solutions.iter().map(|s| s.speed()).collect();
+    let speeds: Vec<f64> = solutions.iter().map(|s| s.1.speed()).collect();
     let worst = speeds.iter().copied().fold(0.0, f64::max);
     let (error, speed) = (median(errors), median(speeds));
     println!(
