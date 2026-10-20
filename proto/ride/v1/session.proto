@@ -298,7 +298,9 @@ message ManualEvent {
     KIND_AT_STATION = 2;
     KIND_ALIGHTED = 3;
     KIND_NOTE = 4;
+    // Tapped as the doors start to open: the train stopped a few seconds before.
     KIND_DOORS_OPEN = 5;
+    // Tapped once the doors have finished closing: the train leaves a few seconds after.
     KIND_DOORS_CLOSED = 6;
   }
   Kind kind = 1;

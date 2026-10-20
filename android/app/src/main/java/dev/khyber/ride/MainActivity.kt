@@ -109,11 +109,13 @@ class MainActivity : ComponentActivity() {
             }
             Text("You got on or off a train.", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { add(ManualEvent.Kind.KIND_DOORS_OPEN, "doors open") }, Modifier.weight(1f)) { Text("Doors open") }
+                Button(onClick = { add(ManualEvent.Kind.KIND_DOORS_OPEN, "doors opening") }, Modifier.weight(1f)) { Text("Doors opening") }
                 Button(onClick = { add(ManualEvent.Kind.KIND_DOORS_CLOSED, "doors closed") }, Modifier.weight(1f)) { Text("Doors closed") }
             }
             Text(
-                "The train's doors opened or closed: marks exactly when it stopped and is about to leave.",
+                "Tap as the doors start to open, and once they've finished closing. " +
+                    "The train stops a few seconds before the first and leaves a few seconds after the second, " +
+                    "so together they bracket each stop.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Button(
