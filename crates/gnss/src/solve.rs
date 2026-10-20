@@ -10,6 +10,7 @@ use ride_session::proto::{
     GnssClock, GnssMeasurement, GnssMeasurementsEvent, GnssNavigationMessage,
 };
 
+use crate::bds;
 use crate::ephemeris::{C, Ephemeris, OMEGA_E, SECONDS_PER_WEEK, SatState};
 use crate::inav::{self, TYPE_GAL_I};
 use crate::lnav::{EphemerisAssembler, TYPE_GPS_L1CA, TYPE_QZS_L1CA, decode_subframe};
@@ -140,6 +141,9 @@ pub struct Stats {
 pub struct Navigator {
     assembler: EphemerisAssembler,
     galileo: inav::EphemerisAssembler,
+    beidou: bds::EphemerisAssembler,
+    /// Whether Android delivers BeiDou words interleaved, once a subframe has settled it.
+    beidou_interleaved: Option<bool>,
     /// Each with whether it was decoded from the phone's navigation messages (or downloaded).
     ephemerides: BTreeMap<SatId, Vec<(Ephemeris, bool)>>,
     /// Whether to ignore downloaded ephemerides, to check the phone's navigation message decoding alone.
@@ -188,6 +192,23 @@ impl Navigator {
                     Ok(word) => {
                         self.stats.subframes_ok += 1;
                         if let Some(eph) = self.galileo.add(svid, word) {
+                            self.add_decoded(eph);
+                        }
+                    }
+                    Err(_) => self.stats.subframes_bad += 1,
+                }
+                return;
+            }
+            bds::TYPE_BDS_D1 | bds::TYPE_BDS_D2 => {
+                match bds::decode_subframe(&msg.data, &mut self.beidou_interleaved) {
+                    Ok(sf) => {
+                        self.stats.subframes_ok += 1;
+                        let eph = if msg.r#type == bds::TYPE_BDS_D1 {
+                            self.beidou.add_d1(svid, sf)
+                        } else {
+                            self.beidou.add_d2(svid, sf)
+                        };
+                        if let Some(eph) = eph {
                             self.add_decoded(eph);
                         }
                     }
