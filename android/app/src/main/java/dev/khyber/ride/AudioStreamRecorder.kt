@@ -2,6 +2,7 @@ package dev.khyber.ride
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
@@ -28,6 +29,10 @@ class AudioStreamRecorder(context: Context, dir: File) {
     private val unprocessed = context.getSystemService(AudioManager::class.java)
         .getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED) == "true"
     private val source = if (unprocessed) MediaRecorder.AudioSource.UNPROCESSED else MediaRecorder.AudioSource.VOICE_RECOGNITION
+    /** The phone's own microphone, asked for so a headset's doesn't take over when one is connected. */
+    private val builtInMic = context.getSystemService(AudioManager::class.java)
+        .getDevices(AudioManager.GET_DEVICES_INPUTS)
+        .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
     private val writer = StreamWriter.create(dir.path, NAME)
     private var record: AudioRecord? = null
     private var thread: Thread? = null
@@ -48,7 +53,8 @@ class AudioStreamRecorder(context: Context, dir: File) {
                     .setSampleRateHz(SAMPLE_RATE_HZ)
                     .setChannels(1)
                     .setAudioSource(source)
-                    .setAudioSourceName(if (unprocessed) "UNPROCESSED" else "VOICE_RECOGNITION"),
+                    .setAudioSourceName(if (unprocessed) "UNPROCESSED" else "VOICE_RECOGNITION")
+                    .setInputDevice(builtInMic?.let { "${it.productName} ${it.address}".trim() } ?: ""),
             )
             .build()
 
@@ -57,8 +63,13 @@ class AudioStreamRecorder(context: Context, dir: File) {
         val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE_HZ, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val r = AudioRecord(source, SAMPLE_RATE_HZ, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuffer, READ_FRAMES * 2 * 8))
         record = r
+        builtInMic?.let { r.setPreferredDevice(it) }
         running = true
         r.startRecording()
+        // Shown and written into the session if Android records from something else anyway (e.g. a wired headset).
+        r.routedDevice?.takeIf { it.type != AudioDeviceInfo.TYPE_BUILTIN_MIC }?.let {
+            Health.report("audio", IllegalStateException("recording from ${it.productName} (type ${it.type}), not the phone's microphone"))
+        }
         thread = Thread({ Health.guard("audio") { loop(r) } }, "audio").apply { start() }
     }
 

@@ -59,6 +59,9 @@ message AudioInfo {
   // `MediaRecorder.AudioSource` constant; `UNPROCESSED` when supported, so no gain control or noise suppression.
   int32 audio_source = 3;
   string audio_source_name = 4;
+  // The input asked for: the phone's built-in microphone (`AudioDeviceInfo` product name and address),
+  // so headphones with a microphone don't take over. Empty if the phone listed none.
+  string input_device = 5;
 }
 
 // Everything `android.hardware.Sensor` reports, recorded as-is.
