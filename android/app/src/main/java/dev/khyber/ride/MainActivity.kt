@@ -59,19 +59,20 @@ class MainActivity : ComponentActivity() {
         }
         val estimate = e ?: return
         Column {
-            val kmh = estimate.speedMps * 3.6
-            val sigmaKmh = estimate.sigmaMps * 3.6
+            val v = Units.speed(estimate.speedMps)
+            val sigma = Units.speed(estimate.sigmaMps)
+            val unit = Units.speedUnit
             Text(
                 when {
-                    estimate.stopped -> "0 km/h"
+                    estimate.stopped -> "0 $unit"
                     // Within its uncertainty of standing still: a number would suggest motion that may not be there.
-                    kmh < sigmaKmh -> "under %.0f km/h".format(kmh + sigmaKmh)
-                    else -> "%.0f km/h ± %.0f".format(kmh, sigmaKmh)
+                    v < sigma -> "under %.0f $unit".format(v + sigma)
+                    else -> "%.0f $unit ± %.0f".format(v, sigma)
                 },
                 style = MaterialTheme.typography.displayMedium,
             )
             // Along the direction of travel: negative is braking.
-            Text("%+.2f m/s²".format(estimate.accelMps2), style = MaterialTheme.typography.headlineMedium)
+            Text("%+.2f ${Units.accelUnit}".format(Units.accel(estimate.accelMps2)), style = MaterialTheme.typography.headlineMedium)
             val sensors = estimate.sensors.sortedBy { it.ordinal }.joinToString { it.name.lowercase().replace('_', ' ') }
             Text(if (estimate.stopped) "stopped · $sensors" else sensors)
             val gnss by LiveSpeed.gnss.collectAsStateWithLifecycle()
@@ -132,6 +133,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Units.load(this)
         permissions.launch(
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
@@ -215,6 +217,8 @@ class MainActivity : ComponentActivity() {
                 )
                 Text("Record audio (lossless, ~100 MB/h; also records conversations nearby)")
             }
+
+            Units.Settings()
 
             Text(if (state.recording) "Recording ${state.sessionId}" else "Not recording")
             state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall) }

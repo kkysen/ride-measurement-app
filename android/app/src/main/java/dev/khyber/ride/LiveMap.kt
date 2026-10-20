@@ -90,9 +90,11 @@ fun LiveMapScreen(onBack: () -> Unit) {
             (
                 if (colorByAccel) {
                     "Color: acceleration, orange braking through gray to purple speeding up, " +
-                        "in bands at ${scale.accelBoundsMps2.joinToString(", ") { "%+.2f".format(it) }} m/s²; "
+                        "in bands at ${scale.accelBoundsMps2.joinToString(", ") { "%+.2f".format(Units.accel(it)) }} ${Units.accelUnit}; "
                 } else {
-                    "Color: speed, light to dark in bands at ${scale.bandsKmh.joinToString(", ")}+ km/h (${scale.name} scale); "
+                    "Color: speed, light to dark in bands at " +
+                        scale.bandsKmh.joinToString(", ") { "%.0f".format(Units.speedFromKmh(it.toDouble())) } +
+                        "+ ${Units.speedUnit} (${scale.name} scale); "
                 }
             ) + "dark gray: no live speed; dashed: no GPS (tunnel)",
             style = MaterialTheme.typography.bodySmall,
@@ -134,10 +136,11 @@ private fun describe(p: LiveTrack.Point?, latest: Boolean): String {
     fun f(v: Double?, digits: Int) = v?.let { "%.${digits}f".format(it) } ?: "unknown"
     val time = DateFormat.getTimeInstance().format(Date(p.timeMs))
     return (if (latest) "Now ($time): " else "At $time: ") +
-        "${f(p.speedMps?.times(3.6), 1)} km/h · ${p.accelMps2?.let { "%+.2f".format(it) } ?: "unknown"} m/s²" +
-        "\nsmoothed ${f(p.smoothedSpeedMps, 2)} · live ${f(p.fusedSpeedMps, 2)} · " +
-        "GPS ${f(p.gpsSpeedMps, 2)} ± ${f(p.gpsSpeedAccuracyMps, 2)} m/s" +
-        " · position ± ${f(p.accuracyM, 0)} m"
+        "${f(p.speedMps?.let(Units::speed), 1)} ${Units.speedUnit} · " +
+        "${p.accelMps2?.let { "%+.2f".format(Units.accel(it)) } ?: "unknown"} ${Units.accelUnit}" +
+        "\nsmoothed ${f(p.smoothedSpeedMps?.let(Units::speed), 1)} · live ${f(p.fusedSpeedMps?.let(Units::speed), 1)} · " +
+        "GPS ${f(p.gpsSpeedMps?.let(Units::speed), 1)} ± ${f(p.gpsSpeedAccuracyMps?.let(Units::speed), 1)} ${Units.speedUnit}" +
+        " · position ± ${f(p.accuracyM?.let(Units::distance), 0)} ${Units.distanceUnit}"
 }
 
 @SuppressLint("ClickableViewAccessibility")
