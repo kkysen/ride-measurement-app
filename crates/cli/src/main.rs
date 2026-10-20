@@ -40,7 +40,8 @@ enum Command {
     /// and the solved speed against the phone's own.
     Gnss { session: PathBuf },
     /// Convert a GnssLogger log (Google's GPS Measurement Tools, Smartphone Decimeter Challenge) into a new session,
-    /// to try `gnss` and `map` on public logs. Never writes into an existing non-empty directory.
+    /// to try `gnss` on public logs (and `map`, if the log has the phone's fixes with UTC times, which
+    /// Smartphone Decimeter Challenge logs don't). Never writes into an existing non-empty directory.
     ImportGnsslogger { log: PathBuf, session: PathBuf },
     /// The UTC days a session's GNSS covers, as `year day-of-year` lines (`just orbits` downloads their orbits).
     OrbitDays { session: PathBuf },
