@@ -283,11 +283,22 @@ impl LiveSpeedEstimator {
 
         // World-fixed vectors seen from a rotating phone turn the other way: v' = v - (omega x v) dt.
         rotate_world_fixed(&self.omega, &mut self.gravity, dt);
-        rotate_world_fixed(&self.omega, &mut self.axis, dt);
-        rotate_world_fixed(&self.omega, &mut self.axis_mean, dt);
-        rotate_world_fixed(&self.omega, &mut self.axis_cross, dt);
-        rotate_world_fixed(&self.omega, &mut self.h_since_gnss, dt);
-        self.rotate_cov(dt);
+        // The travel axis is fixed to the vehicle, not the world: a curve turns the vehicle about the vertical with
+        // the phone, so only the phone's tilting (rotation about horizontal axes) moves the axis in its frame.
+        // A turn of the phone in hand about the vertical looks the same as a curve; GNSS re-learns the axis then.
+        let g_norm = norm(&self.gravity);
+        let tilting = if g_norm > 1e-6 {
+            let up = self.gravity.map(|x| x / g_norm);
+            let about_up = dot(&self.omega, &up);
+            std::array::from_fn(|i| self.omega[i] - about_up * up[i])
+        } else {
+            self.omega
+        };
+        rotate_world_fixed(&tilting, &mut self.axis, dt);
+        rotate_world_fixed(&tilting, &mut self.axis_mean, dt);
+        rotate_world_fixed(&tilting, &mut self.axis_cross, dt);
+        rotate_world_fixed(&tilting, &mut self.h_since_gnss, dt);
+        self.rotate_cov(&tilting, dt);
         let gnss_recent =
             self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
         let tau = if still {
@@ -644,8 +655,7 @@ impl LiveSpeedEstimator {
     }
 
     /// C' = (I - W dt) C (I - W dt)^T, to first order C - (W C - C W) dt, with W v = omega x v.
-    fn rotate_cov(&mut self, dt: f64) {
-        let o = &self.omega;
+    fn rotate_cov(&mut self, o: &[f64; 3], dt: f64) {
         let w = [0.0, -o[2], o[1], o[2], 0.0, -o[0], -o[1], o[0], 0.0];
         let c = self.cov;
         for i in 0..3 {
