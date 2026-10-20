@@ -1,8 +1,6 @@
 //! Broadcast ephemerides from RINEX navigation files (version 2 for GPS, version 3 for any constellation),
 //! e.g. the IGS daily merged `BRDM00DLR_S_*_MN.rnx`, to solve without navigation messages from the phone.
 
-use std::path::Path;
-
 use crate::ephemeris::{Ephemeris, GlonassEphemeris, KeplerEphemeris, SECONDS_PER_WEEK};
 use crate::system::{DEFAULT_LEAP_SECONDS, SatId, System};
 
@@ -12,27 +10,6 @@ const GALILEO_INAV_CLOCK: u32 = 1 << 9;
 const GALILEO_E1B_HEALTH: u8 = 0b111;
 /// Android numbers QZSS satellites from 193; RINEX from 1.
 const QZSS_FIRST_SVID: u8 = 193;
-
-/// Where a session keeps downloaded orbits (`just orbits`), relative to its directory.
-pub const SESSION_ORBITS_DIR: &str = "orbits";
-
-/// Every ephemeris in the `*.rnx` files of a session's [`SESSION_ORBITS_DIR`], if it has one.
-pub fn read_session_orbits(session_dir: &Path) -> std::io::Result<Vec<Ephemeris>> {
-    let dir = session_dir.join(SESSION_ORBITS_DIR);
-    if !dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut paths: Vec<_> = std::fs::read_dir(&dir)?
-        .filter_map(|e| Some(e.ok()?.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "rnx"))
-        .collect();
-    paths.sort();
-    let mut out = Vec::new();
-    for p in paths {
-        out.extend(read_nav(&std::fs::read_to_string(p)?));
-    }
-    Ok(out)
-}
 
 /// GLONASS slots are 1 to 24, with a few more for spares.
 const GLONASS_MAX_SLOT: u8 = 27;

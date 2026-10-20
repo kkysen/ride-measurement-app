@@ -150,6 +150,21 @@ impl Fusion {
         Ok(())
     }
 
+    /// A downloaded orbit file (from [`orbit_fetch_plan`]); returns how many ephemerides it held.
+    pub fn add_orbit_file(&self, path: String) -> Result<u32, RideError> {
+        let ephemerides = ride_gnss::orbits::read_orbit_file(std::path::Path::new(&path))
+            .map_err(anyhow::Error::from)?;
+        Ok(self.add_ephemerides(ephemerides))
+    }
+
+    /// Every orbit file already in a session's `orbits/` (e.g. after a restart); returns how many ephemerides.
+    pub fn add_session_orbits(&self, session_dir: String) -> Result<u32, RideError> {
+        let ephemerides =
+            ride_gnss::orbits::read_session_orbits(std::path::Path::new(&session_dir))
+                .map_err(anyhow::Error::from)?;
+        Ok(self.add_ephemerides(ephemerides))
+    }
+
     /// An encoded `GnssNavigationMessage` (as recorded).
     pub fn on_navigation_message(&self, encoded: Vec<u8>) -> Result<(), RideError> {
         use prost::Message;
@@ -206,6 +221,15 @@ impl Fusion {
 }
 
 impl Fusion {
+    fn add_ephemerides(&self, ephemerides: Vec<ride_gnss::ephemeris::Ephemeris>) -> u32 {
+        let n = ephemerides.len() as u32;
+        let mut fusion = self.lock();
+        for e in ephemerides {
+            fusion.navigator_mut().add_ephemeris(e);
+        }
+        n
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, ride_fusion::fusion::Fusion> {
         // A panic while holding the lock leaves the state usable; keep going rather than poison the app.
         self.0.lock().unwrap_or_else(|e| e.into_inner())
@@ -276,6 +300,40 @@ pub fn accel_bounds_mps2() -> Vec<f64> {
 #[uniffi::export]
 pub fn accel_edge_color_argb(a_mps2: Option<f64>, b_mps2: Option<f64>) -> u32 {
     speed_colors::accel_color_argb(speed_colors::edge_accel(a_mps2, b_mps2))
+}
+
+/// One orbit file to try: download `url` to `path` (via `path` + `.part`, then a rename).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct OrbitFile {
+    pub url: String,
+    pub path: String,
+}
+
+/// The orbit files the live fusion needs now (`ride_gnss::orbits::fetch_plan` over the last few hours),
+/// per UTC day the files to try in order until one downloads; `just orbits` follows the same plan offline.
+#[uniffi::export]
+pub fn orbit_fetch_plan(session_dir: String, now_unix_ms: i64) -> Vec<Vec<OrbitFile>> {
+    ride_gnss::orbits::fetch_plan(
+        std::path::Path::new(&session_dir),
+        now_unix_ms - ride_gnss::orbits::LIVE_LOOKBACK_MS,
+        now_unix_ms,
+    )
+    .into_iter()
+    .map(|day| {
+        day.into_iter()
+            .map(|f| OrbitFile {
+                url: f.url,
+                path: f.path.display().to_string(),
+            })
+            .collect()
+    })
+    .collect()
+}
+
+/// How often to follow [`orbit_fetch_plan`] again while recording (ms): BKG updates its file every 15 minutes.
+#[uniffi::export]
+pub fn orbit_refresh_ms() -> i64 {
+    ride_gnss::orbits::LIVE_REFRESH_MS
 }
 
 /// A failure of a whole operation, with its full cause chain.

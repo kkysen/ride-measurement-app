@@ -67,17 +67,15 @@ wav session:
 map session:
     cargo run -q --bin ride -- map {{session}}
 
-# Download the IGS merged broadcast orbits for each UTC day of a session into `<session>/orbits/`, for every
-# constellation's satellites even without the phone's navigation messages. A day's file appears the day after.
+# Download broadcast orbits for every constellation into `<session>/orbits/`, following the same plan as the app
+# (`ride orbit-plan`): per UTC day, the complete merged file if it's out (the day after), else BKG's 15-minute one.
 orbits session:
-    mkdir -p {{session}}/orbits
-    cargo run -q --bin ride -- orbit-days {{session}} | while read -r year day; do \
-        f={{session}}/orbits/BRDM00DLR_S_${year}${day}0000_01D_MN.rnx; \
-        if [ ! -e "$f" ]; then \
-            curl -sfL "https://igs.bkg.bund.de/root_ftp/IGS/BRDC/$year/$day/BRDM00DLR_S_${year}${day}0000_01D_MN.rnx.gz" \
-                | gunzip > "$f.part"; \
-            mv "$f.part" "$f"; \
-        fi; \
+    cargo run -q --bin ride -- orbit-plan {{session}} | while read -r -a pairs; do \
+        for ((i = 0; i < ${#pairs[@]}; i += 2)); do \
+            f=${pairs[i]}; mkdir -p "$(dirname "$f")"; \
+            if curl -sfL "${pairs[i+1]}" -o "$f.part"; then mv "$f.part" "$f"; break; fi; \
+            rm -f "$f.part"; \
+        done; \
     done
 
 # How well raw GNSS solves for velocity (navigation messages, ephemerides, residuals, own vs phone speed).

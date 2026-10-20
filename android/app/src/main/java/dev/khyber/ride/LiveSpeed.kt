@@ -112,6 +112,18 @@ object LiveSpeed {
         h.post { safely { fusion?.onNavigationMessage(encoded) } }
     }
 
+    /** A downloaded orbit file ([OrbitFetcher]); a bad one is reported and live speed carries on without it. */
+    fun addOrbitFile(path: String) {
+        val h = handler ?: return
+        h.post { Health.guard("orbit file") { fusion?.addOrbitFile(path) } }
+    }
+
+    /** Every orbit file already in a session's `orbits/`, e.g. after a restart. */
+    fun addSessionOrbits(sessionDir: String) {
+        val h = handler ?: return
+        h.post { Health.guard("session orbits") { fusion?.addSessionOrbits(sessionDir) } }
+    }
+
     private const val PUBLISH_MS = 500L
     private const val SMOOTH_MS = 30_000L
 

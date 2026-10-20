@@ -19,4 +19,5 @@ uniffi = { version = "0.32.2", features = ["cli"] }
 anyhow.workspace = true
 prost.workspace = true
 ride-fusion.workspace = true
+ride-gnss.workspace = true
 ride-session.workspace = true

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use ride_gnss::rinex::{SESSION_ORBITS_DIR, read_session_orbits};
+use ride_gnss::orbits::{SESSION_ORBITS_DIR, fetch_plan, read_session_orbits};
 use ride_gnss::solve::{Navigator, NoSolution, geodetic_to_ecef};
 use ride_gnss::system::System;
 use ride_session::proto::record::Payload;
@@ -193,8 +193,9 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The UTC days (year and day of year) a session's GNSS covers, one per line, for downloading orbits.
-pub fn orbit_days(session: &Session) -> anyhow::Result<()> {
+/// The orbit files to download for a session (`ride_gnss::orbits::fetch_plan` over the session's GNSS),
+/// one UTC day per line as `path url` pairs to try in order until one downloads; `just orbits` follows it.
+pub fn orbit_plan(session: &Session) -> anyhow::Result<()> {
     let start_ms = session.info.start_unix_ms;
     let mut last_ns = session.info.start_elapsed_realtime_ns;
     if session.stream_path("gnss").exists() {
@@ -205,41 +206,12 @@ pub fn orbit_days(session: &Session) -> anyhow::Result<()> {
         }
     }
     let end_ms = start_ms + (last_ns - session.info.start_elapsed_realtime_ns) / 1_000_000;
-    const DAY_MS: i64 = 86_400_000;
-    for day in start_ms.div_euclid(DAY_MS)..=end_ms.div_euclid(DAY_MS) {
-        let (year, day_of_year) = year_and_day(day);
-        println!("{year} {day_of_year:03}");
+    for day in fetch_plan(&session.dir, start_ms, end_ms) {
+        let pairs: Vec<String> = day
+            .iter()
+            .map(|f| format!("{} {}", f.path.display(), f.url))
+            .collect();
+        println!("{}", pairs.join(" "));
     }
     Ok(())
-}
-
-/// Days since 1970-01-01 as a year and day of the year (1 to 366).
-fn year_and_day(days: i64) -> (i64, i64) {
-    let mut year = 1970;
-    let mut d = days;
-    loop {
-        let len = if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
-            366
-        } else {
-            365
-        };
-        if d < len {
-            return (year, d + 1);
-        }
-        d -= len;
-        year += 1;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::year_and_day;
-
-    #[test]
-    fn days_of_year() {
-        assert_eq!(year_and_day(0), (1970, 1));
-        // 2021-04-08, and the last day of leap year 2024.
-        assert_eq!(year_and_day(18_725), (2021, 98));
-        assert_eq!(year_and_day(20_088), (2024, 366));
-    }
 }

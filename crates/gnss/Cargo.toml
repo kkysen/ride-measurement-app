@@ -7,4 +7,8 @@ publish.workspace = true
 
 # GNSS from Android's raw measurements: broadcast orbits, navigation message decoding, and position and velocity.
 [dependencies]
+flate2 = "1.1.10"
 ride-session.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

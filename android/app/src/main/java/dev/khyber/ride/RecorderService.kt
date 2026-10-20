@@ -37,6 +37,7 @@ class RecorderService : Service() {
     private var recorders: List<SensorStreamRecorder> = emptyList()
     private var recordStreams: List<RecordStreamRecorder> = emptyList()
     private var gnssRecorder: GnssRecorder? = null
+    private var orbitFetcher: OrbitFetcher? = null
     private var radioRecorder: RadioRecorder? = null
     private var bleRecorder: BleRecorder? = null
     private var audioRecorder: AudioStreamRecorder? = null
@@ -162,6 +163,7 @@ class RecorderService : Service() {
         ) }
         LiveTrack.reset()
         LiveSpeed.start()
+        orbitFetcher = Health.guard("orbits") { OrbitFetcher(dir) }
         recorders.forEach { r -> Health.guard("sensor ${r.name}") { r.start() } }
         Health.guard("gnss") { gnssRecorder?.start() }
         Health.guard("radio") { radioRecorder?.start() }
@@ -190,6 +192,8 @@ class RecorderService : Service() {
         bleRecorder = null
         Health.guard("stop audio") { audioRecorder?.stop() }
         audioRecorder = null
+        Health.guard("stop orbits") { orbitFetcher?.stop() }
+        orbitFetcher = null
         Health.guard("stop live speed") { LiveSpeed.stop() }
         recorders.forEach { r -> Health.guard("stop sensor ${r.name}") { r.beginStop() } }
         recorders.forEach { r -> Health.guard("stop sensor ${r.name}") { r.stop() } }
