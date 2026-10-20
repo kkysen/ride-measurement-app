@@ -287,3 +287,24 @@ fn late_inputs_are_counted_not_lost() {
     fusion.on_accel(5_000_000_000, [0.0, 0.0, G]);
     assert_eq!(fusion.late_inputs, 1);
 }
+
+#[test]
+fn average_speed_covers_the_whole_ride() {
+    let mut fusion = Fusion::new();
+    assert_eq!(fusion.average_speed_mps(), None);
+    // 10 m/s for a minute, then a minute standing still.
+    for s in 0..=120 {
+        let v = if s < 60 { 10.0 } else { 0.0 };
+        fusion.on_fix(Fix {
+            elapsed_realtime_ns: s * 1_000_000_000 + 1,
+            lat: 40.0,
+            lon: -74.0,
+            speed: Some(v),
+            speed_sigma: Some(0.2),
+            ..Default::default()
+        });
+    }
+    fusion.finish();
+    let average = fusion.average_speed_mps().unwrap();
+    assert!((average - 5.0).abs() < 0.5, "average {average} m/s");
+}

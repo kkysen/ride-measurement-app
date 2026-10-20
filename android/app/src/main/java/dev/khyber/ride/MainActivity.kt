@@ -62,15 +62,21 @@ class MainActivity : ComponentActivity() {
             val v = Units.speed(estimate.speedMps)
             val sigma = Units.speed(estimate.sigmaMps)
             val unit = Units.speedUnit
-            Text(
-                when {
-                    estimate.stopped -> "0 $unit"
-                    // Within its uncertainty of standing still: a number would suggest motion that may not be there.
-                    v < sigma -> "< %.0f $unit".format(v + sigma)
-                    else -> "%.0f $unit ± %.0f".format(v, sigma)
-                },
-                style = MaterialTheme.typography.displayMedium,
-            )
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    when {
+                        estimate.stopped -> "0 $unit"
+                        // Within its uncertainty of standing still: a number would suggest motion that may not be there.
+                        v < sigma -> "< %.0f $unit".format(v + sigma)
+                        else -> "%.0f $unit ± %.0f".format(v, sigma)
+                    },
+                    style = MaterialTheme.typography.displayMedium,
+                )
+                // The whole ride so far, stops included.
+                estimate.averageMps?.let {
+                    Text("avg %.0f $unit".format(Units.speed(it)), style = MaterialTheme.typography.headlineMedium)
+                }
+            }
             // Along the direction of travel: negative is braking.
             Text("%+.2f ${Units.accelUnit}".format(Units.accel(estimate.accelMps2)), style = MaterialTheme.typography.headlineMedium)
             val sensors = estimate.sensors.sortedBy { it.ordinal }.joinToString { it.name.lowercase().replace('_', ' ') }

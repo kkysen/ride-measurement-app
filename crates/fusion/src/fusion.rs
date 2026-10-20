@@ -199,6 +199,11 @@ pub struct Fusion {
     measured: VecDeque<i64>,
     measured_ns: Option<i64>,
     smoothed_measured_ns: Option<i64>,
+    /// The whole ride's distance (m) by the forward speed at each sample time, trapezoidally,
+    /// from the first sample to the last, and the last one's time and speed.
+    distance_m: f64,
+    first_sample_ns: Option<i64>,
+    last_sample: Option<(i64, f64)>,
 }
 
 impl Default for Fusion {
@@ -239,6 +244,9 @@ impl Fusion {
             measured: VecDeque::new(),
             measured_ns: None,
             smoothed_measured_ns: None,
+            distance_m: 0.0,
+            first_sample_ns: None,
+            last_sample: None,
         }
     }
 
@@ -358,8 +366,16 @@ impl Fusion {
         }
         self.buffer(t_ns, kept);
         if sample {
-            self.forward
-                .push_back((t_ns, self.estimator.estimate(t_ns)));
+            let e = self.estimator.estimate(t_ns);
+            let speed = if e.stopped { 0.0 } else { e.speed_mps };
+            if let Some((t, v)) = self.last_sample.filter(|&(t, _)| t_ns > t) {
+                self.distance_m += (v + speed) / 2.0 * (t_ns - t) as f64 * 1e-9;
+            }
+            if self.last_sample.is_none_or(|(t, _)| t_ns > t) {
+                self.last_sample = Some((t_ns, speed));
+            }
+            self.first_sample_ns.get_or_insert(t_ns);
+            self.forward.push_back((t_ns, e));
         }
         if self.window_ns.is_some() {
             let next = *self.next_smooth_ns.get_or_insert(t_ns);
@@ -442,6 +458,13 @@ impl Fusion {
                 self.measured.pop_front();
             }
         }
+    }
+
+    /// The whole ride's average speed (m/s) by the forward pass, stops included, once it covers any time.
+    pub fn average_speed_mps(&self) -> Option<f64> {
+        let first = self.first_sample_ns?;
+        let (last, _) = self.last_sample?;
+        (last > first).then(|| self.distance_m / ((last - first) as f64 * 1e-9))
     }
 
     /// Smoothed speeds at every fix and sample time so far: those frozen as they left the window, then the

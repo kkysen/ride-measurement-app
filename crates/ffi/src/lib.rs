@@ -58,6 +58,8 @@ pub struct Estimate {
     pub rejected: Vec<SensorCount>,
     /// Acceleration in the direction of travel, negative when braking.
     pub accel_mps2: f64,
+    /// The whole ride's average speed so far, stops included.
+    pub average_mps: Option<f64>,
 }
 
 /// A smoothed speed at a fix or a sample time (`ride_fusion::fusion::SmoothedSpeed`).
@@ -172,8 +174,10 @@ impl Fusion {
     }
 
     pub fn estimate(&self, now_ns: i64) -> Estimate {
-        let e = self.lock().estimate(now_ns);
+        let fusion = self.lock();
+        let e = fusion.estimate(now_ns);
         Estimate {
+            average_mps: fusion.average_speed_mps(),
             speed_mps: e.speed_mps,
             sigma_mps: e.sigma_mps,
             sensors: e.sensors.into_iter().map(Sensor::from).collect(),
