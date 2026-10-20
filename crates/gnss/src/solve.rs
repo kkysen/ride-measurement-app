@@ -23,6 +23,8 @@ const L1_BAND_HZ: std::ops::Range<f32> = 1.55e9..1.61e9;
 /// Pseudorange residuals beyond this (m) reject the worst satellite from the position solution: uncorrected
 /// ionosphere and troposphere are tens of meters at most, so more is multipath or a bad measurement.
 const POSITION_OUTLIER_M: f64 = 60.0;
+/// Pseudoranges are trusted no more than this (m), whatever Android says.
+const MIN_PSEUDORANGE_SIGMA: f64 = 1.0;
 /// Doppler measurements are trusted no more than this (m/s), whatever Android says.
 const MIN_PRR_SIGMA: f64 = 0.05;
 /// Residuals beyond this many sigma reject the worst satellite and solve again.
@@ -242,6 +244,8 @@ impl Navigator {
                 system,
                 state,
                 pseudorange: travel_ns * 1e-9 * C + C * (state.clock_bias - eph.tgd),
+                pseudorange_sigma: (m.received_sv_time_uncertainty_nanos as f64 * 1e-9 * C)
+                    .max(MIN_PSEUDORANGE_SIGMA),
                 prr: m.pseudorange_rate_meters_per_second + C * state.clock_drift,
                 prr_sigma: m
                     .pseudorange_rate_uncertainty_meters_per_second
@@ -275,6 +279,7 @@ struct Sat {
     state: SatState,
     /// Corrected for the satellite clock and group delay (m).
     pseudorange: f64,
+    pseudorange_sigma: f64,
     /// Corrected for the satellite clock drift (m/s).
     prr: f64,
     prr_sigma: f64,
@@ -306,7 +311,7 @@ struct PositionSolution {
     residual_rms: f64,
 }
 
-/// Least-squares position (and a clock bias per constellation) from pseudoranges, by Gauss-Newton from `start`
+/// Weighted least-squares position (and a clock bias per constellation) from pseudoranges, by Gauss-Newton from `start`
 /// or the earth's center, dropping the worst satellite while its residual is beyond [`POSITION_OUTLIER_M`]
 /// and a redundant one remains.
 fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<PositionSolution> {
@@ -358,7 +363,11 @@ fn gauss_newton_position(
                 let mut a = vec![0.0; x.len()];
                 a[..3].copy_from_slice(&[-u[0], -u[1], -u[2]]);
                 a[k] = 1.0;
-                (a, s.pseudorange - (r + x[k]), 1.0)
+                (
+                    a,
+                    s.pseudorange - (r + x[k]),
+                    1.0 / (s.pseudorange_sigma * s.pseudorange_sigma),
+                )
             })
             .collect()
     };
