@@ -187,7 +187,7 @@ fn glonass(lines: &[&str], leap_seconds: i32) -> Option<GlonassEphemeris> {
             system: System::Glonass,
             svid: slot,
         },
-        frequency_channel: v[10] as i8,
+        frequency_channel: Some(v[10] as i8),
         healthy: v[6] == 0.0,
         week: u32::try_from(week).ok()?,
         tb,

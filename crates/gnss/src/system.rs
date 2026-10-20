@@ -5,7 +5,7 @@ pub const NANOS_PER_DAY: i64 = 86_400_000_000_000;
 /// BeiDou time (BDT) is behind GPS time by this, constantly (BDS-SIS-ICD section 5.1).
 pub const BDT_BEHIND_GPS_NS: i64 = 14_000_000_000;
 /// GLONASS time is UTC(SU) plus 3 hours (GLONASS ICD section 3.3.3).
-const GLONASS_AHEAD_OF_UTC_NS: i64 = 3 * 3_600_000_000_000;
+pub const GLONASS_AHEAD_OF_UTC_NS: i64 = 3 * 3_600_000_000_000;
 /// GPS minus UTC since 2017, for clocks that don't report leap seconds.
 pub const DEFAULT_LEAP_SECONDS: i32 = 18;
 

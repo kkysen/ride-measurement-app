@@ -12,6 +12,7 @@ use ride_session::proto::{
 
 use crate::bds;
 use crate::ephemeris::{C, Ephemeris, OMEGA_E, SECONDS_PER_WEEK, SatState};
+use crate::glonass;
 use crate::inav::{self, TYPE_GAL_I};
 use crate::lnav::{EphemerisAssembler, TYPE_GPS_L1CA, TYPE_QZS_L1CA, decode_subframe};
 use crate::system::{DEFAULT_LEAP_SECONDS, NANOS_PER_WEEK, SatId, System};
@@ -144,6 +145,11 @@ pub struct Navigator {
     beidou: bds::EphemerisAssembler,
     /// Whether Android delivers BeiDou words interleaved, once a subframe has settled it.
     beidou_interleaved: Option<bool>,
+    glonass: glonass::EphemerisAssembler,
+    /// The latest clock's GPS time (s since the GPS epoch) and leap seconds, to date GLONASS strings,
+    /// and the strings that arrived before any clock.
+    clock_gps_s: Option<(f64, i32)>,
+    glonass_waiting: Vec<(u8, glonass::GloString)>,
     /// Each with whether it was decoded from the phone's navigation messages (or downloaded).
     ephemerides: BTreeMap<SatId, Vec<(Ephemeris, bool)>>,
     /// Whether to ignore downloaded ephemerides, to check the phone's navigation message decoding alone.
@@ -193,6 +199,26 @@ impl Navigator {
                         self.stats.subframes_ok += 1;
                         if let Some(eph) = self.galileo.add(svid, word) {
                             self.add_decoded(eph);
+                        }
+                    }
+                    Err(_) => self.stats.subframes_bad += 1,
+                }
+                return;
+            }
+            glonass::TYPE_GLO_L1CA => {
+                match glonass::decode_string(&msg.data) {
+                    Ok(s) => {
+                        self.stats.subframes_ok += 1;
+                        match self.clock_gps_s {
+                            Some((t, leap)) => {
+                                if let Some(eph) = self.glonass.add(svid, s, t, leap) {
+                                    self.add_decoded(eph);
+                                }
+                            }
+                            None if self.glonass_waiting.len() < 1000 => {
+                                self.glonass_waiting.push((svid, s))
+                            }
+                            None => {}
                         }
                     }
                     Err(_) => self.stats.subframes_bad += 1,
@@ -249,6 +275,18 @@ impl Navigator {
     ) -> Result<Solution, NoSolution> {
         self.stats.epochs += 1;
         let week = epoch_week(event)?;
+        if let Some(clock) = &event.clock
+            && let Some(bias) = clock.full_bias_nanos
+        {
+            let t = (clock.time_nanos - bias) as f64 * 1e-9;
+            let leap = clock.leap_second.unwrap_or(DEFAULT_LEAP_SECONDS);
+            self.clock_gps_s = Some((t, leap));
+            for (svid, s) in std::mem::take(&mut self.glonass_waiting) {
+                if let Some(eph) = self.glonass.add(svid, s, t, leap) {
+                    self.add_decoded(eph);
+                }
+            }
+        }
         if self.week != Some(week) {
             self.week = Some(week);
             for (sat, sf) in std::mem::take(&mut self.waiting) {

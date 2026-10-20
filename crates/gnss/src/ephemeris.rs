@@ -223,8 +223,8 @@ const GLONASS_VALID_S: f64 = 20.0 * 60.0;
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlonassEphemeris {
     pub sat: SatId,
-    /// Frequency channel, -7 to 6.
-    pub frequency_channel: i8,
+    /// Frequency channel, -7 to 6, if known (RINEX has it; strings 1 to 4 don't).
+    pub frequency_channel: Option<i8>,
     pub healthy: bool,
     /// GPS week and seconds of week of the reference time `tb`.
     pub week: u32,

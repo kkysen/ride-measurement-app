@@ -2,6 +2,7 @@
 
 pub mod bds;
 pub mod ephemeris;
+pub mod glonass;
 pub mod gnsslogger;
 pub mod inav;
 pub mod lnav;
