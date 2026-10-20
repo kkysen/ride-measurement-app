@@ -1,13 +1,14 @@
 //! Navigation message decoding against real receiver data, and parity through a round trip.
 
-use ride_gnss::ephemeris::GpsEphemeris;
+use ride_gnss::ephemeris::KeplerEphemeris;
 use ride_gnss::lnav::{EphemerisAssembler, Subframe, decode_subframe, parity};
+use ride_gnss::system::{SatId, System};
 
 /// GPS week of 2008-05-26, when the u-blox log was recorded.
 const WEEK_2008_05_26: u32 = 1481;
 
 /// Ephemerides from a real u-blox 5 log's `RXM-SFRB` messages (subframes with parity removed).
-fn ublox_ephemerides() -> Vec<GpsEphemeris> {
+fn ublox_ephemerides() -> Vec<KeplerEphemeris> {
     let bytes = include_bytes!("data/ubx_20080526-sfrb.bin");
     let mut assembler = EphemerisAssembler::default();
     let mut out = Vec::new();
@@ -20,7 +21,14 @@ fn ublox_ephemerides() -> Vec<GpsEphemeris> {
             continue;
         };
         // A reference a few weeks off: only the low 10 bits are broadcast, and the nearest full week is resolved.
-        if let Some(eph) = assembler.add(prn, sf, WEEK_2008_05_26 - 3) {
+        if let Some(eph) = assembler.add(
+            SatId {
+                system: System::Gps,
+                svid: prn,
+            },
+            sf,
+            WEEK_2008_05_26 - 3,
+        ) {
             out.push(eph);
         }
     }
@@ -40,25 +48,25 @@ fn real_subframes_decode_to_physical_gps_orbits() {
         let a_km = e.sqrt_a * e.sqrt_a / 1000.0;
         assert!(
             (26_400.0..26_700.0).contains(&a_km),
-            "G{:02} a = {a_km} km",
-            e.prn
+            "{} a = {a_km} km",
+            e.sat
         );
         assert!(
             (50.0..60.0).contains(&e.i0.to_degrees()),
-            "G{:02} i = {}",
-            e.prn,
+            "{} i = {}",
+            e.sat,
             e.i0.to_degrees()
         );
-        assert!(e.e < 0.03, "G{:02} e = {}", e.prn, e.e);
+        assert!(e.e < 0.03, "{} e = {}", e.sat, e.e);
         assert_eq!(e.week, WEEK_2008_05_26);
-        assert_eq!(e.iode, e.iodc as u8);
-        assert!(e.af0.abs() < 1e-3, "G{:02} clock offset {}", e.prn, e.af0);
+        assert_eq!(e.iode, e.iodc & 0xff);
+        assert!(e.af0.abs() < 1e-3, "{} clock offset {}", e.sat, e.af0);
         let r = e.state_at(e.toe).position;
         let r_km = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt() / 1000.0;
         assert!(
             (25_500.0..27_500.0).contains(&r_km),
-            "G{:02} at {r_km} km",
-            e.prn
+            "{} at {r_km} km",
+            e.sat
         );
     }
 }

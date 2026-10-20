@@ -1,8 +1,6 @@
 //! Position and velocity from synthetic Android measurements made with real orbits and a known receiver motion.
 
-mod common;
-
-use ride_gnss::ephemeris::{C, GpsEphemeris, OMEGA_E};
+use ride_gnss::ephemeris::{C, KeplerEphemeris, OMEGA_E};
 use ride_gnss::solve::{Navigator, geodetic_to_ecef};
 use ride_session::proto::{GnssClock, GnssMeasurement, GnssMeasurementsEvent};
 
@@ -34,7 +32,7 @@ fn enu(lat: f64, lon: f64) -> [[f64; 3]; 3] {
 /// What Android would report for a receiver at `rx` moving at `v`, with clock drift `drift` (m/s),
 /// for every satellite above 10 degrees.
 fn measurements(
-    ephs: &[GpsEphemeris],
+    ephs: &[KeplerEphemeris],
     rx: [f64; 3],
     v: [f64; 3],
     drift: f64,
@@ -73,7 +71,7 @@ fn measurements(
         let t_sv = t_tx + state.clock_bias - e.tgd;
         let prr = dot(sub(vel, v), los) + drift - C * state.clock_drift;
         ms.push(GnssMeasurement {
-            svid: i32::from(e.prn),
+            svid: i32::from(e.sat.svid),
             constellation_type: 1,
             state: 0x1 | 0x8,
             received_sv_time_nanos: (t_sv * 1e9).round() as i64,
@@ -96,8 +94,14 @@ fn measurements(
     }
 }
 
-fn setup() -> (Navigator, Vec<GpsEphemeris>, [f64; 3], [f64; 3], [f64; 3]) {
-    let ephs = common::read_rinex_nav(include_str!("data/brdc1820.10n"));
+fn setup() -> (
+    Navigator,
+    Vec<KeplerEphemeris>,
+    [f64; 3],
+    [f64; 3],
+    [f64; 3],
+) {
+    let ephs = ride_gnss::rinex::read_nav(include_str!("data/brdc1820.10n"));
     let mut nav = Navigator::default();
     for e in &ephs {
         nav.add_ephemeris(e.clone());

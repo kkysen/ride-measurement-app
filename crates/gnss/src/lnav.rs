@@ -7,7 +7,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::ephemeris::{GPS_PI, GpsEphemeris};
+use crate::ephemeris::{GPS_PI, KeplerEphemeris};
+use crate::system::SatId;
 
 /// `GnssNavigationMessage.TYPE_GPS_L1CA`.
 pub const TYPE_GPS_L1CA: i32 = 0x0101;
@@ -140,18 +141,23 @@ pub fn decode_subframe(data: &[u8]) -> Result<Subframe, LnavError> {
 /// Collects subframes 1 to 3 per satellite and yields an ephemeris once a matching set is complete.
 #[derive(Default)]
 pub struct EphemerisAssembler {
-    partial: BTreeMap<u8, [Option<Subframe>; 3]>,
+    partial: BTreeMap<SatId, [Option<Subframe>; 3]>,
 }
 
 impl EphemerisAssembler {
-    /// Adds a decoded subframe for `prn`; `reference_week` is a full GPS week near the subframe's,
+    /// Adds a decoded subframe for `sat` (GPS or QZSS); `reference_week` is a full GPS week near the subframe's,
     /// to resolve the 10-bit week. Returns a new ephemeris when subframes 1 to 3 agree on their issue of data.
-    pub fn add(&mut self, prn: u8, sf: Subframe, reference_week: u32) -> Option<GpsEphemeris> {
+    pub fn add(
+        &mut self,
+        sat: SatId,
+        sf: Subframe,
+        reference_week: u32,
+    ) -> Option<KeplerEphemeris> {
         let id = sf.id();
         if !(1..=3).contains(&id) {
             return None;
         }
-        let set = self.partial.entry(prn).or_default();
+        let set = self.partial.entry(sat).or_default();
         set[usize::from(id - 1)] = Some(sf);
         let [Some(sf1), Some(sf2), Some(sf3)] = set else {
             return None;
@@ -162,27 +168,27 @@ impl EphemerisAssembler {
             // Mid-update: wait for the rest of the new set.
             return None;
         }
-        let eph = ephemeris(prn, sf1, sf2, sf3, reference_week);
-        self.partial.remove(&prn);
+        let eph = ephemeris(sat, sf1, sf2, sf3, reference_week);
+        self.partial.remove(&sat);
         Some(eph)
     }
 }
 
 /// Field layout and scale factors from IS-GPS-200 tables 20-I and 20-III, as offsets into the 240 data bits.
 fn ephemeris(
-    prn: u8,
+    sat: SatId,
     sf1: &Subframe,
     sf2: &Subframe,
     sf3: &Subframe,
     reference_week: u32,
-) -> GpsEphemeris {
+) -> KeplerEphemeris {
     let p2 = |n: i32| 2f64.powi(n);
     let sc = GPS_PI;
     let week10 = sf1.u(48, 10) as u32;
     // The full week closest to the reference with these low 10 bits.
     let week = reference_week - ((reference_week + 1024 - week10 + 512) % 1024) + 512;
-    GpsEphemeris {
-        prn,
+    KeplerEphemeris {
+        sat,
         week,
         sv_accuracy_index: sf1.u(60, 4) as u8,
         sv_health: sf1.u(64, 6) as u8,
@@ -192,7 +198,7 @@ fn ephemeris(
         af2: sf1.s(192, 8) as f64 * p2(-55),
         af1: sf1.s(200, 16) as f64 * p2(-43),
         af0: sf1.s(216, 22) as f64 * p2(-31),
-        iode: sf2.u(48, 8) as u8,
+        iode: sf2.u(48, 8) as u16,
         crs: sf2.s(56, 16) as f64 * p2(-5),
         delta_n: sf2.s(72, 16) as f64 * p2(-43) * sc,
         m0: sf2.s(88, 32) as f64 * p2(-31) * sc,

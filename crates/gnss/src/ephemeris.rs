@@ -1,9 +1,17 @@
-//! GPS broadcast ephemeris (LNAV), and satellite position, velocity, and clock from it, per IS-GPS-200.
+//! Keplerian broadcast ephemerides (GPS and QZSS LNAV, Galileo I/NAV, BeiDou D1/D2),
+//! and satellite position, velocity, and clock from them, per IS-GPS-200, the Galileo OS SIS ICD,
+//! and the BDS SIS ICD.
+
+use crate::system::{BDT_BEHIND_GPS_NS, SatId, System};
 
 /// WGS 84 gravitational constant (m^3/s^2), as IS-GPS-200 specifies.
 pub const MU: f64 = 3.986_005e14;
-/// WGS 84 earth rotation rate (rad/s).
+/// Galileo's (GTRF) and BeiDou's (CGCS2000) gravitational constant (m^3/s^2).
+pub const MU_GALILEO_BEIDOU: f64 = 3.986_004_418e14;
+/// WGS 84 earth rotation rate (rad/s), also Galileo's.
 pub const OMEGA_E: f64 = 7.292_115_146_7e-5;
+/// CGCS2000 earth rotation rate (rad/s), BeiDou's.
+pub const OMEGA_E_BEIDOU: f64 = 7.292_115_0e-5;
 /// Speed of light (m/s).
 pub const C: f64 = 299_792_458.0;
 /// The value of pi IS-GPS-200 uses to convert semicircles.
@@ -12,20 +20,25 @@ pub const C: f64 = 299_792_458.0;
     reason = "IS-GPS-200 specifies this exact value, not the true pi"
 )]
 pub const GPS_PI: f64 = 3.141_592_653_589_8;
-/// Relativistic clock correction constant (s/m^(1/2)).
+/// Relativistic clock correction constant (s/m^(1/2)) for GPS; the others compute it from their own `MU`.
 const F: f64 = -4.442_807_633e-10;
 pub const SECONDS_PER_WEEK: f64 = 604_800.0;
 
-/// One GPS satellite's broadcast ephemeris and clock, in SI units (angles in radians).
+/// One satellite's Keplerian broadcast ephemeris and clock, in SI units (angles in radians).
+/// Times are in the satellite's own system time: GPS time for GPS, QZSS, and Galileo (whose weeks are counted
+/// like GPS's here, as in RINEX), BeiDou time for BeiDou.
 #[derive(Clone, Debug, PartialEq)]
-pub struct GpsEphemeris {
-    pub prn: u8,
-    /// Full GPS week of `toe` (rollovers resolved).
+pub struct KeplerEphemeris {
+    pub sat: SatId,
+    /// Full week of `toe` (rollovers resolved).
     pub week: u32,
     pub sv_accuracy_index: u8,
     pub sv_health: u8,
     pub iodc: u16,
-    pub iode: u8,
+    /// Issue of data (IODE for GPS and QZSS, IODnav for Galileo, AODE for BeiDou).
+    pub iode: u16,
+    /// Group delay (s) of the L1-band signal, to subtract from the clock: GPS's TGD, Galileo's BGD for the
+    /// clock's frequency pair, BeiDou's TGD1.
     pub tgd: f64,
     pub toc: f64,
     pub af0: f64,
@@ -71,17 +84,62 @@ fn week_diff(a: f64, b: f64) -> f64 {
     d
 }
 
-impl GpsEphemeris {
-    /// Whether the ephemeris is usable at GPS seconds-of-week `t` (healthy and within 4 h of `toe`).
-    pub fn valid_at(&self, t: f64) -> bool {
-        self.sv_health == 0 && week_diff(t, self.toe).abs() <= 4.0 * 3600.0
+impl KeplerEphemeris {
+    fn mu(&self) -> f64 {
+        match self.sat.system {
+            System::Gps | System::Qzss => MU,
+            _ => MU_GALILEO_BEIDOU,
+        }
     }
 
-    /// Position and eccentric anomaly at GPS seconds-of-week `t`.
+    fn omega_e(&self) -> f64 {
+        match self.sat.system {
+            System::Beidou => OMEGA_E_BEIDOU,
+            _ => OMEGA_E,
+        }
+    }
+
+    fn relativistic_f(&self) -> f64 {
+        match self.sat.system {
+            System::Gps | System::Qzss => F,
+            _ => -2.0 * self.mu().sqrt() / (C * C),
+        }
+    }
+
+    /// BeiDou's geostationary satellites, whose orbits are broadcast in a frame tilted by 5 degrees.
+    fn is_beidou_geo(&self) -> bool {
+        self.sat.system == System::Beidou && (self.sat.svid <= 5 || self.sat.svid >= 59)
+    }
+
+    /// GPS seconds of week as seconds of week in the satellite's system time.
+    fn system_time(&self, t_gps: f64) -> f64 {
+        match self.sat.system {
+            System::Beidou => t_gps - BDT_BEHIND_GPS_NS as f64 * 1e-9,
+            _ => t_gps,
+        }
+    }
+
+    /// `toe` as GPS seconds since the GPS epoch, to compare ephemerides across systems.
+    pub fn toe_gps_seconds(&self) -> f64 {
+        let t = f64::from(self.week) * SECONDS_PER_WEEK + self.toe;
+        match self.sat.system {
+            // BeiDou weeks count from 2006-01-01, 1356 GPS weeks later.
+            System::Beidou => t + 1356.0 * SECONDS_PER_WEEK + BDT_BEHIND_GPS_NS as f64 * 1e-9,
+            _ => t,
+        }
+    }
+
+    /// Whether the ephemeris is usable at GPS seconds-of-week `t` (healthy and within 4 h of `toe`).
+    pub fn valid_at(&self, t: f64) -> bool {
+        self.sv_health == 0 && week_diff(self.system_time(t), self.toe).abs() <= 4.0 * 3600.0
+    }
+
+    /// Position and eccentric anomaly at seconds-of-week `t` in the satellite's system time.
     fn position_at(&self, t: f64) -> ([f64; 3], f64) {
         let a = self.sqrt_a * self.sqrt_a;
         let tk = week_diff(t, self.toe);
-        let n = (MU / (a * a * a)).sqrt() + self.delta_n;
+        let omega_e = self.omega_e();
+        let n = (self.mu() / (a * a * a)).sqrt() + self.delta_n;
         let m = self.m0 + n * tk;
         // Kepler's equation by Newton's method.
         let mut ecc = m;
@@ -99,21 +157,43 @@ impl GpsEphemeris {
         let r = a * (1.0 - self.e * ecc.cos()) + self.crs * s2 + self.crc * c2;
         let i = self.i0 + self.idot * tk + self.cis * s2 + self.cic * c2;
         let (x, y) = (r * u.cos(), r * u.sin());
-        let big_omega = self.omega0 + (self.omega_dot - OMEGA_E) * tk - OMEGA_E * self.toe;
-        let (so, co) = big_omega.sin_cos();
         let (si, ci) = i.sin_cos();
+        if self.is_beidou_geo() {
+            // BDS SIS ICD section 5.2.4.12: in an inertial-like frame, then tilted by -5 degrees about x
+            // and rotated by the earth's turn since toe.
+            let big_omega = self.omega0 + self.omega_dot * tk - omega_e * self.toe;
+            let (so, co) = big_omega.sin_cos();
+            let g = [x * co - y * ci * so, x * so + y * ci * co, y * si];
+            let (sf, cf) = (-5f64).to_radians().sin_cos();
+            let tilted = [g[0], cf * g[1] + sf * g[2], -sf * g[1] + cf * g[2]];
+            let (sz, cz) = (omega_e * tk).sin_cos();
+            return (
+                [
+                    cz * tilted[0] + sz * tilted[1],
+                    -sz * tilted[0] + cz * tilted[1],
+                    tilted[2],
+                ],
+                ecc,
+            );
+        }
+        let big_omega = self.omega0 + (self.omega_dot - omega_e) * tk - omega_e * self.toe;
+        let (so, co) = big_omega.sin_cos();
         ([x * co - y * ci * so, x * so + y * ci * co, y * si], ecc)
     }
 
     fn clock_at(&self, t: f64, ecc: f64) -> f64 {
         let dt = week_diff(t, self.toc);
-        self.af0 + self.af1 * dt + self.af2 * dt * dt + F * self.e * self.sqrt_a * ecc.sin()
+        self.af0
+            + self.af1 * dt
+            + self.af2 * dt * dt
+            + self.relativistic_f() * self.e * self.sqrt_a * ecc.sin()
     }
 
     /// The satellite's state at GPS seconds-of-week `t` (a transmit time, in GPS time).
     /// Velocity and clock drift are central differences over 10 ms, far more precise than the measurements.
     pub fn state_at(&self, t: f64) -> SatState {
         const H: f64 = 0.005;
+        let t = self.system_time(t);
         let (position, ecc) = self.position_at(t);
         let (before, ecc_before) = self.position_at(t - H);
         let (after, ecc_after) = self.position_at(t + H);

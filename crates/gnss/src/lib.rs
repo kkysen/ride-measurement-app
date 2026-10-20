@@ -2,5 +2,6 @@
 
 pub mod ephemeris;
 pub mod lnav;
+pub mod rinex;
 pub mod solve;
 pub mod system;

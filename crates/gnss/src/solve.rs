@@ -10,7 +10,7 @@ use ride_session::proto::{
     GnssClock, GnssMeasurement, GnssMeasurementsEvent, GnssNavigationMessage,
 };
 
-use crate::ephemeris::{C, GpsEphemeris, OMEGA_E, SECONDS_PER_WEEK, SatState};
+use crate::ephemeris::{C, KeplerEphemeris, OMEGA_E, SECONDS_PER_WEEK, SatState};
 use crate::lnav::{EphemerisAssembler, TYPE_GPS_L1CA, decode_subframe};
 use crate::system::{DEFAULT_LEAP_SECONDS, NANOS_PER_WEEK, SatId, System};
 
@@ -98,23 +98,19 @@ pub struct Stats {
 #[derive(Default)]
 pub struct Navigator {
     assembler: EphemerisAssembler,
-    ephemerides: BTreeMap<SatId, Vec<GpsEphemeris>>,
+    ephemerides: BTreeMap<SatId, Vec<KeplerEphemeris>>,
     /// Full GPS week from the latest clock, to resolve navigation messages' 10-bit weeks.
     week: Option<u32>,
     /// Subframes that arrived before any clock.
-    waiting: Vec<(u8, crate::lnav::Subframe)>,
+    waiting: Vec<(SatId, crate::lnav::Subframe)>,
     last_position: Option<[f64; 3]>,
     pub stats: Stats,
 }
 
 impl Navigator {
     /// Adds an ephemeris from elsewhere (e.g. a downloaded broadcast ephemeris file).
-    pub fn add_ephemeris(&mut self, eph: GpsEphemeris) {
-        let id = SatId {
-            system: System::Gps,
-            svid: eph.prn,
-        };
-        let list = self.ephemerides.entry(id).or_default();
+    pub fn add_ephemeris(&mut self, eph: KeplerEphemeris) {
+        let list = self.ephemerides.entry(eph.sat).or_default();
         if !list
             .iter()
             .any(|e| e.week == eph.week && e.toe == eph.toe && e.iode == eph.iode)
@@ -128,19 +124,23 @@ impl Navigator {
         if msg.r#type != TYPE_GPS_L1CA {
             return;
         }
-        let Ok(prn) = u8::try_from(msg.svid) else {
+        let Ok(svid) = u8::try_from(msg.svid) else {
             return;
+        };
+        let sat = SatId {
+            system: System::Gps,
+            svid,
         };
         match decode_subframe(&msg.data) {
             Ok(sf) => {
                 self.stats.subframes_ok += 1;
                 match self.week {
                     Some(week) => {
-                        if let Some(eph) = self.assembler.add(prn, sf, week) {
+                        if let Some(eph) = self.assembler.add(sat, sf, week) {
                             self.add_ephemeris(eph);
                         }
                     }
-                    None if self.waiting.len() < 1000 => self.waiting.push((prn, sf)),
+                    None if self.waiting.len() < 1000 => self.waiting.push((sat, sf)),
                     None => {}
                 }
             }
@@ -167,8 +167,8 @@ impl Navigator {
             u32::try_from(rx_gps_ns.div_euclid(NANOS_PER_WEEK)).map_err(|_| NoSolution::NoClock)?;
         if self.week != Some(week) {
             self.week = Some(week);
-            for (prn, sf) in std::mem::take(&mut self.waiting) {
-                if let Some(eph) = self.assembler.add(prn, sf, week) {
+            for (sat, sf) in std::mem::take(&mut self.waiting) {
+                if let Some(eph) = self.assembler.add(sat, sf, week) {
                     self.add_ephemeris(eph);
                 }
             }
@@ -256,18 +256,13 @@ impl Navigator {
     }
 
     /// The ephemeris for `id` valid at `t` (GPS seconds of `week`) with the closest `toe`.
-    fn ephemeris(&self, id: SatId, week: u32, t: f64) -> Option<&GpsEphemeris> {
+    fn ephemeris(&self, id: SatId, week: u32, t: f64) -> Option<&KeplerEphemeris> {
         let at = f64::from(week) * SECONDS_PER_WEEK + t;
         self.ephemerides
             .get(&id)?
             .iter()
             .filter(|e| e.sv_health == 0)
-            .map(|e| {
-                (
-                    e,
-                    (at - (f64::from(e.week) * SECONDS_PER_WEEK + e.toe)).abs(),
-                )
-            })
+            .map(|e| (e, (at - e.toe_gps_seconds()).abs()))
             .filter(|&(_, d)| d <= 4.0 * 3600.0)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(e, _)| e)
