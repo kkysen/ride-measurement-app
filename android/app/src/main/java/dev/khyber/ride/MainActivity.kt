@@ -66,7 +66,7 @@ class MainActivity : ComponentActivity() {
                 when {
                     estimate.stopped -> "0 $unit"
                     // Within its uncertainty of standing still: a number would suggest motion that may not be there.
-                    v < sigma -> "under %.0f $unit".format(v + sigma)
+                    v < sigma -> "< %.0f $unit".format(v + sigma)
                     else -> "%.0f $unit ± %.0f".format(v, sigma)
                 },
                 style = MaterialTheme.typography.displayMedium,
