@@ -83,6 +83,9 @@ pub struct SmoothedSpeed {
     pub sigma_mps: f64,
     pub forward_mps: f64,
     pub backward_mps: f64,
+    /// Acceleration in the direction of travel (m/s^2): the passes' low-passed rates of change of the fused speed,
+    /// weighted like the speed. Their lags run opposite ways in time, so the combination is roughly centered.
+    pub accel_mps2: f64,
 }
 
 pub struct Fusion {
@@ -269,5 +272,7 @@ fn combine(t: i64, f: &Estimate, b: &Estimate) -> SmoothedSpeed {
         sigma_mps: (1.0 / (wf + wb)).sqrt(),
         forward_mps: f.speed_mps,
         backward_mps: b.speed_mps,
+        // In reversed time, speeding up is slowing down.
+        accel_mps2: (f.accel_mps2 * wf - b.accel_mps2 * wb) / (wf + wb),
     }
 }

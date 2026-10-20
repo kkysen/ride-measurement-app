@@ -35,6 +35,9 @@ pub struct Estimate {
     pub rejected: BTreeMap<Sensor, u32>,
     /// Whether a measurement (GNSS or a stop) has set the speed yet; before that it's integrated from 0.
     pub initialized: bool,
+    /// Acceleration in the direction of travel (m/s^2, negative when braking): the rate of change of the fused
+    /// speed (IMU prediction and GNSS and stop corrections alike), averaged over about [`ACCEL_TAU_S`].
+    pub accel_mps2: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -69,6 +72,8 @@ const SIGN_EVIDENCE: f64 = 2.0;
 const ACCEL_NOISE: f64 = 0.3;
 const BIAS_WALK: f64 = 0.005;
 const BIAS_SIGMA0: f64 = 0.1;
+/// Time constant of the reported acceleration's low-pass, to steady it against vibration.
+const ACCEL_TAU_S: f64 = 1.0;
 const STOP_SIGMA_MPS: f64 = 0.05;
 const DEFAULT_DOPPLER_SIGMA_MPS: f64 = 0.5;
 const MIN_DOPPLER_SIGMA_MPS: f64 = 0.1;
@@ -112,6 +117,14 @@ pub struct LiveSpeedEstimator {
     p01: f64,
     p11: f64,
     initialized: bool,
+    /// Low-passed rate of change of `|v|`, and the speed and time it was last updated at.
+    accel: f64,
+    accel_speed: f64,
+    accel_ns: i64,
+    /// Whether `initialized` was set when the rate was last updated, and whether the speed was reset since:
+    /// the speed jumps then, which isn't acceleration.
+    accel_initialized: bool,
+    accel_reset: bool,
 
     // GNSS.
     last_gnss_ns: i64,
@@ -151,6 +164,11 @@ impl Default for LiveSpeedEstimator {
             p01: 0.0,
             p11: BIAS_SIGMA0 * BIAS_SIGMA0,
             initialized: false,
+            accel: 0.0,
+            accel_speed: 0.0,
+            accel_ns: 0,
+            accel_initialized: false,
+            accel_reset: false,
             last_gnss_ns: 0,
             predicted_ns: 0,
             prev_doppler_speed: None,
@@ -288,6 +306,7 @@ impl LiveSpeedEstimator {
                 self.axis_sign_known = true;
             }
         }
+        self.track_accel(t_ns);
     }
 
     /// A GNSS fix: Doppler speed if the fix has one, and position for position-differenced speed.
@@ -297,6 +316,7 @@ impl LiveSpeedEstimator {
         self.last_gnss_ns = t_ns;
         self.inflate_to(t_ns);
         self.on_doppler_speed(t_ns, speed_mps, sigma_mps);
+        self.track_accel(t_ns);
     }
 
     pub fn on_gnss_fix(
@@ -336,6 +356,7 @@ impl LiveSpeedEstimator {
             }
             self.prev_fix = Some(fix);
         }
+        self.track_accel(t_ns);
     }
 
     pub fn estimate(&self, now_ns: i64) -> Estimate {
@@ -353,6 +374,7 @@ impl LiveSpeedEstimator {
                 .then(|| (now_ns - self.last_gnss_ns) as f64 * 1e-9),
             rejected: self.rejected.clone(),
             initialized: self.initialized,
+            accel_mps2: self.accel,
         }
     }
 
@@ -416,6 +438,7 @@ impl LiveSpeedEstimator {
                 self.p00 = sigma * sigma;
                 self.p01 = 0.0;
                 self.p11 = BIAS_SIGMA0 * BIAS_SIGMA0;
+                self.accel_reset = true;
                 self.gnss_reject_streak = 0;
                 self.mark_used(sensor, t_ns);
             }
@@ -510,6 +533,27 @@ impl LiveSpeedEstimator {
         self.initialized = true;
         self.mark_used(sensor, t_ns);
         true
+    }
+
+    /// Folds the change in fused speed since the last call into the low-passed acceleration.
+    /// A correction adds its whole step at once; the low-pass spreads it over [`ACCEL_TAU_S`],
+    /// the same as if it had come over many IMU samples.
+    fn track_accel(&mut self, t_ns: i64) {
+        let speed = self.v.abs();
+        let jumped = self.accel_reset || self.initialized != self.accel_initialized;
+        // A change at the same time as the last update (or earlier, out of order) waits for the next one.
+        if t_ns <= self.accel_ns && !jumped {
+            return;
+        }
+        if self.accel_ns != 0 && !jumped {
+            let dt = (t_ns - self.accel_ns) as f64 * 1e-9;
+            let k = 1.0 - (-dt / ACCEL_TAU_S).exp();
+            self.accel += k * ((speed - self.accel_speed) / dt - self.accel);
+        }
+        self.accel_ns = self.accel_ns.max(t_ns);
+        self.accel_speed = speed;
+        self.accel_initialized = self.initialized;
+        self.accel_reset = false;
     }
 
     fn mark_used(&mut self, sensor: Sensor, t_ns: i64) {

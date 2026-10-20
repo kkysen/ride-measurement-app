@@ -292,3 +292,29 @@ fn imu_acceleration_is_capped_at_one_g() {
     let after = est.estimate(ns(end + 0.2)).speed_mps;
     assert!(after - before <= G * 0.2 + 0.1, "{before} -> {after}");
 }
+
+#[test]
+fn acceleration_is_reported_along_travel() {
+    // Speeding up, then braking at 0.8 m/s^2 from 15 m/s, with the phone facing backward.
+    let profile = |t: f64| match t {
+        t if (5.0..20.0).contains(&t) => 1.0,
+        t if (30.0..35.0).contains(&t) => -0.8,
+        _ => 0.0,
+    };
+    let mut est = LiveSpeedEstimator::new();
+    let (_, t) = simulate(&mut est, 18.0, profile, -1.0, None);
+    assert_close(1.0, est.estimate(ns(t)).accel_mps2, 0.15);
+    let mut est = LiveSpeedEstimator::new();
+    let (_, t) = simulate(&mut est, 34.0, profile, -1.0, None);
+    assert_close(-0.8, est.estimate(ns(t)).accel_mps2, 0.15);
+}
+
+#[test]
+fn acceleration_follows_gnss_without_imu() {
+    let mut est = LiveSpeedEstimator::new();
+    for t in 0..20 {
+        let speed = 0.5 * t as f64;
+        est.on_gnss_fix(ns(t as f64), 0.0, 0.0, None, Some(speed), Some(0.3));
+    }
+    assert_close(0.5, est.estimate(ns(19.0)).accel_mps2, 0.1);
+}
