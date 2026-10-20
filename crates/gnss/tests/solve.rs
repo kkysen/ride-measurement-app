@@ -310,3 +310,25 @@ fn velocity_solves_when_position_cannot() {
     assert_eq!(nav.stats.positions_solved, 0);
     assert_eq!(nav.stats.velocities_solved, 1);
 }
+
+/// BeiDou B1C measurements are left out: the broadcast clock's group delay is B1I's.
+#[test]
+fn ignores_beidou_b1c() {
+    let (mut nav, mut event, _, _) = sparse_sky(&[(1, 1), (5, 3), (6, 4)]);
+    let with_b1i = nav.on_measurements(&event).unwrap().velocity.unwrap();
+    for m in event
+        .measurements
+        .iter_mut()
+        .filter(|m| m.constellation_type == 5)
+    {
+        m.carrier_frequency_hz = Some(1.575_42e9);
+    }
+    let with_b1c = nav.on_measurements(&event).unwrap().velocity.unwrap();
+    let count = |v: &ride_gnss::solve::VelocitySolution| {
+        v.satellites_by_system
+            .iter()
+            .find(|(s, _)| *s == System::Beidou)
+            .map_or(0, |(_, n)| *n)
+    };
+    assert_eq!((count(&with_b1i), count(&with_b1c)), (3, 0));
+}

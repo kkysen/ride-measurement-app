@@ -35,6 +35,8 @@ const MIN_PSEUDORANGE_SIGMA: f64 = 1.0;
 const MIN_PRR_SIGMA: f64 = 0.05;
 /// Residuals beyond this many sigma reject the worst satellite and solve again.
 const OUTLIER_SIGMA: f64 = 4.0;
+/// BeiDou B1C's carrier frequency (Hz), shared with GPS L1.
+const BEIDOU_B1C_HZ: f32 = 1.575_42e9;
 /// Weaker signals than this are too noisy and multipath-prone to use.
 const MIN_CN0_DBHZ: f64 = 20.0;
 
@@ -392,6 +394,14 @@ impl Navigator {
             let Ok(svid) = u8::try_from(m.svid) else {
                 continue;
             };
+            // BeiDou's broadcast D1/D2 clock comes with B1I's group delay (TGD1); B1C's differs and is only in its own
+            // CNAV1 message, so B1C (on GPS's L1 frequency) would add a bias. Phones track B1I on every BeiDou satellite.
+            if system == System::Beidou
+                && m.carrier_frequency_hz
+                    .is_some_and(|f| (f - BEIDOU_B1C_HZ).abs() < 1e6)
+            {
+                continue;
+            }
             // GLONASS reports its frequency channel (93 to 106) instead when it doesn't know the slot.
             if system == System::Glonass && svid > 27 {
                 continue;
