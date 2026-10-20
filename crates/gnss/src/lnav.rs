@@ -1,4 +1,4 @@
-//! GPS L1 C/A navigation messages (LNAV) as Android delivers them, decoded into ephemerides.
+//! GPS and QZSS L1 C/A navigation messages (LNAV) as Android delivers them, decoded into ephemerides.
 //!
 //! `GnssNavigationMessage.getData()` for GPS L1 C/A: one subframe of 10 words of 30 bits,
 //! each in the low 30 bits of 4 bytes, most significant bit first: 40 bytes.
@@ -10,8 +10,9 @@ use std::collections::BTreeMap;
 use crate::ephemeris::{GPS_PI, KeplerEphemeris};
 use crate::system::SatId;
 
-/// `GnssNavigationMessage.TYPE_GPS_L1CA`.
+/// `GnssNavigationMessage.TYPE_GPS_L1CA`, `TYPE_QZS_L1CA`.
 pub const TYPE_GPS_L1CA: i32 = 0x0101;
+pub const TYPE_QZS_L1CA: i32 = 0x0401;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LnavError {

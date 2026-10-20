@@ -121,3 +121,53 @@ fn android_layout_round_trips_and_parity_catches_bit_flips() {
     }
     assert!(checked > 100);
 }
+
+/// Real subframes sent to the navigator as Android would, once as GPS and once as QZSS (same format):
+/// each becomes an ephemeris of its own constellation once a clock gives the week.
+#[test]
+fn navigator_takes_gps_and_qzss_navigation_messages() {
+    use ride_gnss::solve::Navigator;
+    use ride_session::proto::{GnssClock, GnssMeasurementsEvent, GnssNavigationMessage};
+
+    let bytes = include_bytes!("data/ubx_20080526-sfrb.bin");
+    let mut nav = Navigator::default();
+    for msg in bytes.as_chunks::<42>().0 {
+        let words: [u32; 10] = std::array::from_fn(|i| {
+            u32::from_le_bytes(msg[2 + 4 * i..6 + 4 * i].try_into().unwrap())
+        });
+        let Ok(sf) = Subframe::from_data_words(words) else {
+            continue;
+        };
+        for (r#type, svid) in [
+            (0x0101, i32::from(msg[1])),
+            (0x0401, 192 + i32::from(msg[1])),
+        ] {
+            nav.on_navigation_message(&GnssNavigationMessage {
+                r#type,
+                svid,
+                data: encode_android(&sf),
+                ..Default::default()
+            });
+        }
+    }
+    // Any clock in the week resolves the subframes' 10-bit week.
+    let rx_gps_ns = i64::from(WEEK_2008_05_26) * 604_800_000_000_000 + 86_400_000_000_000;
+    let _ = nav.on_measurements(&GnssMeasurementsEvent {
+        clock: Some(GnssClock {
+            time_nanos: 1_000_000_000,
+            full_bias_nanos: Some(1_000_000_000 - rx_gps_ns),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    // Distinct broadcasts: the log repeats each one every 30 s.
+    let mut distinct: Vec<_> = ublox_ephemerides()
+        .iter()
+        .map(|e| (e.sat, e.toe as u32, e.iode))
+        .collect();
+    distinct.sort();
+    distinct.dedup();
+    let gps = distinct.len() as u64;
+    assert!(gps >= 5);
+    assert_eq!(nav.stats.ephemerides, 2 * gps);
+}

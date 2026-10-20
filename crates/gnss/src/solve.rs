@@ -11,7 +11,7 @@ use ride_session::proto::{
 };
 
 use crate::ephemeris::{C, Ephemeris, OMEGA_E, SECONDS_PER_WEEK, SatState};
-use crate::lnav::{EphemerisAssembler, TYPE_GPS_L1CA, decode_subframe};
+use crate::lnav::{EphemerisAssembler, TYPE_GPS_L1CA, TYPE_QZS_L1CA, decode_subframe};
 use crate::system::{DEFAULT_LEAP_SECONDS, NANOS_PER_WEEK, SatId, System};
 
 /// Signal travel times (ns) outside this are bad times: medium orbits take 64 to 100 ms,
@@ -121,16 +121,16 @@ impl Navigator {
     }
 
     pub fn on_navigation_message(&mut self, msg: &GnssNavigationMessage) {
-        if msg.r#type != TYPE_GPS_L1CA {
-            return;
-        }
+        let system = match msg.r#type {
+            TYPE_GPS_L1CA => System::Gps,
+            // QZSS L1 C/A has GPS's LNAV format and time.
+            TYPE_QZS_L1CA => System::Qzss,
+            _ => return,
+        };
         let Ok(svid) = u8::try_from(msg.svid) else {
             return;
         };
-        let sat = SatId {
-            system: System::Gps,
-            svid,
-        };
+        let sat = SatId { system, svid };
         match decode_subframe(&msg.data) {
             Ok(sf) => {
                 self.stats.subframes_ok += 1;
