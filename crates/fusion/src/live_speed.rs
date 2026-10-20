@@ -159,6 +159,8 @@ pub struct LiveSpeedEstimator {
     along_since_gnss: f64,
     sign_evidence: f64,
     gnss_reject_streak: u32,
+    /// The signed speeds rejected in the current streak, to re-initialize from their median.
+    gnss_rejected: Vec<f64>,
     prev_fix: Option<Fix>,
 
     last_used_ns: BTreeMap<Sensor, i64>,
@@ -205,6 +207,7 @@ impl Default for LiveSpeedEstimator {
             along_since_gnss: 0.0,
             sign_evidence: 0.0,
             gnss_reject_streak: 0,
+            gnss_rejected: Vec::new(),
             prev_fix: None,
             last_used_ns: BTreeMap::new(),
             rejected: BTreeMap::new(),
@@ -486,13 +489,23 @@ impl LiveSpeedEstimator {
         }
         if self.update(signed, sigma * sigma, sensor, t_ns) {
             self.gnss_reject_streak = 0;
+            self.gnss_rejected.clear();
         } else {
             self.gnss_reject_streak += 1;
+            self.gnss_rejected.push(signed);
             if self.gnss_reject_streak >= GNSS_REINIT_REJECTS {
-                // Several GNSS fixes in a row disagree with the IMU-driven prediction: trust GNSS.
-                self.v = signed;
+                // Several GNSS fixes in a row disagree with the IMU-driven prediction: trust GNSS, by their median,
+                // so one bad speed among them (it happens, with a small claimed sigma) isn't what the filter restarts on.
+                let mut rejected = std::mem::take(&mut self.gnss_rejected);
+                rejected.sort_by(f64::total_cmp);
+                let median = rejected[rejected.len() / 2];
+                let spread = rejected
+                    .iter()
+                    .map(|v| (v - median).abs())
+                    .fold(0.0, f64::max);
+                self.v = median;
                 self.b = 0.0;
-                self.p00 = sigma * sigma;
+                self.p00 = sigma.max(spread).powi(2);
                 self.p01 = 0.0;
                 self.p11 = BIAS_SIGMA0 * BIAS_SIGMA0;
                 self.accel_reset = true;
