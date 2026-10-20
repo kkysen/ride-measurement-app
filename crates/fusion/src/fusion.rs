@@ -8,8 +8,9 @@
 //!   and the live display gets a provisional estimate through the newest ones.
 //! - Smoothing runs the same estimator backward in time over the buffered inputs (gyro negated, as time reversal
 //!   runs rotation backward) and combines both directions at each fix and second by their uncertainties.
-//!   It re-runs every [`SMOOTH_EVERY_NS`] of settled input over the last [`SMOOTH_WINDOW_NS`],
-//!   and each value is frozen as it leaves the window, live and offline alike.
+//!   Offline, it runs once over the whole ride. Live, it re-runs every [`SMOOTH_EVERY_NS`] of settled input
+//!   that brought a new GNSS measurement, and a value freezes once smoothing has included [`SMOOTH_WINDOW_NS`]
+//!   of GNSS after it: so the fixes after a tunnel, however long, correct all of it, up to [`MAX_UNMEASURED_NS`].
 //!   The backward pass carries the first good fix after a tunnel back through it, which a forward filter can't.
 //!   It starts from the forward pass's frame (gravity, travel axis, bias), which constant speed can't teach it.
 
@@ -107,12 +108,16 @@ fn step(
 /// Forward estimates are kept at every fix and at least this often, so smoothing covers gaps without fixes.
 const SAMPLE_EVERY_NS: i64 = 1_000_000_000;
 
-/// Smoothing re-runs whenever settled input crosses a multiple of this,
-/// so the map's recent path is recolored about as soon as a fix after a tunnel arrives.
+/// Live smoothing re-runs at most this often, when settled input crosses a multiple of it with a new GNSS
+/// measurement, so the map's recent path is recolored about as soon as a fix after a tunnel arrives.
+/// Without one it wouldn't change: the backward pass has no weight until a measurement initializes it.
 pub const SMOOTH_EVERY_NS: i64 = 1_000_000_000;
-/// How much recent input each smoothing covers: on the phone, about 25 MB of IMU samples,
-/// and about 12 ms per re-run on a desktop. Each value is frozen as it leaves it.
+/// How much GNSS after a value live smoothing includes before freezing it, so how far back it reaches while GNSS
+/// is available: on the phone, about 25 MB of IMU samples, and about 12 ms per re-run on a desktop.
 pub const SMOOTH_WINDOW_NS: i64 = 600_000_000_000;
+/// Live, values without a GNSS measurement after them freeze anyway once this old,
+/// which bounds the phone's memory (about 150 MB of IMU samples) and the re-run on leaving a tunnel.
+pub const MAX_UNMEASURED_NS: i64 = 3_600_000_000_000;
 
 /// `android.hardware.Sensor` types.
 pub const TYPE_ACCELEROMETER: i32 = 1;
@@ -189,6 +194,11 @@ pub struct Fusion {
     recent: VecDeque<SmoothedSpeed>,
     frozen: Vec<SmoothedSpeed>,
     next_smooth_ns: Option<i64>,
+    /// The times of settled GNSS measurements (fixes and own velocities) in the window,
+    /// and the newest one the latest smoothing included.
+    measured: VecDeque<i64>,
+    measured_ns: Option<i64>,
+    smoothed_measured_ns: Option<i64>,
 }
 
 impl Default for Fusion {
@@ -198,13 +208,18 @@ impl Default for Fusion {
 }
 
 impl Fusion {
-    /// Live and offline: smoothing re-runs over [`SMOOTH_WINDOW_NS`] every [`SMOOTH_EVERY_NS`].
+    /// Live: smoothing re-runs as GNSS measurements arrive, over [`SMOOTH_WINDOW_NS`] or since GNSS was lost.
     pub fn new() -> Self {
         Self::with_window(Some(SMOOTH_WINDOW_NS))
     }
 
-    /// `window_ns`: how much input each smoothing covers;
-    /// `None` keeps everything and smooths it all at once, when asked (a reference for tests).
+    /// Offline: everything is kept and smoothed at once, when asked, so every tunnel gets the fix after it.
+    pub fn whole_ride() -> Self {
+        Self::with_window(None)
+    }
+
+    /// `window_ns`: how long values stay unfrozen once a GNSS measurement after them has been smoothed;
+    /// `None` keeps everything and smooths it all at once.
     pub fn with_window(window_ns: Option<i64>) -> Self {
         Self {
             estimator: LiveSpeedEstimator::new(),
@@ -221,6 +236,9 @@ impl Fusion {
             recent: VecDeque::new(),
             frozen: Vec::new(),
             next_smooth_ns: None,
+            measured: VecDeque::new(),
+            measured_ns: None,
+            smoothed_measured_ns: None,
         }
     }
 
@@ -276,6 +294,7 @@ impl Fusion {
         }
         if self.window_ns.is_some() {
             self.recent = self.smooth_window().into();
+            self.smoothed_measured_ns = self.measured_ns;
         }
     }
 
@@ -333,6 +352,10 @@ impl Fusion {
                 .is_none_or(|&(t, _)| t_ns - t >= SAMPLE_EVERY_NS),
             _ => false,
         };
+        if matches!(kept, Input::Fix(_) | Input::Speed(..)) {
+            self.measured_ns = Some(self.measured_ns.map_or(t_ns, |m| m.max(t_ns)));
+            self.measured.push_back(t_ns);
+        }
         self.buffer(t_ns, kept);
         if sample {
             self.forward
@@ -340,8 +363,9 @@ impl Fusion {
         }
         if self.window_ns.is_some() {
             let next = *self.next_smooth_ns.get_or_insert(t_ns);
-            if t_ns >= next {
+            if t_ns >= next && self.measured_ns != self.smoothed_measured_ns {
                 self.recent = self.smooth_window().into();
+                self.smoothed_measured_ns = self.measured_ns;
                 self.next_smooth_ns =
                     Some(t_ns - t_ns.rem_euclid(SMOOTH_EVERY_NS) + SMOOTH_EVERY_NS);
             }
@@ -374,11 +398,21 @@ impl Fusion {
     fn buffer(&mut self, t_ns: i64, input: Input) {
         self.inputs.push_back((t_ns, input));
         if let Some(window) = self.window_ns {
-            while self.inputs.front().is_some_and(|(t, _)| t_ns - t > window) {
+            // Smoothed with a window's worth of GNSS after it, or too old to wait any longer.
+            let measured = &self.measured;
+            let smoothed = self.smoothed_measured_ns;
+            let done = |t: i64| {
+                t_ns - t > MAX_UNMEASURED_NS
+                    || measured
+                        .iter()
+                        .find(|&&m| m > t)
+                        .is_some_and(|&first| smoothed.is_some_and(|s| s - first >= window))
+            };
+            while self.inputs.front().is_some_and(|(t, _)| done(*t)) {
                 self.inputs.pop_front();
             }
             while let Some(&(t, ref f)) = self.forward.front() {
-                if t_ns - t <= window {
+                if !done(t) {
                     break;
                 }
                 // Freeze its latest smoothing, or the forward estimate alone if smoothing never reached it.
@@ -402,6 +436,10 @@ impl Fusion {
                 };
                 self.frozen.push(value);
                 self.forward.pop_front();
+            }
+            let oldest = self.inputs.front().map_or(t_ns, |&(t, _)| t);
+            while self.measured.len() > 1 && self.measured[1] <= oldest {
+                self.measured.pop_front();
             }
         }
     }

@@ -1,5 +1,5 @@
 //! Replays a recorded session through [`Fusion`], fed exactly as the app feeds it live,
-//! smoothing every second over the last 10 minutes, and freezing each value as it leaves them, as live does.
+//! then smooths over the whole ride: live smooths only recent input, as it arrives, which can only be less accurate.
 
 use ride_gnss::solve::Stats;
 use ride_session::proto::record::Payload;
@@ -104,7 +104,7 @@ pub fn replay(session: &Session) -> anyhow::Result<Replay> {
     // Stable, so at equal times sensors (pushed first) come before GNSS.
     events.sort_by_key(|(t, _)| *t);
 
-    let mut fusion = Fusion::new();
+    let mut fusion = Fusion::whole_ride();
     // Downloaded orbits (`just orbits`), for constellations whose navigation messages the phone missed.
     for eph in ride_gnss::orbits::read_session_orbits(&session.dir)? {
         fusion.navigator_mut().add_ephemeris(eph);

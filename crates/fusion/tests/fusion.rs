@@ -18,7 +18,7 @@ fn profile(t: f64) -> f64 {
 /// A 140 s ride with an uncorrected accelerometer bias along the direction of travel and no GNSS while
 /// `in_tunnel`; returns the speeds smoothed all at once and the true speed each second.
 fn ride(in_tunnel: impl Fn(f64) -> bool) -> (Vec<SmoothedSpeed>, Vec<(i64, f64)>) {
-    ride_in(Fusion::with_window(None), in_tunnel)
+    ride_in(Fusion::whole_ride(), in_tunnel)
 }
 
 /// [`ride`], through `fusion`.
@@ -128,14 +128,13 @@ fn smoothing_matches_gnss_outside_tunnels() {
     }
 }
 
-/// Re-smoothing a 90 s window every second and freezing values as they leave it gives about what smoothing the
-/// whole ride at once does, as long as the window spans the tunnel: by the time a value in the tunnel freezes,
-/// the backward pass has already carried the fix after it back through it.
+/// Live smoothing, with a 20 s window and a 60 s tunnel, gives about what smoothing the whole ride at once does:
+/// nothing in the tunnel freezes until the fix after it has been carried back through it.
 #[test]
-fn windowed_smoothing_matches_whole_ride() {
+fn live_smoothing_matches_whole_ride_through_a_longer_tunnel() {
     let tunnel = |t: f64| (50.0..110.0).contains(&t);
     let (whole, _) = ride(tunnel);
-    let (windowed, _) = ride_in(Fusion::with_window(Some(90_000_000_000)), tunnel);
+    let (windowed, _) = ride_in(Fusion::with_window(Some(20_000_000_000)), tunnel);
     assert_eq!(
         windowed
             .iter()
@@ -213,7 +212,7 @@ fn feed(fusion: &mut Fusion, t: i64, e: &Event) {
 #[test]
 fn delivery_order_changes_nothing() {
     let (events, _) = ride_events();
-    let mut in_order = Fusion::with_window(None);
+    let mut in_order = Fusion::whole_ride();
     for (t, e) in &events {
         feed(&mut in_order, *t, e);
     }
@@ -235,7 +234,7 @@ fn delivery_order_changes_nothing() {
         })
         .collect();
     arrivals.sort();
-    let mut delivered = Fusion::with_window(None);
+    let mut delivered = Fusion::whole_ride();
     for &(_, i) in &arrivals {
         feed(&mut delivered, events[i].0, &events[i].1);
     }
@@ -248,7 +247,7 @@ fn delivery_order_changes_nothing() {
 #[test]
 fn provisional_estimate_tracks_the_newest_inputs() {
     let (events, truth) = ride_events();
-    let mut fusion = Fusion::with_window(None);
+    let mut fusion = Fusion::whole_ride();
     let mut checked = 0;
     for (t, e) in &events {
         feed(&mut fusion, *t, e);
@@ -277,7 +276,7 @@ fn provisional_estimate_tracks_the_newest_inputs() {
 #[test]
 fn late_inputs_are_counted_not_lost() {
     let (events, _) = ride_events();
-    let mut fusion = Fusion::with_window(None);
+    let mut fusion = Fusion::whole_ride();
     for (t, e) in &events {
         if *t > 10_000_000_000 {
             break;

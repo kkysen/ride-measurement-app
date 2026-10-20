@@ -35,7 +35,7 @@ pub fn map(
         .context("no GPS fixes in this session")?;
     let fixes: Vec<&TrackPoint> = segments.iter().flatten().collect();
     let points = fixes.len();
-    // The app's fusion replayed over the recorded IMU, fixes, and raw GNSS, smoothed as live smooths it.
+    // The app's fusion replayed over the recorded IMU, fixes, and raw GNSS, then smoothed over the whole ride.
     let replayed = replay(session)?;
     let g = &replayed.gnss;
     eprintln!(
