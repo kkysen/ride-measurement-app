@@ -2,9 +2,10 @@
 //! through exactly what the phone showed, and so the app can later share this code.
 //!
 //! A 1-D Kalman filter along the direction of travel, with state (speed, accelerometer bias along that direction):
-//! - Prediction: acceleration along the travel axis from the IMU. The axis is the dominant horizontal acceleration
-//!   direction in the phone's frame; gravity and the axis are carried through phone rotations by the gyro,
-//!   and gravity is re-learned from the accelerometer mostly while stopped, so sustained acceleration isn't taken for tilt.
+//! - Prediction: acceleration along the travel axis from the IMU. With GNSS, the axis is the horizontal direction
+//!   whose acceleration follows GNSS's speed changes, which gives its sign too; before any, it's the dominant
+//!   horizontal acceleration direction in the phone's frame. Gravity and the axis are carried through phone rotations
+//!   by the gyro, and gravity is re-learned from the accelerometer, so sustained acceleration isn't taken for tilt.
 //! - Measurements, each weighted by its own uncertainty:
 //!   GNSS Doppler speed, speed from successive GNSS positions, and stops (speed 0, from a quiet accelerometer).
 //! - Every measurement is gated: one more than [`GATE_SIGMA`] sigma from the prediction is rejected and counted,
@@ -75,6 +76,14 @@ const GNSS_RECENT_S: f64 = 5.0;
 const AXIS_MIN_VARIANCE: f64 = 0.002;
 const DEPARTURE_EVIDENCE_MPS: f64 = 1.0;
 const SIGN_EVIDENCE: f64 = 2.0;
+/// The GNSS-learned axis: how long its correlation averages over, the most acceleration a GNSS speed change can
+/// show and still be used (no train exceeds 1.4 m/s^2 outside an emergency; more is a bad speed), the GNSS speeds'
+/// largest uncertainty and spacing to use, and the correlation ((m/s^2)^2) it takes to replace the spread axis.
+const AXIS_GNSS_TAU_S: f64 = 30.0;
+const AXIS_GNSS_MAX_ACCEL_MPS2: f64 = 1.5;
+const AXIS_GNSS_MAX_SIGMA_MPS: f64 = 0.5;
+const AXIS_GNSS_MAX_DT_S: f64 = 1.5;
+const AXIS_GNSS_MIN_CROSS: f64 = 0.01;
 /// Process noise: unmodeled along-axis acceleration (m/s^2 per sqrt(s)), and bias random walk.
 const ACCEL_NOISE: f64 = 0.3;
 const BIAS_WALK: f64 = 0.005;
@@ -111,6 +120,12 @@ pub struct LiveSpeedEstimator {
     axis: [f64; 3],
     axis_known: bool,
     axis_sign_known: bool,
+    /// Correlation of horizontal acceleration with GNSS speed changes, and whether the axis comes from it.
+    axis_cross: [f64; 3],
+    axis_from_gnss: bool,
+    /// Horizontal acceleration integrated since the last GNSS speed (m/s, in the phone's frame) and over how long.
+    h_since_gnss: [f64; 3],
+    h_since_gnss_s: f64,
     omega: [f64; 3],
     last_ns: i64,
     mag_mean: f64,
@@ -139,7 +154,8 @@ pub struct LiveSpeedEstimator {
     last_gnss_ns: i64,
     /// How far the covariance has been propagated, by the IMU or [`Self::inflate_to`].
     predicted_ns: i64,
-    prev_doppler_speed: Option<f64>,
+    /// The last GNSS speed: time, speed, and sigma.
+    prev_doppler: Option<(i64, f64, f64)>,
     along_since_gnss: f64,
     sign_evidence: f64,
     gnss_reject_streak: u32,
@@ -161,6 +177,10 @@ impl Default for LiveSpeedEstimator {
             axis: [1.0, 0.0, 0.0],
             axis_known: false,
             axis_sign_known: false,
+            axis_cross: [0.0; 3],
+            axis_from_gnss: false,
+            h_since_gnss: [0.0; 3],
+            h_since_gnss_s: 0.0,
             omega: [0.0; 3],
             last_ns: 0,
             mag_mean: 0.0,
@@ -181,7 +201,7 @@ impl Default for LiveSpeedEstimator {
             accel_reset: false,
             last_gnss_ns: 0,
             predicted_ns: 0,
-            prev_doppler_speed: None,
+            prev_doppler: None,
             along_since_gnss: 0.0,
             sign_evidence: 0.0,
             gnss_reject_streak: 0,
@@ -215,6 +235,9 @@ impl LiveSpeedEstimator {
             axis: self.axis.map(|a| -a),
             axis_known: self.axis_known,
             axis_sign_known: self.axis_sign_known,
+            // Speed changes reverse with time, and the acceleration doesn't, so the correlation flips like the axis.
+            axis_cross: self.axis_cross.map(|c| -c),
+            axis_from_gnss: self.axis_from_gnss,
             b: -self.b,
             p11: self.p11,
             ..Self::default()
@@ -256,6 +279,8 @@ impl LiveSpeedEstimator {
         rotate_world_fixed(&self.omega, &mut self.gravity, dt);
         rotate_world_fixed(&self.omega, &mut self.axis, dt);
         rotate_world_fixed(&self.omega, &mut self.axis_mean, dt);
+        rotate_world_fixed(&self.omega, &mut self.axis_cross, dt);
+        rotate_world_fixed(&self.omega, &mut self.h_since_gnss, dt);
         self.rotate_cov(dt);
         let gnss_recent =
             self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
@@ -292,9 +317,14 @@ impl LiveSpeedEstimator {
             l[1] - vertical * g[1],
             l[2] - vertical * g[2],
         ];
-        if !still {
+        // Once GNSS has given the axis, the gyro carries it: the spread would drift to sway while cruising.
+        if !still && !self.axis_from_gnss {
             self.update_axis(&h, dt);
         }
+        for (s, x) in self.h_since_gnss.iter_mut().zip(h) {
+            *s += x * dt;
+        }
+        self.h_since_gnss_s += dt;
         let along = if self.axis_known {
             dot(&h, &self.axis)
         } else {
@@ -401,8 +431,11 @@ impl LiveSpeedEstimator {
     }
 
     fn on_doppler_speed(&mut self, t_ns: i64, speed: f64, sigma: f64) {
+        if let Some((t0, v0, s0)) = self.prev_doppler {
+            self.learn_axis_from_gnss(t_ns - t0, speed - v0, s0.max(sigma));
+        }
         // Speed change between fixes vs integrated along-axis acceleration fixes the axis sign.
-        if let Some(prev) = self.prev_doppler_speed
+        if let Some((_, prev, _)) = self.prev_doppler
             && self.axis_known
             && !self.axis_sign_known
         {
@@ -417,8 +450,10 @@ impl LiveSpeedEstimator {
                 }
             }
         }
-        self.prev_doppler_speed = Some(speed);
+        self.prev_doppler = Some((t_ns, speed, sigma));
         self.along_since_gnss = 0.0;
+        self.h_since_gnss = [0.0; 3];
+        self.h_since_gnss_s = 0.0;
         self.measure_speed_magnitude(
             speed,
             sigma.max(MIN_DOPPLER_SIGMA_MPS),
@@ -606,6 +641,40 @@ impl LiveSpeedEstimator {
                 self.cov[i * 3 + j] = c[i * 3 + j] - (wc - cw) * dt;
             }
         }
+    }
+
+    /// Folds one GNSS speed change (over `dt_ns`, worse sigma `sigma`) into the correlation with horizontal
+    /// acceleration over the same time, and takes the axis from it once it's strong enough. Lateral sway doesn't
+    /// follow speed changes, so it doesn't pull the axis; the sign comes with it, as GNSS speeding up is forward.
+    fn learn_axis_from_gnss(&mut self, dt_ns: i64, dv: f64, sigma: f64) {
+        let dt = dt_ns as f64 * 1e-9;
+        if !(0.0..=AXIS_GNSS_MAX_DT_S).contains(&dt)
+            || self.h_since_gnss_s < 0.5 * dt
+            || sigma > AXIS_GNSS_MAX_SIGMA_MPS
+        {
+            return;
+        }
+        let a = dv / dt;
+        if a.abs() > AXIS_GNSS_MAX_ACCEL_MPS2 {
+            return;
+        }
+        let k = 1.0 - (-dt / AXIS_GNSS_TAU_S).exp();
+        for (c, h) in self.axis_cross.iter_mut().zip(self.h_since_gnss) {
+            *c += k * (h / self.h_since_gnss_s * a - *c);
+        }
+        let n = norm(&self.axis_cross);
+        if n < AXIS_GNSS_MIN_CROSS {
+            return;
+        }
+        let axis = self.axis_cross.map(|c| c / n);
+        // The speed is signed along the axis; keep it (and the bias) meaning the same if the axis turns around.
+        if self.axis_known && dot(&axis, &self.axis) < 0.0 {
+            self.flip_axis();
+        }
+        self.axis = axis;
+        self.axis_known = true;
+        self.axis_sign_known = true;
+        self.axis_from_gnss = true;
     }
 
     /// Exponentially weighted covariance of horizontal acceleration, and its principal axis by power iteration.
