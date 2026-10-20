@@ -25,6 +25,7 @@ struct Velocity {
 /// One epoch's position, with its distance from the phone's own fix at about the same time (m).
 struct Position {
     residual_rms: f64,
+    checked: bool,
     satellites: usize,
     phone_distance: Option<f64>,
 }
@@ -92,6 +93,7 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
                     if let Some(p) = &sol.position {
                         positions.push(Position {
                             residual_rms: p.residual_rms,
+                            checked: p.checked,
                             satellites: p.satellites_used,
                             phone_distance: phone_position.filter(|(at, _)| recent(*at)).map(
                                 |(_, fix)| {
@@ -135,10 +137,14 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
         v.get(v.len() / 2).copied().unwrap_or(f64::NAN)
     };
     if !positions.is_empty() {
+        let checked: Vec<&Position> = positions.iter().filter(|p| p.checked).collect();
         println!(
-            "position: satellites median {}, pseudorange residual RMS median {:.1} m",
+            "position: satellites median {}, pseudorange residual RMS median {:.1} m (of {} checked), \
+             {} unchecked (no satellite to spare)",
             median(positions.iter().map(|p| p.satellites as f64).collect()),
-            median(positions.iter().map(|p| p.residual_rms).collect())
+            median(checked.iter().map(|p| p.residual_rms).collect()),
+            checked.len(),
+            positions.len() - checked.len()
         );
         let distances: Vec<f64> = positions.iter().filter_map(|p| p.phone_distance).collect();
         if !distances.is_empty() {

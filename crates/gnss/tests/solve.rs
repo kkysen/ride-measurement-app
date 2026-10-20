@@ -83,11 +83,18 @@ fn measurements_at(
         }
         // Transmit time on the satellite's clock (with group delay), and Doppler with both clocks' drift.
         let t_sv = t_tx + state.clock_bias - e.tgd();
+        // BeiDou counts its own time, 14 s behind GPS.
+        let t_sv = if e.sat().system == System::Beidou {
+            t_sv - 14.0
+        } else {
+            t_sv
+        };
         let prr = dot(sub(vel, v), los) + drift - C * state.clock_drift;
         ms.push(GnssMeasurement {
             svid: i32::from(e.sat().svid),
             constellation_type: match e.sat().system {
                 System::Galileo => 6,
+                System::Beidou => 5,
                 _ => 1,
             },
             state: 0x1 | 0x8,
@@ -209,52 +216,94 @@ fn survives_a_millisecond_pseudorange_error() {
     assert_eq!(vel.satellites_used + vel.satellites_rejected, n - 1);
 }
 
-/// Five satellites from two constellations: too few for position (3 coordinates, 2 clock biases, and one to
-/// check them), enough for velocity (3 components, 1 clock drift, and one to check), which uses the last
-/// position instead; even 500 m off, the directions to the satellites barely change.
-#[test]
-fn velocity_solves_when_position_cannot() {
-    // 2021-04-08 21:30 GPS time: GPS week 2152, Thursday.
+/// A navigator 500 m off, with measurements at 2021-04-08 21:30 GPS time (GPS week 2152, Thursday)
+/// from at most `counts` satellites of each constellation (Android's constellation type, count).
+fn sparse_sky(counts: &[(i32, usize)]) -> (Navigator, GnssMeasurementsEvent, [f64; 3], [f64; 3]) {
     let (week, tow) = (2152, 4.0 * 86_400.0 + 21.5 * 3600.0);
     let ephs: Vec<Ephemeris> =
         ride_gnss::rinex::read_nav(include_str!("data/BRDM00DLR_S_20210980000-21h.rnx"))
             .into_iter()
-            .filter(|e| e.healthy() && matches!(e.sat().system, System::Gps | System::Galileo))
+            .filter(|e| {
+                e.healthy()
+                    && matches!(
+                        e.sat().system,
+                        System::Gps | System::Galileo | System::Beidou
+                    )
+            })
             .collect();
     let (lat, lon) = (40.75, -73.99);
     let rx = geodetic_to_ecef(lat, lon, 10.0);
     let [east, north, up] = enu(lat, lon);
     let v = std::array::from_fn(|k| 15.0 * east[k] - 8.0 * north[k]);
     let mut event = measurements_at(week, tow, &ephs, rx, v, 30.0, up);
-    // One measurement per satellite (the excerpt repeats Galileo ephemerides), then 1 GPS and 4 Galileo.
+    // One measurement per satellite (the excerpt repeats ephemerides), then at most `counts` of each.
     let mut seen = std::collections::BTreeSet::new();
     event
         .measurements
         .retain(|m| seen.insert((m.constellation_type, m.svid)));
-    let mut gps = 0;
-    let mut galileo = 0;
+    let mut taken = std::collections::BTreeMap::new();
     event.measurements.retain(|m| {
-        let count = if m.constellation_type == 1 {
-            &mut gps
-        } else {
-            &mut galileo
-        };
+        let limit = counts
+            .iter()
+            .find(|(c, _)| *c == m.constellation_type)
+            .map_or(0, |(_, n)| *n);
+        let count = taken.entry(m.constellation_type).or_insert(0);
         *count += 1;
-        *count <= if m.constellation_type == 1 { 1 } else { 4 }
+        *count <= limit
     });
-    assert_eq!((gps.min(1), galileo.min(4)), (1, 4), "too few visible");
+    for &(c, n) in counts {
+        assert!(
+            taken.get(&c).copied().unwrap_or(0) >= n,
+            "too few visible of {c}"
+        );
+    }
 
     let mut nav = Navigator::default();
     for e in &ephs {
         nav.add_ephemeris(e.clone());
     }
     nav.set_approximate_position(std::array::from_fn(|k| rx[k] + 500.0 * east[k]));
+    (nav, event, rx, v)
+}
+
+/// Five satellites from two constellations: exactly as many as position's unknowns (3 coordinates and
+/// 2 clock biases), so the position solves but nothing checks it, and it comes with a wide uncertainty.
+#[test]
+fn exactly_determined_position_is_wide() {
+    let (mut nav, event, rx, _) = sparse_sky(&[(1, 1), (6, 4)]);
+    let sol = nav.on_measurements(&event).unwrap();
+    let pos = sol.position.unwrap();
+    assert!(!pos.checked);
+    assert_eq!(pos.satellites_used, 5);
+    assert!(
+        norm(sub(pos.position, rx)) < 5.0,
+        "position off by {} m",
+        norm(sub(pos.position, rx))
+    );
+    for k in [0, 4, 8] {
+        assert!(
+            pos.position_covariance[k] >= 60.0 * 60.0,
+            "variance {}",
+            pos.position_covariance[k]
+        );
+    }
+    assert!(sol.velocity.unwrap().with_this_position);
+    assert_eq!(nav.stats.positions_solved, 1);
+}
+
+/// Five satellites from three constellations: too few for position (3 coordinates, 3 clock biases),
+/// enough for velocity (3 components, 1 clock drift, and one to check), which uses the last position instead;
+/// 500 m off, each direction to a satellite tilts by about 25 microradians, a few cm/s of its relative motion,
+/// which so few satellites amplify a little.
+#[test]
+fn velocity_solves_when_position_cannot() {
+    let (mut nav, event, _, v) = sparse_sky(&[(1, 1), (5, 1), (6, 3)]);
     let sol = nav.on_measurements(&event).unwrap();
     assert!(sol.position.is_none());
     let vel = sol.velocity.unwrap();
     assert!(!vel.with_this_position);
     assert!(
-        norm(sub(vel.velocity, v)) < 0.05,
+        norm(sub(vel.velocity, v)) < 0.1,
         "velocity off by {} m/s",
         norm(sub(vel.velocity, v))
     );

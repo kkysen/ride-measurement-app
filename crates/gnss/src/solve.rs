@@ -24,6 +24,9 @@ const L1_BAND_HZ: std::ops::Range<f32> = 1.55e9..1.61e9;
 /// Pseudorange residuals beyond this (m) reject the worst satellite from the position solution: uncorrected
 /// ionosphere and troposphere are tens of meters at most, so more is multipath or a bad measurement.
 const POSITION_OUTLIER_M: f64 = 60.0;
+/// Added (m) to each axis's sigma, in quadrature, for a position with no satellite to spare:
+/// nothing checks it, so one bad satellite as far off as [`POSITION_OUTLIER_M`] would go unnoticed.
+const UNCHECKED_POSITION_SIGMA_M: f64 = POSITION_OUTLIER_M;
 /// Pseudoranges are trusted no more than this (m), whatever Android says.
 const MIN_PSEUDORANGE_SIGMA: f64 = 1.0;
 /// Doppler measurements are trusted no more than this (m/s), whatever Android says.
@@ -51,9 +54,14 @@ pub struct PositionSolution {
     pub position: [f64; 3],
     /// Receiver clock bias (m) against each constellation.
     pub clock_biases: Vec<(System, f64)>,
+    /// Covariance of `position` (m^2), row-major,
+    /// widened by [`UNCHECKED_POSITION_SIGMA_M`] when nothing checked it.
+    pub position_covariance: [f64; 9],
     pub satellites_used: usize,
-    /// Root mean square of the pseudorange residuals (m).
+    /// Root mean square of the pseudorange residuals (m): zero when nothing checked the position.
     pub residual_rms: f64,
+    /// Whether a satellite to spare checked the position for outliers.
+    pub checked: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -230,7 +238,7 @@ impl Navigator {
         let week = epoch_week(event)?;
         let rx_gps_ns = clock.time_nanos - clock.full_bias_nanos.ok_or(NoSolution::NoClock)?;
         let sats = self.satellites(clock, &event.measurements, rx_gps_ns, week);
-        // Position needs one more satellite than its unknowns (position, and a clock bias per constellation),
+        // Position needs as many satellites as its unknowns (position, and a clock bias per constellation),
         // velocity one more than its own (velocity and clock drift): each is tried whatever the other did.
         let position = solve_position(&sats, self.last_position);
         let velocity = position
@@ -370,16 +378,18 @@ fn systems_of(sats: &[&Sat]) -> Vec<System> {
 
 /// Weighted least-squares position (and a clock bias per constellation) from pseudoranges, by Gauss-Newton from `start`
 /// or the earth's center, dropping the worst satellite while its residual is beyond [`POSITION_OUTLIER_M`]
-/// and a redundant one remains.
+/// and a redundant one remains. With exactly as many satellites as unknowns, nothing can be checked,
+/// so the position comes with a wide uncertainty instead of not at all.
 fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<PositionSolution> {
     let mut used: Vec<&Sat> = sats.iter().collect();
     loop {
         let systems = systems_of(&used);
         let unknowns = 3 + systems.len();
-        if used.len() <= unknowns {
+        if used.len() < unknowns {
             return None;
         }
-        let (x, residuals) = gauss_newton_position(&used, &systems, start)?;
+        let checked = used.len() > unknowns;
+        let (x, cov, residuals) = gauss_newton_position(&used, &systems, start)?;
         let (worst, worst_value) = residuals
             .iter()
             .enumerate()
@@ -390,21 +400,31 @@ fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<PositionSolut
             continue;
         }
         let rms = (residuals.iter().map(|r| r * r).sum::<f64>() / residuals.len() as f64).sqrt();
+        let n = x.len();
+        let mut position_covariance: [f64; 9] = std::array::from_fn(|k| cov[(k / 3) * n + k % 3]);
+        if !checked {
+            for k in [0, 4, 8] {
+                position_covariance[k] += UNCHECKED_POSITION_SIGMA_M * UNCHECKED_POSITION_SIGMA_M;
+            }
+        }
         return Some(PositionSolution {
             position: [x[0], x[1], x[2]],
             clock_biases: systems.into_iter().zip(x[3..].iter().copied()).collect(),
+            position_covariance,
             satellites_used: used.len(),
             residual_rms: rms,
+            checked,
         });
     }
 }
 
-/// Returns the unknowns (position, then each of `systems`' clock bias) and the residuals.
+/// Returns the unknowns (position, then each of `systems`' clock bias), their covariance (row-major),
+/// and the residuals.
 fn gauss_newton_position(
     sats: &[&Sat],
     systems: &[System],
     start: Option<[f64; 3]>,
-) -> Option<(Vec<f64>, Vec<f64>)> {
+) -> Option<(Vec<f64>, Vec<f64>, Vec<f64>)> {
     let mut x = vec![0.0; 3 + systems.len()];
     if let Some(p) = start {
         x[..3].copy_from_slice(&p);
@@ -438,8 +458,10 @@ fn gauss_newton_position(
             break;
         }
     }
-    let residuals = rows_at(&x).iter().map(|(_, b, _)| *b).collect();
-    Some((x, residuals))
+    let rows = rows_at(&x);
+    let (_, cov) = weighted_least_squares(&rows)?;
+    let residuals = rows.iter().map(|(_, b, _)| *b).collect();
+    Some((x, cov, residuals))
 }
 
 /// Weighted least-squares velocity and clock drift from Doppler, dropping the worst satellite while its residual
