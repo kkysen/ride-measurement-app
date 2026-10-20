@@ -424,7 +424,8 @@ impl Navigator {
                 state,
                 pseudorange: travel_ns * 1e-9 * C + C * (state.clock_bias - eph.tgd()),
                 pseudorange_sigma: (m.received_sv_time_uncertainty_nanos as f64 * 1e-9 * C)
-                    .max(MIN_PSEUDORANGE_SIGMA),
+                    .max(MIN_PSEUDORANGE_SIGMA)
+                    .hypot(eph.sigma_m(f64::from(week) * SECONDS_PER_WEEK + t_sv)),
                 prr: m.pseudorange_rate_meters_per_second + C * state.clock_drift,
                 prr_sigma: m
                     .pseudorange_rate_uncertainty_meters_per_second

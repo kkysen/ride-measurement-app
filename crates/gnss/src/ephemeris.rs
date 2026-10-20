@@ -215,8 +215,14 @@ const J2_GLONASS: f64 = 1.082_625_7e-3;
 const OMEGA_E_GLONASS: f64 = 7.292_115e-5;
 /// Integration step (s): RK4's error at this step is far below a millimeter over 15 minutes.
 const GLONASS_STEP: f64 = 30.0;
-/// A GLONASS ephemeris is broadcast every 30 minutes and good for 15 minutes either side; allow a little more.
-const GLONASS_VALID_S: f64 = 20.0 * 60.0;
+/// A GLONASS ephemeris is broadcast every 30 minutes, for 15 minutes either side, but a downloaded file can lag
+/// the newest broadcast by most of an hour. Integrated further, its error grows about with the square of the time:
+/// against the next broadcasts on 2026-10-20 (936 pairs), median orbit and clock error 2.0 m at 30 minutes,
+/// 7.5 m at 60, 18 m at 90, 35 m at 120. So it's used for an hour, weighted by [`GLONASS_SIGMA_AT_30_MIN_M`].
+const GLONASS_VALID_S: f64 = 60.0 * 60.0;
+/// GLONASS orbit and clock error (m) 30 minutes from the reference time (between the median and 95th percentile
+/// above), growing with the square of the time.
+const GLONASS_SIGMA_AT_30_MIN_M: f64 = 3.0;
 
 /// One GLONASS satellite's broadcast state and clock: position, velocity, and the moon's and sun's acceleration
 /// in PZ-90 (taken as WGS 84, within centimeters) at `tb`.
@@ -348,6 +354,18 @@ impl Ephemeris {
         match self {
             Self::Kepler(_) => 4.0 * 3600.0,
             Self::Glonass(_) => GLONASS_VALID_S,
+        }
+    }
+
+    /// The orbit and clock's own uncertainty (m) at `at` (GPS seconds since the GPS epoch): GLONASS's grows as it's
+    /// integrated away from its reference time; broadcast Kepler orbits stay within a few meters while valid.
+    pub fn sigma_m(&self, at: f64) -> f64 {
+        match self {
+            Self::Kepler(_) => 0.0,
+            Self::Glonass(_) => {
+                let r = (at - self.toe_gps_seconds()).abs() / 1800.0;
+                GLONASS_SIGMA_AT_30_MIN_M * r * r
+            }
         }
     }
 
