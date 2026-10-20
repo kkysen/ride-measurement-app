@@ -120,6 +120,7 @@ pub fn replay(session: &Session) -> anyhow::Result<Replay> {
             Event::Navigation(m) => fusion.on_navigation_message(&m),
         }
     }
+    fusion.finish();
     Ok(Replay {
         smoothed: fusion.smoothed(),
         gnss: fusion.navigator().stats.clone(),

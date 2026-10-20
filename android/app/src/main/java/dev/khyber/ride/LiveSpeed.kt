@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import uniffi.ride_ffi.Estimate
 import uniffi.ride_ffi.Fusion
 import uniffi.ride_ffi.GnssStats
+import uniffi.ride_ffi.settleNs
 
 /**
  * Runs the Rust fusion (`crates/fusion/src/fusion.rs`, the same code offline tools replay) on its own thread
@@ -28,11 +29,20 @@ object LiveSpeed {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
 
+    private var lateInputs = 0uL
+
     private val publish = object : Runnable {
         override fun run() {
             safely {
                 _estimate.value = fusion?.estimate(SystemClock.elapsedRealtimeNanos())
                 _gnss.value = fusion?.gnssStats()
+                val late = fusion?.lateInputs() ?: 0uL
+                // These went into the live forward pass out of time order, so live differs from a replay there.
+                if (late > lateInputs) {
+                    val ms = settleNs() / 1_000_000
+                    Health.report("live speed", IllegalStateException("$late inputs so far arrived over $ms ms late"))
+                }
+                lateInputs = late
             }
             handler?.postDelayed(this, PUBLISH_MS)
         }
@@ -65,6 +75,7 @@ object LiveSpeed {
         val t = HandlerThread("live-speed").apply { start() }
         thread = t
         handler = Handler(t.looper)
+        lateInputs = 0uL
         safely { fusion = Fusion(WINDOW_S) }
         handler?.post(publish)
         handler?.postDelayed(smooth, SMOOTH_MS)

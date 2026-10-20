@@ -97,6 +97,13 @@ impl VelocitySolution {
     }
 }
 
+/// The full GPS week of an epoch's receive time.
+fn epoch_week(event: &GnssMeasurementsEvent) -> Result<u32, NoSolution> {
+    let clock = event.clock.as_ref().ok_or(NoSolution::NoClock)?;
+    let rx_gps_ns = clock.time_nanos - clock.full_bias_nanos.ok_or(NoSolution::NoClock)?;
+    u32::try_from(rx_gps_ns.div_euclid(NANOS_PER_WEEK)).map_err(|_| NoSolution::NoClock)
+}
+
 /// Why an epoch has no solution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NoSolution {
@@ -195,11 +202,7 @@ impl Navigator {
         event: &GnssMeasurementsEvent,
     ) -> Result<Solution, NoSolution> {
         self.stats.epochs += 1;
-        let clock = event.clock.as_ref().ok_or(NoSolution::NoClock)?;
-        let full_bias = clock.full_bias_nanos.ok_or(NoSolution::NoClock)?;
-        let rx_gps_ns = clock.time_nanos - full_bias;
-        let week =
-            u32::try_from(rx_gps_ns.div_euclid(NANOS_PER_WEEK)).map_err(|_| NoSolution::NoClock)?;
+        let week = epoch_week(event)?;
         if self.week != Some(week) {
             self.week = Some(week);
             for (sat, sf) in std::mem::take(&mut self.waiting) {
@@ -208,26 +211,40 @@ impl Navigator {
                 }
             }
         }
+        let sol = self.solve(event)?;
+        if let Some(p) = &sol.position {
+            self.last_position = Some(p.position);
+            self.stats.positions_solved += 1;
+        }
+        if sol.velocity.is_some() {
+            self.stats.velocities_solved += 1;
+        }
+        self.stats.epochs_solved += 1;
+        Ok(sol)
+    }
+
+    /// The solution [`Self::on_measurements`] would give, changing nothing: for a provisional estimate from
+    /// measurements that haven't settled into time order yet.
+    pub fn solve(&self, event: &GnssMeasurementsEvent) -> Result<Solution, NoSolution> {
+        let clock = event.clock.as_ref().ok_or(NoSolution::NoClock)?;
+        let week = epoch_week(event)?;
+        let rx_gps_ns = clock.time_nanos - clock.full_bias_nanos.ok_or(NoSolution::NoClock)?;
         let sats = self.satellites(clock, &event.measurements, rx_gps_ns, week);
         // Position needs one more satellite than its unknowns (position, and a clock bias per constellation),
         // velocity one more than its own (velocity and clock drift): each is tried whatever the other did.
         let position = solve_position(&sats, self.last_position);
-        if let Some(p) = &position {
-            self.last_position = Some(p.position);
-            self.stats.positions_solved += 1;
-        }
-        let velocity = self.last_position.and_then(|at| {
-            let mut v = solve_velocity(&sats, at)?;
-            v.with_this_position = position.is_some();
-            Some(v)
-        });
-        if velocity.is_some() {
-            self.stats.velocities_solved += 1;
-        }
+        let velocity = position
+            .as_ref()
+            .map(|p| p.position)
+            .or(self.last_position)
+            .and_then(|at| {
+                let mut v = solve_velocity(&sats, at)?;
+                v.with_this_position = position.is_some();
+                Some(v)
+            });
         if position.is_none() && velocity.is_none() {
             return Err(NoSolution::TooFewSatellites { usable: sats.len() });
         }
-        self.stats.epochs_solved += 1;
         Ok(Solution {
             elapsed_realtime_ns: clock.elapsed_realtime_nanos,
             position,

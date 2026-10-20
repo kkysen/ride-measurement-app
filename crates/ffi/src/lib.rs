@@ -208,6 +208,11 @@ impl Fusion {
             .collect()
     }
 
+    /// Inputs that arrived after newer ones had settled ([`settle_ns`]), so went into the forward pass out of order.
+    pub fn late_inputs(&self) -> u64 {
+        self.lock().late_inputs
+    }
+
     pub fn gnss_stats(&self) -> GnssStats {
         let s = self.lock().navigator().stats.clone();
         GnssStats {
@@ -331,6 +336,11 @@ pub fn orbit_fetch_plan(session_dir: String, now_unix_ms: i64) -> Vec<Vec<OrbitF
 }
 
 /// How often to follow [`orbit_fetch_plan`] again while recording (ms): BKG updates its file every 15 minutes.
+#[uniffi::export]
+pub fn settle_ns() -> i64 {
+    ride_fusion::fusion::SETTLE_NS
+}
+
 #[uniffi::export]
 pub fn orbit_refresh_ms() -> i64 {
     ride_gnss::orbits::LIVE_REFRESH_MS

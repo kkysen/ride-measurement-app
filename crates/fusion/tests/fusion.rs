@@ -59,6 +59,7 @@ fn ride(in_tunnel: impl Fn(f64) -> bool) -> (Vec<SmoothedSpeed>, Vec<(i64, f64)>
             truth.push((t_ns, v));
         }
     }
+    fusion.finish();
     (fusion.smoothed(), truth)
 }
 
@@ -118,4 +119,127 @@ fn smoothing_matches_gnss_outside_tunnels() {
             );
         }
     }
+}
+
+enum Event {
+    Accel([f64; 3]),
+    Gyro,
+    Fix(Fix),
+}
+
+/// A 60 s ride (depart, cruise) with fixes every second: the events in time order, and the true speed each second.
+/// Times (ns) with what happened then, or with the true speed (m/s).
+type Timed<T> = Vec<(i64, T)>;
+
+fn ride_events() -> (Timed<Event>, Timed<f64>) {
+    let tilt = 30f64.to_radians();
+    let (mut v, mut events, mut truth) = (0.0f64, Vec::new(), Vec::new());
+    for i in 0..(60.0 * RATE) as usize {
+        let t = i as f64 / RATE;
+        let a = profile(t);
+        v = (v + a / RATE).max(0.0);
+        let t_ns = (t * 1e9) as i64 + 1;
+        events.push((t_ns, Event::Gyro));
+        events.push((t_ns, Event::Accel([a, G * tilt.sin(), G * tilt.cos()])));
+        if i % RATE as usize == 0 {
+            let fix = Fix {
+                elapsed_realtime_ns: t_ns,
+                lat: 40.0,
+                lon: -74.0,
+                speed: Some(v),
+                speed_sigma: Some(0.2),
+                ..Default::default()
+            };
+            events.push((t_ns, Event::Fix(fix)));
+            truth.push((t_ns, v));
+        }
+    }
+    (events, truth)
+}
+
+fn feed(fusion: &mut Fusion, t: i64, e: &Event) {
+    match e {
+        Event::Accel(a) => fusion.on_accel(t, *a),
+        Event::Gyro => fusion.on_gyro(t, [0.0; 3]),
+        Event::Fix(f) => fusion.on_fix(*f),
+    }
+}
+
+#[test]
+fn delivery_order_changes_nothing() {
+    let (events, _) = ride_events();
+    let mut in_order = Fusion::new(None);
+    for (t, e) in &events {
+        feed(&mut in_order, *t, e);
+    }
+    in_order.finish();
+
+    // As Android delivers them: the IMU in 1 s batches, gyro batches before accel ones, and each fix
+    // 0.4 s after its time, so arrival order is far from time order (but within the settle delay).
+    let mut arrivals: Vec<(i64, usize)> = events
+        .iter()
+        .enumerate()
+        .map(|(i, (t, e))| {
+            let batch_end = (t / 1_000_000_000 + 1) * 1_000_000_000;
+            let arrive = match e {
+                Event::Gyro => batch_end,
+                Event::Accel(_) => batch_end + 1,
+                Event::Fix(_) => t + 400_000_000,
+            };
+            (arrive, i)
+        })
+        .collect();
+    arrivals.sort();
+    let mut delivered = Fusion::new(None);
+    for &(_, i) in &arrivals {
+        feed(&mut delivered, events[i].0, &events[i].1);
+    }
+    delivered.finish();
+
+    assert_eq!(delivered.late_inputs, 0);
+    assert_eq!(delivered.smoothed(), in_order.smoothed());
+}
+
+#[test]
+fn provisional_estimate_tracks_the_newest_inputs() {
+    let (events, truth) = ride_events();
+    let mut fusion = Fusion::new(None);
+    let mut checked = 0;
+    for (t, e) in &events {
+        feed(&mut fusion, *t, e);
+        if let Event::Fix(_) = e {
+            // During departure, the settled pass is 1.5 s behind (1.5 m/s at 1 m/s^2); the provisional one isn't.
+            let true_v = truth.iter().find(|(tt, _)| tt == t).unwrap().1;
+            let provisional = fusion.estimate(*t).speed_mps;
+            if (8.0..20.0).contains(&(*t as f64 * 1e-9)) {
+                assert!(
+                    (provisional - true_v).abs() < 0.5,
+                    "at {} s: {provisional} vs {true_v}",
+                    *t as f64 * 1e-9
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked >= 10);
+    // Once everything settles, the estimate is the settled one.
+    let end = events.last().unwrap().0;
+    let provisional = fusion.estimate(end);
+    fusion.finish();
+    assert_eq!(fusion.estimate(end).speed_mps, provisional.speed_mps);
+}
+
+#[test]
+fn late_inputs_are_counted_not_lost() {
+    let (events, _) = ride_events();
+    let mut fusion = Fusion::new(None);
+    for (t, e) in &events {
+        if *t > 10_000_000_000 {
+            break;
+        }
+        feed(&mut fusion, *t, e);
+    }
+    // 5 s after its time: newer inputs have long settled.
+    fusion.on_accel(5_000_000_000, [0.0, 0.0, G]);
+    assert_eq!(fusion.late_inputs, 1);
 }
