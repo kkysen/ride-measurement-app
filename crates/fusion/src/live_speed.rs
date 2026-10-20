@@ -83,7 +83,8 @@ const SIGN_EVIDENCE: f64 = 2.0;
 /// ((m/s^2)^2) it takes to replace the spread axis.
 const AXIS_GNSS_TAU_S: f64 = 30.0;
 const AXIS_GNSS_MAX_ACCEL_MPS2: f64 = 1.5;
-const AXIS_GNSS_FULL_WEIGHT_SIGMA_MPS: f64 = 0.5;
+/// Tuned on the 2026-10-20 elevated 7 ride with GNSS dropped for 30 s of every 90 s, and checked with 25 s of every 77 s.
+const AXIS_GNSS_FULL_WEIGHT_SIGMA_MPS: f64 = 1.0;
 const AXIS_GNSS_MAX_DT_S: f64 = 1.5;
 const AXIS_GNSS_MIN_CROSS: f64 = 0.01;
 /// Both GNSS speeds of a change must be at least this (m/s): near a standstill, a speed's magnitude is mostly noise
