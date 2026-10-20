@@ -19,7 +19,7 @@ class BindingCostTest {
         val bits = List(chunkSamples * 6) { 0x3f800000u }
         val floats = List(liveBatch * 6) { 1f }
         StreamWriter.create(dir.path, "accel").use { w ->
-            Fusion(600u).use { f ->
+            Fusion().use { f ->
                 fun chunk(c: Int) {
                     val t0 = c * chunkSamples * 2_500_000L
                     for (b in 0 until chunkSamples / liveBatch) {
@@ -41,18 +41,19 @@ class BindingCostTest {
 
     @Test
     fun smoothingAFullWindow() {
-        Fusion(600u).use { f ->
+        Fusion().use { f ->
             val batch = List(400 * 6) { if (it % 6 == 2) 9.8f else 0f }
-            // 10 minutes of accelerometer and gyro at 400 Hz, and a fix a second.
+            // 10 minutes of accelerometer and gyro at 400 Hz, and a fix a second: smoothing re-runs every second.
+            val start = System.nanoTime()
             for (s in 0 until 600) {
                 val ts = List(400) { (s * 400L + it) * 2_500_000 }
                 f.onSensorSamples(35, ts, 6u, batch)
                 f.onSensorSamples(16, ts, 6u, batch)
                 f.onFix(ts[0], 40.0, -74.0, 10.0, 5.0, 10.0, 0.3)
             }
-            val start = System.nanoTime()
+            val ms = (System.nanoTime() - start) / 1e6
             val smoothed = f.smoothed()
-            println("smoothing 600 s at 400 Hz: %.0f ms, %d points".format((System.nanoTime() - start) / 1e6, smoothed.size))
+            println("600 s at 400 Hz, smoothed every second: %.0f ms, %.1f ms per second of input, %d points".format(ms, ms / 600, smoothed.size))
             assertTrue(smoothed.size >= 600)
         }
     }

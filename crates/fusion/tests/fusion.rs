@@ -16,9 +16,16 @@ fn profile(t: f64) -> f64 {
 }
 
 /// A 140 s ride with an uncorrected accelerometer bias along the direction of travel and no GNSS while
-/// `in_tunnel`; returns the smoothed speeds and the true speed each second.
+/// `in_tunnel`; returns the speeds smoothed all at once and the true speed each second.
 fn ride(in_tunnel: impl Fn(f64) -> bool) -> (Vec<SmoothedSpeed>, Vec<(i64, f64)>) {
-    let mut fusion = Fusion::new(None);
+    ride_in(Fusion::with_window(None), in_tunnel)
+}
+
+/// [`ride`], through `fusion`.
+fn ride_in(
+    mut fusion: Fusion,
+    in_tunnel: impl Fn(f64) -> bool,
+) -> (Vec<SmoothedSpeed>, Vec<(i64, f64)>) {
     let tilt = 30f64.to_radians();
     let bias = 0.05;
     let mut v: f64 = 0.0;
@@ -121,6 +128,44 @@ fn smoothing_matches_gnss_outside_tunnels() {
     }
 }
 
+/// Re-smoothing a 90 s window every second and freezing values as they leave it gives about what smoothing the
+/// whole ride at once does, as long as the window spans the tunnel: by the time a value in the tunnel freezes,
+/// the backward pass has already carried the fix after it back through it.
+#[test]
+fn windowed_smoothing_matches_whole_ride() {
+    let tunnel = |t: f64| (50.0..110.0).contains(&t);
+    let (whole, _) = ride(tunnel);
+    let (windowed, _) = ride_in(Fusion::with_window(Some(90_000_000_000)), tunnel);
+    assert_eq!(
+        windowed
+            .iter()
+            .map(|s| s.elapsed_realtime_ns)
+            .collect::<Vec<_>>(),
+        whole
+            .iter()
+            .map(|s| s.elapsed_realtime_ns)
+            .collect::<Vec<_>>()
+    );
+    let worst = whole
+        .iter()
+        .zip(&windowed)
+        .map(|(w, f)| {
+            (
+                w.elapsed_realtime_ns as f64 * 1e-9,
+                (w.speed_mps - f.speed_mps).abs(),
+            )
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .unwrap();
+    println!("worst difference {:.4} m/s at {:.0} s", worst.1, worst.0);
+    assert!(
+        worst.1 < 0.01,
+        "{:.3} m/s apart at {:.0} s",
+        worst.1,
+        worst.0
+    );
+}
+
 enum Event {
     Accel([f64; 3]),
     Gyro,
@@ -168,7 +213,7 @@ fn feed(fusion: &mut Fusion, t: i64, e: &Event) {
 #[test]
 fn delivery_order_changes_nothing() {
     let (events, _) = ride_events();
-    let mut in_order = Fusion::new(None);
+    let mut in_order = Fusion::with_window(None);
     for (t, e) in &events {
         feed(&mut in_order, *t, e);
     }
@@ -190,7 +235,7 @@ fn delivery_order_changes_nothing() {
         })
         .collect();
     arrivals.sort();
-    let mut delivered = Fusion::new(None);
+    let mut delivered = Fusion::with_window(None);
     for &(_, i) in &arrivals {
         feed(&mut delivered, events[i].0, &events[i].1);
     }
@@ -203,7 +248,7 @@ fn delivery_order_changes_nothing() {
 #[test]
 fn provisional_estimate_tracks_the_newest_inputs() {
     let (events, truth) = ride_events();
-    let mut fusion = Fusion::new(None);
+    let mut fusion = Fusion::with_window(None);
     let mut checked = 0;
     for (t, e) in &events {
         feed(&mut fusion, *t, e);
@@ -232,7 +277,7 @@ fn provisional_estimate_tracks_the_newest_inputs() {
 #[test]
 fn late_inputs_are_counted_not_lost() {
     let (events, _) = ride_events();
-    let mut fusion = Fusion::new(None);
+    let mut fusion = Fusion::with_window(None);
     for (t, e) in &events {
         if *t > 10_000_000_000 {
             break;

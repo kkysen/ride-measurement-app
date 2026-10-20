@@ -85,13 +85,10 @@ pub struct Fusion(Mutex<ride_fusion::fusion::Fusion>);
 
 #[uniffi::export]
 impl Fusion {
-    /// Keeps `window_s` seconds of input for smoothing.
+    /// Smooths the last 10 minutes of input every second, as offline replay does.
     #[uniffi::constructor]
-    pub fn new(window_s: u32) -> Arc<Self> {
-        let window = i64::from(window_s) * 1_000_000_000;
-        Arc::new(Self(Mutex::new(ride_fusion::fusion::Fusion::new(Some(
-            window,
-        )))))
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self(Mutex::new(ride_fusion::fusion::Fusion::new())))
     }
 
     /// A batch of Android sensor samples as delivered (`Sensor.getType()`, each `SensorEvent.timestamp`, and their
@@ -194,10 +191,11 @@ impl Fusion {
         }
     }
 
-    /// Smoothed speeds over the window (forward and backward passes combined).
+    /// The window's latest smoothed speeds (forward and backward passes combined), re-run every
+    /// [`smooth_every_ns`]; older values are frozen and don't change any more.
     pub fn smoothed(&self) -> Vec<SmoothedSpeed> {
         self.lock()
-            .smoothed()
+            .recent_smoothed()
             .into_iter()
             .map(|s| SmoothedSpeed {
                 elapsed_realtime_ns: s.elapsed_realtime_ns,
@@ -339,6 +337,12 @@ pub fn orbit_fetch_plan(session_dir: String, now_unix_ms: i64) -> Vec<Vec<OrbitF
 #[uniffi::export]
 pub fn settle_ns() -> i64 {
     ride_fusion::fusion::SETTLE_NS
+}
+
+/// How often smoothing re-runs over the window (ns of settled input).
+#[uniffi::export]
+pub fn smooth_every_ns() -> i64 {
+    ride_fusion::fusion::SMOOTH_EVERY_NS
 }
 
 #[uniffi::export]

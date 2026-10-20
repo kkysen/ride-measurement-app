@@ -8,6 +8,8 @@
 //!   and the live display gets a provisional estimate through the newest ones.
 //! - Smoothing runs the same estimator backward in time over the buffered inputs (gyro negated, as time reversal
 //!   runs rotation backward) and combines both directions at each fix and second by their uncertainties.
+//!   It re-runs every [`SMOOTH_EVERY_NS`] of settled input over the last [`SMOOTH_WINDOW_NS`],
+//!   and each value is frozen as it leaves the window, live and offline alike.
 //!   The backward pass carries the first good fix after a tunnel back through it, which a forward filter can't.
 //!   It starts from the forward pass's frame (gravity, travel axis, bias), which constant speed can't teach it.
 
@@ -105,6 +107,13 @@ fn step(
 /// Forward estimates are kept at every fix and at least this often, so smoothing covers gaps without fixes.
 const SAMPLE_EVERY_NS: i64 = 1_000_000_000;
 
+/// Smoothing re-runs whenever settled input crosses a multiple of this,
+/// so the map's recent path is recolored about as soon as a fix after a tunnel arrives.
+pub const SMOOTH_EVERY_NS: i64 = 1_000_000_000;
+/// How much recent input each smoothing covers: on the phone, about 25 MB of IMU samples,
+/// and about 12 ms per re-run on a desktop. Each value is frozen as it leaves it.
+pub const SMOOTH_WINDOW_NS: i64 = 600_000_000_000;
+
 /// `android.hardware.Sensor` types.
 pub const TYPE_ACCELEROMETER: i32 = 1;
 pub const TYPE_GYROSCOPE: i32 = 4;
@@ -175,11 +184,28 @@ pub struct Fusion {
     inputs: VecDeque<(i64, Input)>,
     forward: VecDeque<(i64, Estimate)>,
     window_ns: Option<i64>,
+    /// With a window: the latest smoothing of it, the values frozen as they left it,
+    /// and the settled time at or after which smoothing re-runs.
+    recent: VecDeque<SmoothedSpeed>,
+    frozen: Vec<SmoothedSpeed>,
+    next_smooth_ns: Option<i64>,
+}
+
+impl Default for Fusion {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Fusion {
-    /// `window_ns`: how much input to keep for smoothing; `None` keeps everything (offline).
-    pub fn new(window_ns: Option<i64>) -> Self {
+    /// Live and offline: smoothing re-runs over [`SMOOTH_WINDOW_NS`] every [`SMOOTH_EVERY_NS`].
+    pub fn new() -> Self {
+        Self::with_window(Some(SMOOTH_WINDOW_NS))
+    }
+
+    /// `window_ns`: how much input each smoothing covers;
+    /// `None` keeps everything and smooths it all at once, when asked (a reference for tests).
+    pub fn with_window(window_ns: Option<i64>) -> Self {
         Self {
             estimator: LiveSpeedEstimator::new(),
             navigator: Navigator::default(),
@@ -192,6 +218,9 @@ impl Fusion {
             inputs: VecDeque::new(),
             forward: VecDeque::new(),
             window_ns,
+            recent: VecDeque::new(),
+            frozen: Vec::new(),
+            next_smooth_ns: None,
         }
     }
 
@@ -240,10 +269,13 @@ impl Fusion {
         self.arrive(t, Pending::Measurements(Box::new(event.clone())));
     }
 
-    /// Settles everything still pending, as at the end of a recording.
+    /// Settles everything still pending, as at the end of a recording, and smooths the window once more.
     pub fn finish(&mut self) {
         while let Some(((t, _, _), input)) = self.pending.pop_first() {
             self.settle(t, input);
+        }
+        if self.window_ns.is_some() {
+            self.recent = self.smooth_window().into();
         }
     }
 
@@ -306,6 +338,14 @@ impl Fusion {
             self.forward
                 .push_back((t_ns, self.estimator.estimate(t_ns)));
         }
+        if self.window_ns.is_some() {
+            let next = *self.next_smooth_ns.get_or_insert(t_ns);
+            if t_ns >= next {
+                self.recent = self.smooth_window().into();
+                self.next_smooth_ns =
+                    Some(t_ns - t_ns.rem_euclid(SMOOTH_EVERY_NS) + SMOOTH_EVERY_NS);
+            }
+        }
     }
 
     /// The estimate at `now_ns`: the settled forward pass carried on, in a copy, through the inputs still
@@ -337,16 +377,56 @@ impl Fusion {
             while self.inputs.front().is_some_and(|(t, _)| t_ns - t > window) {
                 self.inputs.pop_front();
             }
-            while self.forward.front().is_some_and(|(t, _)| t_ns - t > window) {
+            while let Some(&(t, ref f)) = self.forward.front() {
+                if t_ns - t <= window {
+                    break;
+                }
+                // Freeze its latest smoothing, or the forward estimate alone if smoothing never reached it.
+                while self
+                    .recent
+                    .front()
+                    .is_some_and(|s| s.elapsed_realtime_ns < t)
+                {
+                    self.recent.pop_front();
+                }
+                let value = match self.recent.front() {
+                    Some(s) if s.elapsed_realtime_ns == t => self.recent.pop_front().unwrap(),
+                    _ => combine(
+                        t,
+                        f,
+                        &Estimate {
+                            initialized: false,
+                            ..f.clone()
+                        },
+                    ),
+                };
+                self.frozen.push(value);
                 self.forward.pop_front();
             }
         }
     }
 
+    /// Smoothed speeds at every fix and sample time so far: those frozen as they left the window, then the
+    /// window's latest smoothing (or, without a window, everything smoothed at once).
+    pub fn smoothed(&self) -> Vec<SmoothedSpeed> {
+        if self.window_ns.is_none() {
+            return self.smooth_window();
+        }
+        self.frozen.iter().chain(&self.recent).copied().collect()
+    }
+
+    /// The window's latest smoothing, which the live map recolors its recent path with.
+    pub fn recent_smoothed(&self) -> Vec<SmoothedSpeed> {
+        if self.window_ns.is_none() {
+            return self.smooth_window();
+        }
+        self.recent.iter().copied().collect()
+    }
+
     /// Smoothed speeds at every fix and sample time in the window: the forward estimate there combined with
     /// a backward pass over the window, each weighted by its variance. The backward pass gets no weight until a
     /// measurement initializes it, since it starts from nothing at the window's end.
-    pub fn smoothed(&self) -> Vec<SmoothedSpeed> {
+    fn smooth_window(&self) -> Vec<SmoothedSpeed> {
         let Some(&(end, _)) = self.inputs.back() else {
             return Vec::new();
         };

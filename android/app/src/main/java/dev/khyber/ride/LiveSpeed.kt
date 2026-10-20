@@ -11,11 +11,12 @@ import uniffi.ride_ffi.Estimate
 import uniffi.ride_ffi.Fusion
 import uniffi.ride_ffi.GnssStats
 import uniffi.ride_ffi.settleNs
+import uniffi.ride_ffi.smoothEveryNs
 
 /**
  * Runs the Rust fusion (`crates/fusion/src/fusion.rs`, the same code offline tools replay) on its own thread
  * during a recording: IMU, GPS fixes, raw GNSS, and navigation messages go in as Android delivers them,
- * and the live estimate, raw GNSS progress, and every [SMOOTH_MS] the smoothed recent track come out.
+ * and the live estimate, raw GNSS progress, and the smoothed recent track (re-run in Rust every [smoothEveryNs]) come out.
  * Recording doesn't depend on it: if the Rust library fails, [error] says why and there's no live speed.
  */
 object LiveSpeed {
@@ -76,7 +77,7 @@ object LiveSpeed {
         thread = t
         handler = Handler(t.looper)
         lateInputs = 0uL
-        safely { fusion = Fusion(WINDOW_S) }
+        safely { fusion = Fusion() }
         handler?.post(publish)
         handler?.postDelayed(smooth, SMOOTH_MS)
     }
@@ -136,8 +137,7 @@ object LiveSpeed {
     }
 
     private const val PUBLISH_MS = 500L
-    private const val SMOOTH_MS = 30_000L
 
-    /** How much recent input is kept for smoothing: about 25 MB of IMU samples. */
-    private const val WINDOW_S = 600u
+    /** How often the map picks up the latest smoothing: as often as Rust re-runs it. */
+    private val SMOOTH_MS = smoothEveryNs() / 1_000_000
 }
