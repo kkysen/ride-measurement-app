@@ -77,11 +77,13 @@ const AXIS_MIN_VARIANCE: f64 = 0.002;
 const DEPARTURE_EVIDENCE_MPS: f64 = 1.0;
 const SIGN_EVIDENCE: f64 = 2.0;
 /// The GNSS-learned axis: how long its correlation averages over, the most acceleration a GNSS speed change can
-/// show and still be used (no train exceeds 1.4 m/s^2 outside an emergency; more is a bad speed), the GNSS speeds'
-/// largest uncertainty and spacing to use, and the correlation ((m/s^2)^2) it takes to replace the spread axis.
+/// show and still be used (no train exceeds 1.4 m/s^2 outside an emergency; more is a bad speed), the speed sigma
+/// at and under which a change gets full weight (noisier ones are weighted down by their variance: noise in a speed
+/// change doesn't bias the correlation, it only scatters it), the largest spacing to use, and the correlation
+/// ((m/s^2)^2) it takes to replace the spread axis.
 const AXIS_GNSS_TAU_S: f64 = 30.0;
 const AXIS_GNSS_MAX_ACCEL_MPS2: f64 = 1.5;
-const AXIS_GNSS_MAX_SIGMA_MPS: f64 = 0.5;
+const AXIS_GNSS_FULL_WEIGHT_SIGMA_MPS: f64 = 0.5;
 const AXIS_GNSS_MAX_DT_S: f64 = 1.5;
 const AXIS_GNSS_MIN_CROSS: f64 = 0.01;
 /// Both GNSS speeds of a change must be at least this (m/s): near a standstill, a speed's magnitude is mostly noise
@@ -676,17 +678,15 @@ impl LiveSpeedEstimator {
     /// follow speed changes, so it doesn't pull the axis; the sign comes with it, as GNSS speeding up is forward.
     fn learn_axis_from_gnss(&mut self, dt_ns: i64, dv: f64, sigma: f64) {
         let dt = dt_ns as f64 * 1e-9;
-        if !(0.0..=AXIS_GNSS_MAX_DT_S).contains(&dt)
-            || self.h_since_gnss_s < 0.5 * dt
-            || sigma > AXIS_GNSS_MAX_SIGMA_MPS
-        {
+        if !(0.0..=AXIS_GNSS_MAX_DT_S).contains(&dt) || self.h_since_gnss_s < 0.5 * dt {
             return;
         }
         let a = dv / dt;
         if a.abs() > AXIS_GNSS_MAX_ACCEL_MPS2 {
             return;
         }
-        let k = 1.0 - (-dt / AXIS_GNSS_TAU_S).exp();
+        let weight = (AXIS_GNSS_FULL_WEIGHT_SIGMA_MPS / sigma).powi(2).min(1.0);
+        let k = weight * (1.0 - (-dt / AXIS_GNSS_TAU_S).exp());
         for (c, h) in self.axis_cross.iter_mut().zip(self.h_since_gnss) {
             *c += k * (h / self.h_since_gnss_s * a - *c);
         }
