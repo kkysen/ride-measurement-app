@@ -1,11 +1,14 @@
-//! `ride map`: the ride's path on a map, colored by speed, as one HTML file.
+//! `ride map`: the ride's path on a map, colored by speed or acceleration, as one HTML file.
 
 use std::path::Path;
 
 use anyhow::Context;
 use ride_fusion::fusion::SmoothedSpeed;
 use ride_fusion::replay::replay;
-use ride_fusion::speed_colors::{RAMP_ARGB, SpeedScale, UNKNOWN_ARGB, edge_speed};
+use ride_fusion::speed_colors::{
+    ACCEL_BOUNDS_MPS2, ACCEL_RAMP_ARGB, RAMP_ARGB, SpeedScale, UNKNOWN_ARGB, accel_band,
+    edge_accel, edge_speed,
+};
 use ride_session::proto::record::Payload;
 use ride_session::read::Session;
 use ride_session::track::{TrackPoint, gps_segments};
@@ -15,7 +18,13 @@ const TEMPLATE: &str = include_str!("map.html");
 const DATA_PLACEHOLDER: &str = "/*RIDE_DATA*/null";
 
 /// `scale` preselects a color scale; without one, the page picks it from the top fused speed.
-pub fn map(session: &Session, output: &Path, scale: Option<SpeedScale>) -> anyhow::Result<()> {
+/// `accel` preselects coloring by acceleration instead of speed.
+pub fn map(
+    session: &Session,
+    output: &Path,
+    scale: Option<SpeedScale>,
+    accel: bool,
+) -> anyhow::Result<()> {
     let locations = session.read_records("location")?;
     warn_unclean("location", locations.truncated, locations.damage.len());
     let segments = gps_segments(&locations.chunks);
@@ -82,15 +91,18 @@ pub fn map(session: &Session, output: &Path, scale: Option<SpeedScale>) -> anyho
         "segments": segments
             .iter()
             .map(|s| {
-                let mut prev: Option<Option<f64>> = None;
+                let mut prev: Option<(Option<f64>, Option<f64>)> = None;
                 s.iter()
                     .map(|p| {
                         let e = fused.next().flatten();
                         let speed = e.map(|e| e.speed_mps);
-                        // The first fix of a segment has no path into it; color it by its own speed.
-                        let edge = prev.map_or(speed, |prev| edge_speed(prev, speed));
-                        prev = Some(speed);
-                        point_json(p, e, edge, start_ns)
+                        let accel = e.map(|e| e.accel_mps2);
+                        // The first fix of a segment has no path into it; color it by its own values.
+                        let (edge, edge_a) = prev.map_or((speed, accel), |(s, a)| {
+                            (edge_speed(s, speed), edge_accel(a, accel))
+                        });
+                        prev = Some((speed, accel));
+                        point_json(p, e, edge, edge_a, start_ns)
                     })
                     .collect::<Vec<_>>()
             })
@@ -103,6 +115,9 @@ pub fn map(session: &Session, output: &Path, scale: Option<SpeedScale>) -> anyho
         "scales": SpeedScale::ALL.map(|s| json!({"id": s.id(), "name": s.name(), "bandsKmh": s.bands_kmh()})),
         "autoScale": SpeedScale::for_top_speed(top_speed).id(),
         "scale": scale.map(SpeedScale::id),
+        "accelRamp": ACCEL_RAMP_ARGB.map(css_color),
+        "accelBoundsMps2": ACCEL_BOUNDS_MPS2,
+        "colorBy": if accel { "accel" } else { "speed" },
     });
     // Embedded in a `<script>`, so a `</script>` in an event note mustn't end it.
     let data = serde_json::to_string(&data)?.replace("</", "<\\/");
@@ -118,11 +133,13 @@ pub fn map(session: &Session, output: &Path, scale: Option<SpeedScale>) -> anyho
 }
 
 /// `[lat, lon, seconds since the first fix, UTC ms, GPS speed, GPS speed accuracy, horizontal accuracy,
-/// smoothed fused speed, its sigma, [color band of the path into this fix, per scale]]`, compact for long rides.
+/// smoothed fused speed, its sigma, [color band of the path into this fix, per scale],
+/// smoothed fused acceleration, color band of the path into this fix by acceleration]`, compact for long rides.
 fn point_json(
     p: &TrackPoint,
     fused: Option<&SmoothedSpeed>,
     edge_speed: Option<f64>,
+    edge_accel: Option<f64>,
     start_ns: i64,
 ) -> Value {
     json!([
@@ -136,6 +153,8 @@ fn point_json(
         fused.map(|e| e.speed_mps),
         fused.map(|e| e.sigma_mps),
         SpeedScale::ALL.map(|s| s.band(edge_speed)),
+        fused.map(|e| e.accel_mps2),
+        accel_band(edge_accel),
     ])
 }
 
@@ -228,7 +247,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_demo_session(dir.path());
         let out = dir.path().join("map.html");
-        super::map(&Session::open(dir.path()).unwrap(), &out, None).unwrap();
+        super::map(&Session::open(dir.path()).unwrap(), &out, None, false).unwrap();
         let html = std::fs::read_to_string(&out).unwrap();
         // To look at the demo map: `RIDE_MAP_DEMO=$PWD/target/demo-map.html cargo test -p ride-cli map`.
         if let Some(demo) = std::env::var_os("RIDE_MAP_DEMO") {
@@ -270,6 +289,14 @@ mod tests {
                 .iter()
                 .all(|b| b.is_u64())
         );
+        // Every fix carries the replayed fused acceleration, with a band.
+        // The demo's speed changes by at most 20 m/s * pi / 120 per second.
+        for p in segments.iter().flat_map(|s| s.as_array().unwrap()) {
+            assert!(p[10].as_f64().unwrap().abs() < 1.0, "{p}");
+            assert!(p[11].is_u64());
+        }
+        assert_eq!(data["colorBy"], "speed");
+        assert_eq!(data["accelRamp"].as_array().unwrap().len(), 9);
         assert_eq!(data["events"][0]["label"], "boarded");
         assert_eq!(data["events"][1]["label"], "note: </script><b>not html</b>");
     }

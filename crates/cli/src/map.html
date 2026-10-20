@@ -28,18 +28,18 @@
     border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
   #info { top: 12px; right: 12px; min-width: 200px; max-width: calc(100% - 48px); }
   #info .muted, #legend .muted { color: var(--ink-muted); }
-  #info .speed { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #info .speed { font-size: 22px; white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums; }
   #legend { bottom: 24px; left: 12px; }
   #legend select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; }
   #legend .bands { display: flex; gap: 2px; margin: 4px 0; font-size: 11px; font-variant-numeric: tabular-nums; }
-  #legend .band { width: 28px; }
+  #legend .band { width: 32px; }
   #legend .swatch { height: 8px; border-radius: 2px; margin-bottom: 2px; }
   #legend .gap { display: inline-block; width: 24px; border-top: 2px dashed var(--ink-muted); vertical-align: middle; margin-right: 6px; }
 </style>
 </head>
 <body>
 <div id="map"></div>
-<div id="info" class="panel"><div class="muted">Hover or tap the path for the speed there.</div></div>
+<div id="info" class="panel"><div class="muted">Hover or tap the path for the speed and acceleration there.</div></div>
 <div id="legend" class="panel"></div>
 <script>
 const data = /*RIDE_DATA*/null;
@@ -51,7 +51,11 @@ const pts = data.segments.flat();
 const autoScale = data.scales.findIndex(s => s.id === data.autoScale);
 let scale = Math.max(0, data.scales.findIndex(s => s.id === data.scale));
 if (data.scale == null) scale = autoScale;
-const colorOf = p => p[9][scale] == null ? data.unknownColor : data.ramp[p[9][scale]];
+// What the path is colored by: "speed" or "accel".
+let colorBy = data.colorBy;
+const colorOf = p => colorBy === "accel"
+  ? (p[11] == null ? data.unknownColor : data.accelRamp[p[11]])
+  : (p[9][scale] == null ? data.unknownColor : data.ramp[p[9][scale]]);
 
 const map = L.map("map", { preferCanvas: true });
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -95,8 +99,8 @@ function show(p) {
   cursor.setLatLng([p[0], p[1]]).addTo(map);
   const time = new Date(p[3]).toLocaleTimeString();
   document.getElementById("info").innerHTML =
-    `<div class="speed">${fmt(p[7] == null ? null : p[7] * KMH, 1)} km/h</div>` +
-    `<div class="muted">smoothed (IMU and GNSS) ${fmt(p[7], 2)} ± ${fmt(p[8], 2)} m/s</div>` +
+    `<div class="speed">${fmt(p[7] == null ? null : p[7] * KMH, 1)} km/h · ${p[10] != null && p[10] >= 0 ? "+" : ""}${fmt(p[10], 2)} m/s²</div>` +
+    `<div class="muted">smoothed (IMU and GNSS) ${fmt(p[7], 2)} ± ${fmt(p[8], 2)} m/s, ${fmt(p[10], 2)} m/s²</div>` +
     `<div class="muted">GPS ${fmt(p[4], 2)} ± ${fmt(p[5], 2)} m/s</div>` +
     `<div class="muted">${time} · ${fmt(p[2], 0)} s in · position ± ${fmt(p[6], 0)} m</div>`;
 }
@@ -115,20 +119,42 @@ map.on("click", e => { const p = nearest(e); pinned = p != null; if (p) show(p);
 
 const legend = document.getElementById("legend");
 legend.innerHTML =
-  `<label>Speed, km/h, scale <select id="scale">` +
+  `<label>Color by <select id="color-by"><option value="speed">speed</option><option value="accel">acceleration</option></select></label> ` +
+  `<label id="scale-label">· km/h, scale <select id="scale">` +
   `<option value="auto">auto (${data.scales[autoScale].name})</option>` +
   data.scales.map((s, i) => `<option value="${i}">${s.name}</option>`).join("") +
   `</select></label>` +
+  `<span id="accel-label" class="muted">· m/s², braking to speeding up</span>` +
   `<div class="bands"></div>` +
-  `<div class="muted"><span class="gap"></span>no GPS · gray: no smoothed speed</div>`;
+  `<div class="muted"><span class="gap"></span>no GPS · dark gray: no smoothed speed</div>`;
 const select = document.getElementById("scale");
 select.value = data.scale == null ? "auto" : String(scale);
+const colorBySelect = document.getElementById("color-by");
+colorBySelect.value = colorBy;
 function drawLegend() {
-  const bands = data.scales[scale].bandsKmh;
-  legend.querySelector(".bands").innerHTML = data.ramp.map((c, i) =>
+  const accel = colorBy === "accel";
+  document.getElementById("scale-label").hidden = accel;
+  document.getElementById("accel-label").hidden = !accel;
+  let ramp, labels;
+  if (accel) {
+    // Each band labeled by its lower bound; the first has none.
+    const bounds = data.accelBoundsMps2;
+    ramp = data.accelRamp;
+    labels = ramp.map((_, i) => i === 0 ? `<${bounds[0]}` : `${bounds[i - 1] > 0 ? "+" : ""}${bounds[i - 1]}`);
+  } else {
+    const bands = data.scales[scale].bandsKmh;
+    ramp = data.ramp;
+    labels = bands.map((b, i) => `${b}${i + 1 === bands.length ? "+" : ""}`);
+  }
+  legend.querySelector(".bands").innerHTML = ramp.map((c, i) =>
     `<div class="band"><div class="swatch" style="background: ${c}"></div>` +
-    `<div class="muted">${bands[i]}${i + 1 === bands.length ? "+" : ""}</div></div>`).join("");
+    `<div class="muted">${labels[i]}</div></div>`).join("");
 }
+colorBySelect.addEventListener("change", () => {
+  colorBy = colorBySelect.value;
+  drawPath();
+  drawLegend();
+});
 select.addEventListener("change", () => {
   scale = select.value === "auto" ? autoScale : Number(select.value);
   drawPath();

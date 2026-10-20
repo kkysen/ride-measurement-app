@@ -3,6 +3,9 @@
 //! A light-to-dark blue ramp in fixed bands, narrow at low speeds and wide at high ones,
 //! so a color means the same speed on every ride and every map.
 //! Each scale covers its kind of ride's top speed; a ride uses the first whose limit its top speed is within.
+//!
+//! Maps can instead color by acceleration along the track: a diverging ramp from orange (braking)
+//! through gray (steady) to purple (speeding up), in fixed bands of m/s^2, one scale for every ride.
 
 /// Sequential blue ramp, as ARGB: light is slow, dark is fast.
 pub const RAMP_ARGB: [u32; 10] = [
@@ -101,6 +104,32 @@ pub fn edge_speed(a_mps: Option<f64>, b_mps: Option<f64>) -> Option<f64> {
     Some((a_mps? + b_mps?) / 2.0)
 }
 
+/// Diverging ramp for acceleration, as ARGB: strong braking, through steady, to strong acceleration.
+pub const ACCEL_RAMP_ARGB: [u32; 9] = [
+    0xFFB35806, 0xFFE08214, 0xFFFDB863, 0xFFF5D7A8, 0xFFBDBBB5, 0xFFCDC4E8, 0xFFB2ABD2, 0xFF8073AC,
+    0xFF542788,
+];
+
+/// Boundaries between [`ACCEL_RAMP_ARGB`]'s bands, m/s^2: the first band is below the first boundary,
+/// the last above the last. Normal rail service stays within about 1.3 m/s^2 either way.
+pub const ACCEL_BOUNDS_MPS2: [f64; 8] = [-1.2, -0.8, -0.4, -0.15, 0.15, 0.4, 0.8, 1.2];
+
+/// The band (index into [`ACCEL_RAMP_ARGB`]) for an acceleration, or `None` without one.
+pub fn accel_band(accel_mps2: Option<f64>) -> Option<usize> {
+    let a = accel_mps2?;
+    Some(ACCEL_BOUNDS_MPS2.iter().filter(|&&b| a >= b).count())
+}
+
+/// The color for an acceleration, or [`UNKNOWN_ARGB`] without one.
+pub fn accel_color_argb(accel_mps2: Option<f64>) -> u32 {
+    accel_band(accel_mps2).map_or(UNKNOWN_ARGB, |b| ACCEL_RAMP_ARGB[b])
+}
+
+/// The acceleration a map draws the path between two consecutive fixes with: their mean, if both have one.
+pub fn edge_accel(a_mps2: Option<f64>, b_mps2: Option<f64>) -> Option<f64> {
+    Some((a_mps2? + b_mps2?) / 2.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +152,18 @@ mod tests {
         );
         assert_eq!(SpeedScale::Flight.color_argb(kmh(1200.0)), RAMP_ARGB[9]);
         assert_eq!(rail.color_argb(None), UNKNOWN_ARGB);
+    }
+
+    #[test]
+    fn accel_bands() {
+        assert_eq!(accel_band(Some(-2.0)), Some(0));
+        assert_eq!(accel_band(Some(-1.2)), Some(1));
+        assert_eq!(accel_band(Some(0.0)), Some(4));
+        assert_eq!(accel_band(Some(0.15)), Some(5));
+        assert_eq!(accel_band(Some(3.0)), Some(8));
+        assert_eq!(accel_color_argb(None), UNKNOWN_ARGB);
+        assert_eq!(edge_accel(Some(-1.0), Some(0.0)), Some(-0.5));
+        assert_eq!(edge_accel(Some(1.0), None), None);
     }
 
     #[test]

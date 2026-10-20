@@ -62,6 +62,8 @@ class MainActivity : ComponentActivity() {
                 "%.0f km/h ± %.0f".format(estimate.speedMps * 3.6, estimate.sigmaMps * 3.6),
                 style = MaterialTheme.typography.displayMedium,
             )
+            // Along the direction of travel: negative is braking.
+            Text("%+.2f m/s²".format(estimate.accelMps2), style = MaterialTheme.typography.headlineMedium)
             val sensors = estimate.sensors.sortedBy { it.ordinal }.joinToString { it.name.lowercase().replace('_', ' ') }
             Text(if (estimate.stopped) "stopped · $sensors" else sensors)
             val gnss by LiveSpeed.gnss.collectAsStateWithLifecycle()

@@ -56,6 +56,8 @@ pub struct Estimate {
     pub since_gnss_s: Option<f64>,
     /// Measurements rejected as outliers so far, per sensor.
     pub rejected: Vec<SensorCount>,
+    /// Acceleration in the direction of travel, negative when braking.
+    pub accel_mps2: f64,
 }
 
 /// A smoothed speed at a fix or a sample time (`ride_fusion::fusion::SmoothedSpeed`).
@@ -64,6 +66,7 @@ pub struct SmoothedSpeed {
     pub elapsed_realtime_ns: i64,
     pub speed_mps: f64,
     pub sigma_mps: f64,
+    pub accel_mps2: f64,
 }
 
 /// Raw GNSS progress, for the screen.
@@ -172,6 +175,7 @@ impl Fusion {
                     count,
                 })
                 .collect(),
+            accel_mps2: e.accel_mps2,
         }
     }
 
@@ -184,6 +188,7 @@ impl Fusion {
                 elapsed_realtime_ns: s.elapsed_realtime_ns,
                 speed_mps: s.speed_mps,
                 sigma_mps: s.sigma_mps,
+                accel_mps2: s.accel_mps2,
             })
             .collect()
     }
@@ -259,6 +264,18 @@ pub fn speed_scale_for_top_speed(top_speed_mps: Option<f64>) -> SpeedScale {
 #[uniffi::export]
 pub fn speed_edge_color_argb(scale: SpeedScale, a_mps: Option<f64>, b_mps: Option<f64>) -> u32 {
     Scale::from(scale).color_argb(speed_colors::edge_speed(a_mps, b_mps))
+}
+
+/// Boundaries between the acceleration color bands, m/s^2.
+#[uniffi::export]
+pub fn accel_bounds_mps2() -> Vec<f64> {
+    speed_colors::ACCEL_BOUNDS_MPS2.into()
+}
+
+/// ARGB color for the path between two consecutive fixes with these accelerations (`None` for unknown).
+#[uniffi::export]
+pub fn accel_edge_color_argb(a_mps2: Option<f64>, b_mps2: Option<f64>) -> u32 {
+    speed_colors::accel_color_argb(speed_colors::edge_accel(a_mps2, b_mps2))
 }
 
 /// A failure of a whole operation, with its full cause chain.

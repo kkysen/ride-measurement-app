@@ -38,7 +38,7 @@ enum Command {
     /// How well raw GNSS solves for velocity: navigation messages, ephemerides, epochs, residuals,
     /// and the solved speed against the phone's own.
     Gnss { session: PathBuf },
-    /// Write the ride's GPS path, colored by speed, as an HTML map (default `<session>/map.html`).
+    /// Write the ride's GPS path, colored by speed or acceleration, as an HTML map (default `<session>/map.html`).
     Map {
         session: PathBuf,
         #[arg(short, long)]
@@ -46,6 +46,9 @@ enum Command {
         /// The speed color scale; by default, chosen from the ride's top fused speed.
         #[arg(long, value_parser = parse_scale)]
         scale: Option<SpeedScale>,
+        /// Color by acceleration instead of speed at first; the page can switch either way.
+        #[arg(long)]
+        accel: bool,
     },
 }
 
@@ -63,9 +66,10 @@ fn main() -> anyhow::Result<()> {
             session,
             output,
             scale,
+            accel,
         } => {
             let output = output.unwrap_or_else(|| session.join("map.html"));
-            map::map(&Session::open(session)?, &output, scale)
+            map::map(&Session::open(session)?, &output, scale, accel)
         }
     }
 }

@@ -6,6 +6,7 @@ import org.junit.Test
 import uniffi.ride_ffi.Fusion
 import uniffi.ride_ffi.Sensor
 import uniffi.ride_ffi.SpeedScale
+import uniffi.ride_ffi.accelEdgeColorArgb
 import uniffi.ride_ffi.coreVersion
 import uniffi.ride_ffi.speedEdgeColorArgb
 import uniffi.ride_ffi.speedScaleForTopSpeed
@@ -40,5 +41,7 @@ class RustCoreTest {
         // Unknown speed is gray; known speeds are opaque blues.
         assertEquals(0xFF8A8984.toUInt(), speedEdgeColorArgb(SpeedScale.RAIL, null, 10.0))
         assertEquals(0xFF.toUInt(), speedEdgeColorArgb(SpeedScale.RAIL, 10.0, 10.0) shr 24)
+        assertEquals(0xFF8A8984.toUInt(), accelEdgeColorArgb(null, 1.0))
+        assertEquals(0xFF.toUInt(), accelEdgeColorArgb(0.0, 0.5) shr 24)
     }
 }

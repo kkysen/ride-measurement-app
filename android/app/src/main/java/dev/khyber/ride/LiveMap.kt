@@ -29,6 +29,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.osmdroid.config.Configuration
 import uniffi.ride_ffi.SpeedScale
+import uniffi.ride_ffi.accelBoundsMps2
+import uniffi.ride_ffi.accelEdgeColorArgb
 import uniffi.ride_ffi.speedEdgeColorArgb
 import uniffi.ride_ffi.speedScaleBandsKmh
 import uniffi.ride_ffi.speedScaleForTopSpeed
@@ -46,8 +48,8 @@ import java.util.Date
 import kotlin.math.hypot
 
 /**
- * The live map: the current recording's GPS path colored by speed, following the newest fix.
- * Dragging the map stops following; "Follow" resumes it. Tapping the path shows the speed there.
+ * The live map: the current recording's GPS path colored by speed or acceleration, following the newest fix.
+ * Dragging the map stops following; "Follow" resumes it. Tapping the path shows the speed and acceleration there.
  */
 @Composable
 fun LiveMapScreen(onBack: () -> Unit) {
@@ -56,6 +58,7 @@ fun LiveMapScreen(onBack: () -> Unit) {
     var selected by remember { mutableStateOf<LiveTrack.Point?>(null) }
     // Null is automatic, from the top speed so far.
     var chosenScale by rememberSaveable { mutableStateOf<SpeedScale?>(null) }
+    var colorByAccel by rememberSaveable { mutableStateOf(false) }
     // Scales and colors come from Rust (`crates/fusion/src/speed_colors.rs`), the same as `ride map`.
     val scale = try {
         ScaleInfo(chosenScale ?: speedScaleForTopSpeed(points.mapNotNull { it.speedMps }.maxOrNull()))
@@ -72,16 +75,25 @@ fun LiveMapScreen(onBack: () -> Unit) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onBack) { Text("Back") }
             Button(onClick = { follow = true }, enabled = !follow) { Text("Follow") }
+            Button(onClick = { colorByAccel = !colorByAccel }) { Text(if (colorByAccel) "Color: accel" else "Color: speed") }
             // Cycles automatic, then each scale.
-            Button(onClick = {
-                val choices = listOf(null) + SpeedScale.entries
-                chosenScale = choices[(choices.indexOf(chosenScale) + 1) % choices.size]
-            }) { Text("Scale: " + if (chosenScale == null) "auto" else scale.name) }
+            if (!colorByAccel) {
+                Button(onClick = {
+                    val choices = listOf(null) + SpeedScale.entries
+                    chosenScale = choices[(choices.indexOf(chosenScale) + 1) % choices.size]
+                }) { Text("Scale: " + if (chosenScale == null) "auto" else scale.name) }
+            }
         }
         Text(describe(selected ?: points.lastOrNull(), latest = selected == null), style = MaterialTheme.typography.bodyMedium)
         Text(
-            "Color: speed, light to dark in bands at ${scale.bandsKmh.joinToString(", ")}+ km/h (${scale.name} scale); " +
-                "gray: no live speed; dashed: no GPS (tunnel)",
+            (
+                if (colorByAccel) {
+                    "Color: acceleration, orange braking through gray to purple speeding up, " +
+                        "in bands at ${scale.accelBoundsMps2.joinToString(", ") { "%+.2f".format(it) }} m/s²; "
+                } else {
+                    "Color: speed, light to dark in bands at ${scale.bandsKmh.joinToString(", ")}+ km/h (${scale.name} scale); "
+                }
+            ) + "dark gray: no live speed; dashed: no GPS (tunnel)",
             style = MaterialTheme.typography.bodySmall,
         )
         Box(Modifier.fillMaxWidth().weight(1f)) {
@@ -100,7 +112,7 @@ fun LiveMapScreen(onBack: () -> Unit) {
                 update = { view ->
                     if (view !is MapView) return@AndroidView
                     try {
-                        track.sync(points, scale.scale)
+                        track.sync(points, scale.scale, colorByAccel)
                         val last = points.lastOrNull()
                         if (follow && last != null) view.controller.animateTo(GeoPoint(last.lat, last.lon))
                         view.invalidate()
@@ -119,7 +131,7 @@ private fun describe(p: LiveTrack.Point?, latest: Boolean): String {
     fun f(v: Double?, digits: Int) = v?.let { "%.${digits}f".format(it) } ?: "unknown"
     val time = DateFormat.getTimeInstance().format(Date(p.timeMs))
     return (if (latest) "Now ($time): " else "At $time: ") +
-        "${f(p.speedMps?.times(3.6), 1)} km/h" +
+        "${f(p.speedMps?.times(3.6), 1)} km/h · ${p.accelMps2?.let { "%+.2f".format(it) } ?: "unknown"} m/s²" +
         "\nsmoothed ${f(p.smoothedSpeedMps, 2)} · live ${f(p.fusedSpeedMps, 2)} · " +
         "GPS ${f(p.gpsSpeedMps, 2)} ± ${f(p.gpsSpeedAccuracyMps, 2)} m/s" +
         " · position ± ${f(p.accuracyM, 0)} m"
@@ -169,16 +181,18 @@ private class TrackOverlays {
     val colored = FolderOverlay()
     private var drawn = emptyList<LiveTrack.Point>()
     private var scale: SpeedScale? = null
+    private var byAccel = false
     private var casing: Polyline? = null
     private var line: Polyline? = null
     private var lineColor = 0
 
-    fun sync(points: List<LiveTrack.Point>, scale: SpeedScale) {
-        // A new recording, smoothing changed speeds already drawn, or a faster top speed moved the ride to a wider
-        // scale: start over. Otherwise only the new points are added.
+    fun sync(points: List<LiveTrack.Point>, scale: SpeedScale, byAccel: Boolean) {
+        // A new recording, smoothing changed speeds already drawn, a faster top speed moved the ride to a wider
+        // scale, or switching between speed and acceleration: start over. Otherwise only the new points are added.
         val restart = points.size < drawn.size || points.subList(0, drawn.size) != drawn
-        if (restart || scale != this.scale) {
+        if (restart || scale != this.scale || byAccel != this.byAccel) {
             this.scale = scale
+            this.byAccel = byAccel
             listOf(gaps, casings, colored).forEach { it.items.clear() }
             drawn = emptyList()
             casing = null
@@ -202,7 +216,11 @@ private class TrackOverlays {
             return
         }
         casing?.addPoint(geo)
-        val color = speedEdgeColorArgb(scale!!, prev.speedMps, p.speedMps).toInt()
+        val color = if (byAccel) {
+            accelEdgeColorArgb(prev.accelMps2, p.accelMps2).toInt()
+        } else {
+            speedEdgeColorArgb(scale!!, prev.speedMps, p.speedMps).toInt()
+        }
         val current = line
         if (current != null && color == lineColor) {
             current.addPoint(geo)
@@ -242,4 +260,5 @@ private class TrackOverlays {
 private class ScaleInfo(val scale: SpeedScale) {
     val name = speedScaleName(scale)
     val bandsKmh = speedScaleBandsKmh(scale)
+    val accelBoundsMps2 = accelBoundsMps2()
 }

@@ -31,9 +31,13 @@ object LiveTrack {
         val startsSegment: Boolean,
         /** The smoothed speed (forward and backward passes over recent input), once smoothing has reached it. */
         val smoothedSpeedMps: Double? = null,
+        /** The live fused acceleration along the direction of travel, and the smoothed one, as for speed. */
+        val fusedAccelMps2: Double? = null,
+        val smoothedAccelMps2: Double? = null,
     ) {
         /** What the map is colored by: smoothed if there is one, else live. */
         val speedMps: Double? get() = smoothedSpeedMps ?: fusedSpeedMps
+        val accelMps2: Double? get() = smoothedAccelMps2 ?: fusedAccelMps2
     }
 
     private val _points = MutableStateFlow<List<Point>>(emptyList())
@@ -52,6 +56,7 @@ object LiveTrack {
                 location.latitude,
                 location.longitude,
                 LiveSpeed.estimate.value?.speedMps,
+                LiveSpeed.estimate.value?.accelMps2,
                 if (location.hasSpeed()) location.speed.toDouble() else null,
                 if (location.hasSpeedAccuracy()) location.speedAccuracyMetersPerSecond.toDouble() else null,
                 if (location.hasAccuracy()) location.accuracy.toDouble() else null,
@@ -61,18 +66,18 @@ object LiveTrack {
         }
     }
 
-    /** Replaces recent points' speeds with smoothed ones at the same fix times. */
+    /** Replaces recent points' speeds and accelerations with smoothed ones at the same fix times. */
     @Synchronized
     fun applySmoothed(smoothed: List<SmoothedSpeed>) {
         if (smoothed.isEmpty()) return
-        val byTime = smoothed.associate { it.elapsedRealtimeNs to it.speedMps }
+        val byTime = smoothed.associateBy { it.elapsedRealtimeNs }
         val points = _points.value
         var changed = false
         val updated = points.map { p ->
             val s = byTime[p.elapsedRealtimeNs]
-            if (s != null && s != p.smoothedSpeedMps) {
+            if (s != null && (s.speedMps != p.smoothedSpeedMps || s.accelMps2 != p.smoothedAccelMps2)) {
                 changed = true
-                p.copy(smoothedSpeedMps = s)
+                p.copy(smoothedSpeedMps = s.speedMps, smoothedAccelMps2 = s.accelMps2)
             } else {
                 p
             }
@@ -87,6 +92,7 @@ object LiveTrack {
         lat: Double,
         lon: Double,
         fusedSpeedMps: Double?,
+        fusedAccelMps2: Double?,
         gpsSpeedMps: Double?,
         gpsSpeedAccuracyMps: Double?,
         accuracyM: Double?,
@@ -97,6 +103,7 @@ object LiveTrack {
         val startsSegment = last == null || elapsedRealtimeNs - last.elapsedRealtimeNs > maxGapNs
         _points.value = points + Point(
             elapsedRealtimeNs, timeMs, lat, lon, fusedSpeedMps, gpsSpeedMps, gpsSpeedAccuracyMps, accuracyM, startsSegment,
+            fusedAccelMps2 = fusedAccelMps2,
         )
     }
 

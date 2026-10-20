@@ -5,7 +5,7 @@ import org.junit.Test
 
 class LiveTrackTest {
     private fun add(tS: Long, fused: Double? = null, gps: Double? = null) =
-        LiveTrack.add(tS * 1_000_000_000, tS * 1000, 40.0 + tS * 1e-4, -74.0, fused, gps, null, null)
+        LiveTrack.add(tS * 1_000_000_000, tS * 1000, 40.0 + tS * 1e-4, -74.0, fused, null, gps, null, null)
 
     @Test
     fun splitsAtGapsAndIgnoresStaleFixes() {
@@ -34,7 +34,8 @@ class LiveTrackTest {
         LiveTrack.reset()
         add(1, fused = 3.0)
         add(2, fused = 4.0)
-        LiveTrack.applySmoothed(listOf(uniffi.ride_ffi.SmoothedSpeed(2_000_000_000L, 5.0, 0.1)))
+        LiveTrack.applySmoothed(listOf(uniffi.ride_ffi.SmoothedSpeed(2_000_000_000L, 5.0, 0.1, -0.5)))
         assertEquals(listOf(3.0, 5.0), LiveTrack.points.value.map { it.speedMps })
+        assertEquals(listOf(null, -0.5), LiveTrack.points.value.map { it.accelMps2 })
     }
 }
