@@ -35,6 +35,10 @@ const MIN_PSEUDORANGE_SIGMA: f64 = 1.0;
 const MIN_PRR_SIGMA: f64 = 0.05;
 /// Residuals beyond this many sigma reject the worst satellite and solve again.
 const OUTLIER_SIGMA: f64 = 4.0;
+/// Carrier frequencies (Hz) of the L5 band (GPS and QZSS L5, Galileo E5a), and the two the combination uses.
+const L5_BAND_HZ: std::ops::Range<f32> = 1.164e9..1.189e9;
+const L1_HZ: f64 = 1_575.42e6;
+const L5_HZ: f64 = 1_176.45e6;
 /// BeiDou B1C's carrier frequency (Hz), shared with GPS L1.
 const BEIDOU_B1C_HZ: f32 = 1.575_42e9;
 /// Weaker signals than this are too noisy and multipath-prone to use.
@@ -56,8 +60,8 @@ pub struct Solution {
 pub struct PositionSolution {
     /// ECEF (m).
     pub position: [f64; 3],
-    /// Receiver clock bias (m) against each constellation.
-    pub clock_biases: Vec<(System, f64)>,
+    /// Receiver clock bias (m) against each constellation, and whether for its dual-frequency combinations.
+    pub clock_biases: Vec<(System, bool, f64)>,
     /// Covariance of `position` (m^2), row-major,
     /// widened by [`UNCHECKED_POSITION_SIGMA_M`] when nothing checked it.
     pub position_covariance: [f64; 9],
@@ -167,6 +171,8 @@ pub struct Navigator {
     ephemerides: BTreeMap<SatId, Vec<(Ephemeris, bool)>>,
     /// Whether to ignore downloaded ephemerides, to check the phone's navigation message decoding alone.
     pub decoded_only: bool,
+    /// Whether to combine L1 and L5 pseudoranges where a satellite has both, cancelling the ionosphere's delay.
+    pub dual_frequency: bool,
     /// Full GPS week from the latest clock, to resolve navigation messages' 10-bit weeks.
     week: Option<u32>,
     /// Subframes that arrived before any clock.
@@ -379,6 +385,8 @@ impl Navigator {
         let bias = clock.bias_nanos.unwrap_or(0.0);
         let leap_seconds = clock.leap_second.unwrap_or(DEFAULT_LEAP_SECONDS);
         let mut best: BTreeMap<SatId, Sat> = BTreeMap::new();
+        // Each satellite's strongest L5-band pseudorange (m, before the satellite clock) and its sigma.
+        let mut l5: BTreeMap<SatId, (f64, f64, f64)> = BTreeMap::new();
         for m in measurements {
             let Some(system) = System::from_android(m.constellation_type) else {
                 continue;
@@ -386,14 +394,22 @@ impl Navigator {
             if !system.time_known(m.state)
                 || m.cn0_dbhz < MIN_CN0_DBHZ
                 || !m.pseudorange_rate_meters_per_second.is_finite()
-                || m.carrier_frequency_hz
-                    .is_some_and(|f| !L1_BAND_HZ.contains(&f))
             {
                 continue;
             }
             let Ok(svid) = u8::try_from(m.svid) else {
                 continue;
             };
+            let l5_band = m
+                .carrier_frequency_hz
+                .is_some_and(|f| L5_BAND_HZ.contains(&f))
+                && matches!(system, System::Gps | System::Galileo | System::Qzss);
+            if !l5_band
+                && m.carrier_frequency_hz
+                    .is_some_and(|f| !L1_BAND_HZ.contains(&f))
+            {
+                continue;
+            }
             // BeiDou's broadcast D1/D2 clock comes with B1I's group delay (TGD1); B1C's differs and is only in its own
             // CNAV1 message, so B1C (on GPS's L1 frequency) would add a bias. Phones track B1I on every BeiDou satellite.
             if system == System::Beidou
@@ -419,6 +435,15 @@ impl Navigator {
             if !TRAVEL_NS.contains(&travel_ns) {
                 continue;
             }
+            if l5_band {
+                let sigma = (m.received_sv_time_uncertainty_nanos as f64 * 1e-9 * C)
+                    .max(MIN_PSEUDORANGE_SIGMA);
+                let id = SatId { system, svid };
+                if l5.get(&id).is_none_or(|b| b.2 < m.cn0_dbhz) {
+                    l5.insert(id, (travel_ns * 1e-9 * C, sigma, m.cn0_dbhz));
+                }
+                continue;
+            }
             // Transmit time in the satellite's clock, as GPS seconds of week.
             let rx_tow_ns =
                 rx_gps_ns.rem_euclid(NANOS_PER_WEEK) as f64 + m.time_offset_nanos - bias;
@@ -433,6 +458,8 @@ impl Navigator {
                 system,
                 state,
                 pseudorange: travel_ns * 1e-9 * C + C * (state.clock_bias - eph.tgd()),
+                dual: false,
+                tgd: eph.tgd(),
                 pseudorange_sigma: (m.received_sv_time_uncertainty_nanos as f64 * 1e-9 * C)
                     .max(MIN_PSEUDORANGE_SIGMA)
                     .hypot(eph.sigma_m(f64::from(week) * SECONDS_PER_WEEK + t_sv)),
@@ -444,6 +471,22 @@ impl Navigator {
             };
             if best.get(&id).is_none_or(|b| b.cn0 < sat.cn0) {
                 best.insert(id, sat);
+            }
+        }
+        if self.dual_frequency {
+            for (id, sat) in &mut best {
+                let Some(&(raw5, sigma5, _)) = l5.get(id) else {
+                    continue;
+                };
+                // Ionosphere-free: the delay scales with 1/f^2, so this combination cancels it. The broadcast clock
+                // refers to L1/L2 (GPS) or E1/E5b (Galileo), so L1/L5's own inter-signal correction (well under a
+                // meter) is left out, along with the single-frequency group delay.
+                let p1 = sat.pseudorange + C * sat.tgd;
+                let p5 = raw5 + C * sat.state.clock_bias;
+                let (g1, g5) = (L1_HZ * L1_HZ, L5_HZ * L5_HZ);
+                sat.pseudorange = (g1 * p1 - g5 * p5) / (g1 - g5);
+                sat.pseudorange_sigma = (g1 * sat.pseudorange_sigma).hypot(g5 * sigma5) / (g1 - g5);
+                sat.dual = true;
             }
         }
         best.into_values().collect()
@@ -468,8 +511,12 @@ impl Navigator {
 struct Sat {
     system: System,
     state: SatState,
-    /// Corrected for the satellite clock and group delay (m).
+    /// Corrected for the satellite clock and group delay (m); with `dual`, the ionosphere-free combination.
     pseudorange: f64,
+    /// Whether `pseudorange` combines two frequencies, which shifts the receiver's clock bias.
+    dual: bool,
+    /// The single-frequency group delay (s) taken out of `pseudorange`.
+    tgd: f64,
     pseudorange_sigma: f64,
     /// Corrected for the satellite clock drift (m/s).
     prr: f64,
@@ -486,7 +533,16 @@ fn rotated(state: &SatState, receiver: [f64; 3]) -> ([f64; 3], [f64; 3]) {
     (rot(state.position), rot(state.velocity))
 }
 
-/// The constellations among `sats`, in order: each one's clock bias is an unknown of the position solution.
+/// The receiver clock biases among `sats`, in order: one per constellation and kind of pseudorange
+/// (single or dual frequency), each an unknown of the position solution.
+fn clock_groups(sats: &[&Sat]) -> Vec<(System, bool)> {
+    let mut groups: Vec<(System, bool)> = sats.iter().map(|s| (s.system, s.dual)).collect();
+    groups.sort();
+    groups.dedup();
+    groups
+}
+
+/// The constellations among `sats`, in order.
 fn systems_of(sats: &[&Sat]) -> Vec<System> {
     let mut systems: Vec<System> = sats.iter().map(|s| s.system).collect();
     systems.sort();
@@ -501,7 +557,7 @@ fn systems_of(sats: &[&Sat]) -> Vec<System> {
 fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<PositionSolution> {
     let mut used: Vec<&Sat> = sats.iter().collect();
     loop {
-        let systems = systems_of(&used);
+        let systems = clock_groups(&used);
         let unknowns = 3 + systems.len();
         if used.len() < unknowns {
             return None;
@@ -527,7 +583,11 @@ fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<PositionSolut
         }
         return Some(PositionSolution {
             position: [x[0], x[1], x[2]],
-            clock_biases: systems.into_iter().zip(x[3..].iter().copied()).collect(),
+            clock_biases: systems
+                .into_iter()
+                .zip(x[3..].iter().copied())
+                .map(|((sys, dual), b)| (sys, dual, b))
+                .collect(),
             position_covariance,
             satellites_used: used.len(),
             residual_rms: rms,
@@ -540,7 +600,7 @@ fn solve_position(sats: &[Sat], start: Option<[f64; 3]>) -> Option<PositionSolut
 /// and the residuals.
 fn gauss_newton_position(
     sats: &[&Sat],
-    systems: &[System],
+    systems: &[(System, bool)],
     start: Option<[f64; 3]>,
 ) -> Option<(Vec<f64>, Vec<f64>, Vec<f64>)> {
     let mut x = vec![0.0; 3 + systems.len()];
@@ -555,7 +615,10 @@ fn gauss_newton_position(
                 let d = sub(&sp, &rx);
                 let r = norm(&d);
                 let u = d.map(|v| v / r);
-                let k = 3 + systems.iter().position(|&sys| sys == s.system).unwrap();
+                let k = 3 + systems
+                    .iter()
+                    .position(|&g| g == (s.system, s.dual))
+                    .unwrap();
                 let mut a = vec![0.0; x.len()];
                 a[..3].copy_from_slice(&[-u[0], -u[1], -u[2]]);
                 a[k] = 1.0;

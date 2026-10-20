@@ -62,19 +62,24 @@ struct Result {
     velocity_median: f64,
     velocity_p95: f64,
     satellites: f64,
+    /// Median height error (m, positive is too high).
+    vertical_median: f64,
 }
 
 fn solve(
     systems: &[System],
+    dual_frequency: bool,
     orbits: &str,
     events: &[GnssMeasurementsEvent],
     truth: &BTreeMap<i64, Truth>,
 ) -> Result {
     let mut nav = Navigator::default();
+    nav.dual_frequency = dual_frequency;
     for e in read_nav(orbits) {
         nav.add_ephemeris(e);
     }
     let (mut horizontal, mut velocity, mut satellites) = (Vec::new(), Vec::new(), 0usize);
+    let mut vertical = Vec::new();
     for event in events {
         let mut event = event.clone();
         event.measurements.retain(|m| {
@@ -93,10 +98,11 @@ fn solve(
         let Some(t) = truth.get(&utc_ms) else {
             continue;
         };
-        let [east, north, _] = enu(t.ecef);
+        let [east, north, up] = enu(t.ecef);
         if let Some(p) = &sol.position {
             let d: [f64; 3] = std::array::from_fn(|k| p.position[k] - t.ecef[k]);
             horizontal.push(dot(d, east).hypot(dot(d, north)));
+            vertical.push(dot(d, up));
         }
         if let Some(v) = &sol.velocity {
             let en = [dot(v.velocity, east), dot(v.velocity, north)];
@@ -114,6 +120,7 @@ fn solve(
         velocity_median: percentile(velocity.clone(), 0.5),
         velocity_p95: percentile(velocity, 0.95),
         satellites,
+        vertical_median: percentile(vertical, 0.5),
     }
 }
 
@@ -140,23 +147,35 @@ fn drive_with_ground_truth() {
     ];
     println!("{} epochs, {} with ground truth", events.len(), truth.len());
     println!(
-        "systems                          solved  sats  horizontal m (median, 95%)  velocity km/h (median, 95%)"
+        "systems                              solved  sats  horizontal m (median, 95%)  up m (median)  velocity km/h (median, 95%)"
     );
-    let mut results = Vec::new();
-    for set in sets {
-        let r = solve(set, &orbits, &events, &truth);
-        let names: Vec<&str> = set.iter().map(|s| s.name()).collect();
+    let row = |name: String, r: &Result| {
         println!(
-            "{:32} {:6} {:5.1}  {:8.1} {:8.1}               {:8.2} {:8.2}",
-            names.join("+"),
+            "{:36} {:6} {:5.1}  {:8.1} {:8.1}       {:8.1}            {:8.2} {:8.2}",
+            name,
             r.solved,
             r.satellites,
             r.horizontal_median,
             r.horizontal_p95,
+            r.vertical_median,
             r.velocity_median * 3.6,
             r.velocity_p95 * 3.6
         );
+    };
+    let mut results = Vec::new();
+    for set in sets {
+        let r = solve(set, false, &orbits, &events, &truth);
+        let names: Vec<&str> = set.iter().map(|s| s.name()).collect();
+        row(names.join("+"), &r);
         results.push(r);
+    }
+    // With L1/L5 (E1/E5a) ionosphere-free pseudoranges where a satellite has both.
+    let mut dual = Vec::new();
+    for set in [sets[0], sets[1], sets[4]] {
+        let r = solve(set, true, &orbits, &events, &truth);
+        let names: Vec<&str> = set.iter().map(|s| s.name()).collect();
+        row(names.join("+") + ", dual", &r);
+        dual.push(r);
     }
 
     // Measured on this drive (GPS alone: 4.3 m and 0.092 m/s, 0.33 km/h, at the median), with some margin.
