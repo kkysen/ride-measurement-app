@@ -66,6 +66,9 @@ Recordings themselves survive an uninstall (they live in shared storage), but th
 The phone and this machine must be on the same network.
 `adb` here is Ubuntu's native ARM64 build (`sudo apt install adb`):
 the SDK's x86-64 `adb` crashes under `box64` when starting its server.
+WSL's mirrored networking (`networkingMode=mirrored` in `.wslconfig`, so WSL can reach the phone)
+makes connecting to a local port nothing listens on hang instead of fail,
+so `adb` never gets to start its own server: run `just adb-server` once after each WSL restart.
 
 ### 4. Record and check a ride
 

@@ -9,6 +9,7 @@ Details for each step are in `README.md` under "Your steps".
       (e.g. in a password manager). Losing them means the app can't be updated without an uninstall.
 - [ ] Phone: Settings > About phone > Software information, tap Build number 7 times (developer options).
 - [ ] Phone: Developer options > Wireless debugging: on. Phone and computer on the same WiFi.
+- [ ] Here, after each WSL restart: `just adb-server` (otherwise `adb` hangs; see README).
 - [ ] Phone: Wireless debugging > Pair device with pairing code. Here: `adb pair <ip>:<pairing port>`, enter the code.
 - [ ] Here: `adb connect <ip>:<port>` (port from the main Wireless debugging screen).
 - [ ] Here: `just install`.
@@ -37,10 +38,9 @@ Details for each step are in `README.md` under "Your steps".
 - [ ] Here: `just pull`, then `just summary data/sessions/<session>`.
 - [ ] Here: `just map data/sessions/<session>`, then open `data/sessions/<session>/map.html` in a browser.
 - [ ] Here: `just gnss data/sessions/<session>` (best done standing still by a window for a few minutes) and send me the output.
-- [ ] Here, too: `just gnss data/sessions/<session> --decoded-only` and send me that output as well.
-      It ignores the orbits the app downloaded, so comparing it with the run above shows
-      whether the phone's own navigation messages (GPS, QZSS, Galileo, BeiDou, GLONASS) decode right.
-      If the app downloaded no orbits (no internet), first run `just orbits data/sessions/<session>` the day after.
+- [ ] If the app downloaded no orbits (no internet), run `just orbits data/sessions/<session>` the day after, then `just gnss` again.
+      The S26+ doesn't give apps navigation messages (its GNSS capabilities say so), so downloaded orbits are its only ones;
+      on a phone that does, `just gnss data/sessions/<session> --decoded-only` checks their decoding.
       It's the first check of the phone solving its own velocity from raw GNSS:
       expect navigation subframes passing parity, a few orbits, most epochs solved, and a speed near 0 if you stood still.
       The main screen also shows "raw GNSS: ... epochs solved" while recording.

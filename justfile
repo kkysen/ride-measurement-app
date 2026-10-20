@@ -44,7 +44,12 @@ python-env:
 apk:
     cd android && ./gradlew :app:assembleDebug
 
-# Install over wireless debugging (`adb pair` and `adb connect` first; see README).
+# Start the `adb` server, on localhost only: under WSL's mirrored networking `adb` hangs instead of starting it.
+adb-server:
+    @if timeout 3 adb devices >/dev/null 2>&1; then echo "adb server already running"; \
+    else (nohup adb nodaemon server start > target/adb-server.log 2>&1 &) ; sleep 1; timeout 3 adb devices; fi
+
+# Install over wireless debugging (`just adb-server`, `adb pair` and `adb connect` first; see README).
 install: apk
     adb install -r {{apk}}
 
