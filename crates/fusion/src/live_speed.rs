@@ -63,8 +63,15 @@ const STILL_WINDOW_S: f64 = 0.5;
 const STILL_STD_MPS2: f64 = 0.04;
 const STILL_S: f64 = 2.0;
 const GRAVITY_TAU_STILL_S: f64 = 0.5;
-const GRAVITY_TAU_MOVING_S: f64 = 600.0;
+/// Moving with recent GNSS, which gives the vehicle's own acceleration to subtract: short enough to follow the gyro's
+/// drift (at 600 s, gravity drifted far enough on a ride to leak 1.5 to 3.5 m/s^2 into the along-track acceleration).
+const GRAVITY_TAU_MOVING_S: f64 = 30.0;
+/// Moving without GNSS: the IMU can't tell tilt from sustained acceleration, so a short time constant would take
+/// the vehicle's acceleration for tilt and lose the speed it gained; until a stop, the gyro alone carries gravity.
+const GRAVITY_TAU_UNAIDED_S: f64 = 600.0;
 const AXIS_TAU_S: f64 = 30.0;
+/// How recent GNSS must be for the fused acceleration to be the vehicle's, so gravity can follow the rest.
+const GNSS_RECENT_S: f64 = 5.0;
 const AXIS_MIN_VARIANCE: f64 = 0.002;
 const DEPARTURE_EVIDENCE_MPS: f64 = 1.0;
 const SIGN_EVIDENCE: f64 = 2.0;
@@ -98,6 +105,8 @@ pub struct LiveSpeedEstimator {
     // IMU front end.
     gravity: [f64; 3],
     gravity_init: bool,
+    /// Mean and covariance of horizontal acceleration: centered, so a constant leak of gravity isn't the axis.
+    axis_mean: [f64; 3],
     cov: [f64; 9],
     axis: [f64; 3],
     axis_known: bool,
@@ -147,6 +156,7 @@ impl Default for LiveSpeedEstimator {
         Self {
             gravity: [0.0; 3],
             gravity_init: false,
+            axis_mean: [0.0; 3],
             cov: [0.0; 9],
             axis: [1.0, 0.0, 0.0],
             axis_known: false,
@@ -200,6 +210,7 @@ impl LiveSpeedEstimator {
         Self {
             gravity: self.gravity,
             gravity_init: self.gravity_init,
+            axis_mean: self.axis_mean,
             cov: self.cov,
             axis: self.axis.map(|a| -a),
             axis_known: self.axis_known,
@@ -244,15 +255,26 @@ impl LiveSpeedEstimator {
         // World-fixed vectors seen from a rotating phone turn the other way: v' = v - (omega x v) dt.
         rotate_world_fixed(&self.omega, &mut self.gravity, dt);
         rotate_world_fixed(&self.omega, &mut self.axis, dt);
+        rotate_world_fixed(&self.omega, &mut self.axis_mean, dt);
         self.rotate_cov(dt);
+        let gnss_recent =
+            self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
         let tau = if still {
             GRAVITY_TAU_STILL_S
-        } else {
+        } else if gnss_recent {
             GRAVITY_TAU_MOVING_S
+        } else {
+            GRAVITY_TAU_UNAIDED_S
         };
         let k_g = 1.0 - (-dt / tau).exp();
-        for (g, a) in self.gravity.iter_mut().zip([ax, ay, az]) {
-            *g += k_g * (a - *g);
+        // The vehicle's own acceleration (the fused speed's rate, signed along the axis) isn't tilt.
+        let linear = if self.axis_known && !still && gnss_recent {
+            self.accel * self.v.signum()
+        } else {
+            0.0
+        };
+        for ((g, a), u) in self.gravity.iter_mut().zip([ax, ay, az]).zip(self.axis) {
+            *g += k_g * (a - linear * u - *g);
         }
         let g_norm = norm(&self.gravity);
         if g_norm < 1e-6 {
@@ -589,9 +611,13 @@ impl LiveSpeedEstimator {
     /// Exponentially weighted covariance of horizontal acceleration, and its principal axis by power iteration.
     fn update_axis(&mut self, h: &[f64; 3], dt: f64) {
         let k = 1.0 - (-dt / AXIS_TAU_S).exp();
+        for (m, x) in self.axis_mean.iter_mut().zip(h) {
+            *m += k * (x - *m);
+        }
+        let d: [f64; 3] = std::array::from_fn(|i| h[i] - self.axis_mean[i]);
         for i in 0..3 {
             for j in 0..3 {
-                self.cov[i * 3 + j] += k * (h[i] * h[j] - self.cov[i * 3 + j]);
+                self.cov[i * 3 + j] += k * (d[i] * d[j] - self.cov[i * 3 + j]);
             }
         }
         let c = &self.cov;
