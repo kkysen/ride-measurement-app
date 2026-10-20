@@ -1,4 +1,5 @@
 mod gnss;
+mod import;
 mod map;
 
 use std::path::PathBuf;
@@ -38,6 +39,9 @@ enum Command {
     /// How well raw GNSS solves for velocity: navigation messages, ephemerides, epochs, residuals,
     /// and the solved speed against the phone's own.
     Gnss { session: PathBuf },
+    /// Convert a GnssLogger log (Google's GPS Measurement Tools, Smartphone Decimeter Challenge) into a new session,
+    /// to try `gnss` and `map` on public logs. Never writes into an existing non-empty directory.
+    ImportGnsslogger { log: PathBuf, session: PathBuf },
     /// The UTC days a session's GNSS covers, as `year day-of-year` lines (`just orbits` downloads their orbits).
     OrbitDays { session: PathBuf },
     /// Write the ride's GPS path, colored by speed or acceleration, as an HTML map (default `<session>/map.html`).
@@ -64,6 +68,7 @@ fn main() -> anyhow::Result<()> {
             stream,
         } => wav(&Session::open(session)?, &stream, &output),
         Command::Gnss { session } => gnss::gnss(&Session::open(session)?),
+        Command::ImportGnsslogger { log, session } => import::import(&log, &session),
         Command::OrbitDays { session } => gnss::orbit_days(&Session::open(session)?),
         Command::Map {
             session,
