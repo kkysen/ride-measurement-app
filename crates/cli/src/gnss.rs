@@ -30,7 +30,7 @@ struct Position {
     phone_distance: Option<f64>,
 }
 
-pub fn gnss(session: &Session) -> anyhow::Result<()> {
+pub fn gnss(session: &Session, decoded_only: bool) -> anyhow::Result<()> {
     let mut records: Vec<_> = Vec::new();
     for stream in ["gnss", "location"] {
         if session.stream_path(stream).exists() {
@@ -45,8 +45,11 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
     }
     records.sort_by_key(|r| r.received_elapsed_realtime_ns);
     let mut nav = Navigator::default();
+    nav.decoded_only = decoded_only;
     let orbits = read_session_orbits(&session.dir)?;
-    if orbits.is_empty() {
+    if decoded_only {
+        println!("ignoring downloaded orbits: only the phone's navigation messages");
+    } else if orbits.is_empty() {
         println!(
             "no downloaded orbits in {SESSION_ORBITS_DIR}/ (`just orbits`): only the phone's navigation messages"
         );
@@ -118,8 +121,8 @@ pub fn gnss(session: &Session) -> anyhow::Result<()> {
     }
     let s = &nav.stats;
     println!(
-        "navigation subframes: {} passed parity, {} failed; {} ephemerides",
-        s.subframes_ok, s.subframes_bad, s.ephemerides
+        "navigation subframes: {} passed parity, {} failed; {} ephemerides ({} decoded from them)",
+        s.subframes_ok, s.subframes_bad, s.ephemerides, s.ephemerides_decoded
     );
     println!(
         "epochs: {} of {} solved: {} with a position, {} with a velocity ({} from an earlier position)",

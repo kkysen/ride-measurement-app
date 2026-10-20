@@ -37,9 +37,10 @@ Details for each step are in `README.md` under "Your steps".
 - [ ] Here: `just pull`, then `just summary data/sessions/<session>`.
 - [ ] Here: `just map data/sessions/<session>`, then open `data/sessions/<session>/map.html` in a browser.
 - [ ] Here: `just gnss data/sessions/<session>` (best done standing still by a window for a few minutes) and send me the output.
-- [ ] The day after: `just orbits data/sessions/<session>` (downloads that day's orbits for every constellation),
-      then `just gnss data/sessions/<session>` again and send me that output too.
-      Comparing the two shows whether the phone's own navigation messages decode right.
+- [ ] Here, too: `just gnss data/sessions/<session> --decoded-only` and send me that output as well.
+      It ignores the orbits the app downloaded, so comparing it with the run above shows
+      whether the phone's own navigation messages (GPS, QZSS, Galileo, BeiDou, GLONASS) decode right.
+      If the app downloaded no orbits (no internet), first run `just orbits data/sessions/<session>` the day after.
       It's the first check of the phone solving its own velocity from raw GNSS:
       expect navigation subframes passing parity, a few orbits, most epochs solved, and a speed near 0 if you stood still.
       The main screen also shows "raw GNSS: ... epochs solved" while recording.

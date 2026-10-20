@@ -79,5 +79,5 @@ orbits session:
     done
 
 # How well raw GNSS solves for velocity (navigation messages, ephemerides, residuals, own vs phone speed).
-gnss session:
-    cargo run -q --bin ride -- gnss {{session}}
+gnss session *flags:
+    cargo run -q --bin ride -- gnss {{session}} {{flags}}

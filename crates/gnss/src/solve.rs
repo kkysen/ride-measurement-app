@@ -126,6 +126,8 @@ pub struct Stats {
     pub subframes_ok: u64,
     pub subframes_bad: u64,
     pub ephemerides: u64,
+    /// Of those, how many came from the phone's navigation messages.
+    pub ephemerides_decoded: u64,
     pub epochs: u64,
     /// Epochs with a position, a velocity, or both.
     pub epochs_solved: u64,
@@ -138,7 +140,10 @@ pub struct Stats {
 pub struct Navigator {
     assembler: EphemerisAssembler,
     galileo: inav::EphemerisAssembler,
-    ephemerides: BTreeMap<SatId, Vec<Ephemeris>>,
+    /// Each with whether it was decoded from the phone's navigation messages (or downloaded).
+    ephemerides: BTreeMap<SatId, Vec<(Ephemeris, bool)>>,
+    /// Whether to ignore downloaded ephemerides, to check the phone's navigation message decoding alone.
+    pub decoded_only: bool,
     /// Full GPS week from the latest clock, to resolve navigation messages' 10-bit weeks.
     week: Option<u32>,
     /// Subframes that arrived before any clock.
@@ -150,11 +155,23 @@ pub struct Navigator {
 impl Navigator {
     /// Adds an ephemeris from elsewhere (e.g. a downloaded broadcast ephemeris file).
     pub fn add_ephemeris(&mut self, eph: impl Into<Ephemeris>) {
-        let eph = eph.into();
+        self.add(eph.into(), false);
+    }
+
+    /// Adds one decoded from the phone's navigation messages: used only where no downloaded one is valid,
+    /// since a decoder bug in Android's bit format would otherwise compete with good orbits.
+    fn add_decoded(&mut self, eph: impl Into<Ephemeris>) {
+        self.add(eph.into(), true);
+    }
+
+    fn add(&mut self, eph: Ephemeris, decoded: bool) {
         let list = self.ephemerides.entry(eph.sat()).or_default();
-        if !list.iter().any(|e| e.same_as(&eph)) {
-            list.push(eph);
+        if !list.iter().any(|(e, d)| *d == decoded && e.same_as(&eph)) {
+            list.push((eph, decoded));
             self.stats.ephemerides += 1;
+            if decoded {
+                self.stats.ephemerides_decoded += 1;
+            }
         }
     }
 
@@ -171,7 +188,7 @@ impl Navigator {
                     Ok(word) => {
                         self.stats.subframes_ok += 1;
                         if let Some(eph) = self.galileo.add(svid, word) {
-                            self.add_ephemeris(eph);
+                            self.add_decoded(eph);
                         }
                     }
                     Err(_) => self.stats.subframes_bad += 1,
@@ -187,7 +204,7 @@ impl Navigator {
                 match self.week {
                     Some(week) => {
                         if let Some(eph) = self.assembler.add(sat, sf, week) {
-                            self.add_ephemeris(eph);
+                            self.add_decoded(eph);
                         }
                     }
                     None if self.waiting.len() < 1000 => self.waiting.push((sat, sf)),
@@ -215,7 +232,7 @@ impl Navigator {
             self.week = Some(week);
             for (sat, sf) in std::mem::take(&mut self.waiting) {
                 if let Some(eph) = self.assembler.add(sat, sf, week) {
-                    self.add_ephemeris(eph);
+                    self.add_decoded(eph);
                 }
             }
         }
@@ -332,17 +349,18 @@ impl Navigator {
         best.into_values().collect()
     }
 
-    /// The ephemeris for `id` valid at `t` (GPS seconds of `week`) with the closest `toe`.
+    /// The ephemeris for `id` valid at `t` (GPS seconds of `week`) with the closest `toe`,
+    /// preferring downloaded ones to decoded ones.
     fn ephemeris(&self, id: SatId, week: u32, t: f64) -> Option<&Ephemeris> {
         let at = f64::from(week) * SECONDS_PER_WEEK + t;
         self.ephemerides
             .get(&id)?
             .iter()
-            .filter(|e| e.healthy())
-            .map(|e| (e, (at - e.toe_gps_seconds()).abs()))
-            .filter(|&(e, d)| d <= e.valid_for())
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(e, _)| e)
+            .filter(|(e, decoded)| e.healthy() && (*decoded || !self.decoded_only))
+            .map(|(e, decoded)| (e, *decoded, (at - e.toe_gps_seconds()).abs()))
+            .filter(|&(e, _, d)| d <= e.valid_for())
+            .min_by(|a, b| a.1.cmp(&b.1).then(a.2.total_cmp(&b.2)))
+            .map(|(e, _, _)| e)
     }
 }
 
@@ -602,4 +620,35 @@ pub fn geodetic_to_ecef(lat_deg: f64, lon_deg: f64, alt_m: f64) -> [f64; 3] {
         (n + alt_m) * cl * so,
         (n * (1.0 - E2) + alt_m) * sl,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A downloaded ephemeris wins over a decoded one for the same time, unless only decoded ones are wanted.
+    #[test]
+    fn prefers_downloaded_ephemerides() {
+        let rinex = crate::rinex::read_nav(include_str!("../tests/data/brdc1820.10n"));
+        let downloaded = rinex.into_iter().find(|e| e.healthy()).unwrap();
+        let Ephemeris::Kepler(mut decoded) = downloaded.clone() else {
+            panic!("GPS ephemeris expected");
+        };
+        decoded.af0 += 1e-3;
+        let decoded = Ephemeris::from(decoded);
+        let sat = downloaded.sat();
+        let toe = downloaded.toe_gps_seconds();
+        let (week, t) = (
+            (toe / SECONDS_PER_WEEK) as u32,
+            toe.rem_euclid(SECONDS_PER_WEEK),
+        );
+
+        let mut nav = Navigator::default();
+        nav.add_decoded(decoded.clone());
+        nav.add_ephemeris(downloaded.clone());
+        assert_eq!(nav.stats.ephemerides_decoded, 1);
+        assert_eq!(nav.ephemeris(sat, week, t), Some(&downloaded));
+        nav.decoded_only = true;
+        assert_eq!(nav.ephemeris(sat, week, t), Some(&decoded));
+    }
 }

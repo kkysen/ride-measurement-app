@@ -38,7 +38,13 @@ enum Command {
     },
     /// How well raw GNSS solves for velocity: navigation messages, ephemerides, epochs, residuals,
     /// and the solved speed against the phone's own.
-    Gnss { session: PathBuf },
+    Gnss {
+        session: PathBuf,
+        /// Ignore downloaded orbits, to check the decoding of the phone's own navigation messages:
+        /// compare with a run without it.
+        #[arg(long)]
+        decoded_only: bool,
+    },
     /// Convert a GnssLogger log (Google's GPS Measurement Tools, Smartphone Decimeter Challenge) into a new session,
     /// to try `gnss` on public logs (and `map`, if the log has the phone's fixes with UTC times, which
     /// Smartphone Decimeter Challenge logs don't). Never writes into an existing non-empty directory.
@@ -69,7 +75,10 @@ fn main() -> anyhow::Result<()> {
             output,
             stream,
         } => wav(&Session::open(session)?, &stream, &output),
-        Command::Gnss { session } => gnss::gnss(&Session::open(session)?),
+        Command::Gnss {
+            session,
+            decoded_only,
+        } => gnss::gnss(&Session::open(session)?, decoded_only),
         Command::ImportGnsslogger { log, session } => import::import(&log, &session),
         Command::OrbitPlan { session } => gnss::orbit_plan(&Session::open(session)?),
         Command::Map {
