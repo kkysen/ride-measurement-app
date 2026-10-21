@@ -241,6 +241,23 @@ Next, in order:
 7. Recording: the input device in the session, and the ambient temperature sensor if the phone has one.
    Ask for "train stopped/started" taps on rides, the most precise labels.
 
+Carried over from earlier sessions, still open:
+- Combined estimator stage 1: a horizontal position layer (own GNSS position and velocity, phone fixes without an own solution,
+  IMU along-track speed and gyro heading between), smoothed backward like speed; gated on `just test-sdc` with GNSS cut out.
+  Position, velocity, and acceleration each from the best fusion available, and one failing never takes down the others.
+  The ride's average speed by position as a cross-check, over the rough path (small position changes ignored).
+- GNSS: all five constellations decode (GPS, QZSS, Galileo, BeiDou, GLONASS) but bit positions are unverified on a real S26+ log;
+  check both frequencies (L1/E1/B1 and L5/E5a) are measured and used; ionosphere (Klobuchar) and troposphere models (~12 m up bias).
+- Ground truth from the trip itself: SubwayNow / GTFS-realtime trip pages (e.g. `data/trips/7X-*`) give the train's
+  stop and pass times and trip ID; save them during or right after a ride, before they expire, to check station detection and timing.
+- Live and offline run the same Rust code; any difference or duplication is justified first.
+- Testing without the phone: `just test-sdc` (Kaggle Smartphone Decimeter Challenge; redistribution terms to check), the Android emulator,
+  and CI (set up, never run for Rust). Live map, live speed, the Rust writer, and `Health` are still untested on the phone.
+- Inverter sound references: VVVF-Simulator (`JOTAN-0655/VVVF-Simulator`) and its shared train files (`VvvfGeeks/YAML-Files`,
+  31 trains, mostly Japanese, none from NYC); NYC traction is Bombardier IGBT on the R188, Alstom ONIX or Siemens SITRAC on the R160,
+  Alstom ONIX on the R142. Measure NYC signatures ourselves from rides with GNSS, by car type.
+- Slow cell reconnection at stations: measured from `ServiceState` (no app can force a network search).
+
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
   Airliner speed/altitude are within consumer GNSS limits (~1900 km/h, 18 km).
