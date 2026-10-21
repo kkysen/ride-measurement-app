@@ -2,6 +2,7 @@ package dev.khyber.ride
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
@@ -14,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import java.io.File
@@ -43,7 +45,7 @@ private fun pastRides(): List<PastRide> =
 
 /** The recordings on the phone, newest first: when, about how long, and how big. */
 @Composable
-fun PastRidesScreen(onBack: () -> Unit) {
+fun PastRidesScreen(onBack: () -> Unit, onShowTaps: (String) -> Unit) {
     var rides by remember { mutableStateOf<List<PastRide>?>(null) }
     LaunchedEffect(Unit) { rides = withContext(Dispatchers.IO) { pastRides() } }
     Column(
@@ -64,7 +66,14 @@ fun PastRidesScreen(onBack: () -> Unit) {
             else -> list.forEach { r ->
                 val minutes = r.start?.let { (r.lastWrite - it) / 60_000.0 }
                 Column {
-                    Text(r.start?.let { SHOWN_FORMAT.format(it) } ?: r.id, style = MaterialTheme.typography.titleMedium)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            r.start?.let { SHOWN_FORMAT.format(it) } ?: r.id,
+                            Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        HapticOutlinedButton(onClick = { onShowTaps(r.id) }) { Text("Taps") }
+                    }
                     Text(
                         listOfNotNull(
                             minutes?.let { if (it < 1) "under a minute" else "about %.0f min".format(it) },

@@ -43,7 +43,7 @@ fun TapsScreen(onBack: () -> Unit) {
         LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             items(marks.asReversed(), key = { it.receivedNs }) { mark ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val label = mark.kind.name.removePrefix("KIND_").lowercase().replace('_', ' ') +
+                    val label = kindLabel(mark.kind) +
                         if (mark.text.isNotEmpty()) ": ${mark.text}" else ""
                     Text(
                         "${format.format(Date(mark.wallMs))}  $label",
