@@ -272,6 +272,11 @@ Next, in order:
    a check for detecting vertical motion, with the accelerometer's push at the start and end.
    The "Alighted" at 14:17:09 should have been "Boarded": off the D at 7 Av/53 St (14:14:06),
    then onto the E there (its doors closed 17 s later, then "7 Av/53 St (E)").
+   Against its 9 stop and 9 start taps (`python/experiments/startstop.py`): the start surge is sharp
+   (detections a median 0.1 to 0.3 s after the tap) but handling makes false ones; stops don't show in the
+   acceleration's size (braking fades; stopped-in-hand looks like moving); the replayed speed estimator registers
+   only 3 of 9 stops and 3 of 9 starts. Next: the signed acceleration along the travel axis (the stop's lurch is a
+   sign change of jerk), the chime and door sounds, and the speed estimator's zero-velocity handling underground.
 
 Carried over from earlier sessions, still open:
 - Combined estimator stage 1: a horizontal position layer (own GNSS position and velocity, phone fixes without an own solution,
