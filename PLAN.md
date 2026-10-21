@@ -247,6 +247,8 @@ Next, in order:
    The ride of 2026-10-21 has them: every "train stopped/started" tap is precise enough to tune on,
    except one "train stopped" tapped by mistake, a bit late, just before a "train started";
    drop that one (it predates the `Undo` button).
+   It also has an elevator up 34 floors at 2:29 pm: a check for detecting vertical motion
+   (pressure should fall about 4 hPa over roughly 120 m, with the accelerometer's push at the start and end).
 
 Carried over from earlier sessions, still open:
 - Combined estimator stage 1: a horizontal position layer (own GNSS position and velocity, phone fixes without an own solution,
