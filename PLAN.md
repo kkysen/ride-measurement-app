@@ -237,12 +237,14 @@ Next, in order:
 1. Stations into the fusion: stops as zero speed (chime, radio, lurch, power), station-to-station distances from the
    line's geometry, entrance station from the last fix. Wi-Fi, cell, and needed audio features go into Rust so live matches replay.
 2. Line and station identification from the stop/pass sequence; an access point database built from rides.
-3. Subway mode from "Boarded" to "Alighted", through the settle queue; the 1.4 m/s^2 bound only if it helps
+3. Subway mode, detected from the sensors, through the settle queue; the 1.4 m/s^2 bound only if it helps
    (the runaway came from 0.2 to 0.4 m/s^2 of bias).
-   Done (2026-10-21): 55 mph from "Boarded" to "Alighted", live and in replay, and "Undo" takes a mark back.
-   Still open: the runaways off the train (walking between "Alighted" and "Boarded", up to 187 mph),
-   trains faster than the subway (LIRR, Amtrak) that "Boarded" would wrongly hold to 55 mph,
-   and a restart mid-ride, whose new session doesn't know the old one's "Boarded" (live and replay alike).
+   Not from the marks: they're labels for calibrating and checking, never inputs (user, 2026-10-21;
+   a version driven by them was built and reverted). Detect the subway from the sensors instead:
+   position against the subway map, station Wi-Fi, train and station Bluetooth, cell service patterns,
+   pressure, sound (traction, chimes), vibration. The marks then score the detection.
+   The same applies to walking (runaways up to 187 mph on transfers underground)
+   and to trains faster than the subway (LIRR, Amtrak).
 4. Magnetometer in the world frame, gain learned with GNSS; inverter pitch tracking.
 5. Beacon decoding; Piper; CBTC and ATO/ATPM classification.
 6. Pressure grade term, robust to tunnel waves (grades up to 4.6% on the 7 under the East River, 5.5% on the Manhattan Bridge).
