@@ -181,6 +181,66 @@ Shows speed, along-track distance, current/next station. Results logged, but ove
 8. **Mode classification** (later): IMU vibration spectra, then audio.
 9. **Video** (later): visual odometry as a velocity factor; TrackSight-style localization only for routes repeated often.
 
+## Findings from the first subway rides (2026-10-20) and what to build from them
+Rides: `151449` (3 express, 7 under the East River), `154951` (elevated express 7), `184134` (7, R, M, F via 53 St),
+`214427` (2 express from 42 St, 1 local). Prototypes in `python/experiments/`, on CSVs from `crates/cli/examples/`.
+
+Done in the live speed (`crates/fusion`):
+- Gravity follows tilt (30 s with GNSS, subtracting the fused acceleration; 600 s without), travel axis from GNSS
+  speed changes (precision-weighted, only above 3 m/s), turned only by the phone's tilting, re-initialization from the median
+  of rejected GNSS; whole-ride average speed in the app.
+- Subway top speed (55 mph) as a projection that leaves the covariance alone (`Fusion::set_max_speed`).
+  Not yet set live, and it should end at "Alighted".
+
+Signals, what they showed, and how to use them:
+- **Wi-Fi and cell underground**: MTA Wi-Fi (BoldynWiFi, OFMTA1XWIFI, NYCTA, Passpoint) and a usable cell signal
+  appear only at stations. Every underground station showed up, including express pass-throughs (0 to 15 s windows)
+  and stops the user didn't mark; stops last 35 s and more. A delayed pass can be slow, so a stop needs a door opening,
+  not just a long window. Access points identify a station across rides (52 shared between two rides at 96 St).
+  Cell between stations exists in some tunnels: 14 St (L), Joralemon (4, 5; AT&T and Verizon), G Court Sq to Hoyt-Schermerhorn (AT&T),
+  North River and East River (Amtrak, LIRR, NJT), 63 St lower level and Atlantic Av (LIRR), Lexington north of 59 St soon,
+  and every future CBTC section; there, use Wi-Fi, not cell. Read the carrier from the recorded cells.
+- **Naming stations without labels**: the last GNSS fix before going underground gives the entrance station,
+  then the sequence of stops and passes, their timing, and the chime type pin the line, direction, and express/local
+  against the line's station list. Each named station records its access points, so later rides recognize it directly.
+  A sudden jump of several stations (e.g. backward) is a mislabeled station: reject it, report it, and correct the access point.
+- **Door chime**: a ~36 dB tone 3 s before each "doors closed" press, 441/555 Hz on the 7, 2, F, R, M;
+  645/516 Hz on the 1, so it identifies at least some car types. More precise than the button.
+- **Lurch before a stop**: braking ends with a step of 0.5 m/s^2 and more, then a flat dwell; clear at some stops,
+  messy in crowds. A rule found 5 of 13 stops with 1 false; not ported. Combine with the chime, radio, and power.
+- **Vibration (accel 1-25 Hz, audio 20-300 Hz)**: AUC 0.98 for stopped vs moving on the elevated 7, but useless underground with the phone in hand,
+  and `151449`'s audio came from a headphone mic. Recheck with the phone mic (AC turns up at stations on new trains).
+- **Magnetometer**: traction current shows as a field change roughly proportional to motoring effort
+  (median 109 uT at +0.5 m/s^2 and over, 33 uT coasting); braking looks like coasting.
+  Not yet a usable acceleration or binary powering signal in the phone frame (precision 0.4 to 0.6):
+  rotate into the world frame with the gyro, learn the gain while GNSS is available, then use it underground as
+  "not motoring, so not accelerating" and as a phase signal. Balises can't be seen (passive, MHz, read only by the train).
+- **Inverter (VVVF) sound**: fixed lines at 385, 1418, 1924 Hz are auxiliary or HVAC; a 1 kHz line at 5 to 20 km/h on the 7 may be
+  the traction inverter's fixed carrier. To do: spectrogram ridge tracking for lines whose pitch follows speed, a GNSS-free speed.
+- **Train beacons**: a BLE beacon family (manufacturer `02FD`, ID prefix `e2c56db5-dffb-48d2-b060-d0f5a710`) rides with each train
+  on the 7, R, M, F (CBTC lines) and was absent on the 1, 2, 3. Gives exact boarding/alighting and the trainset;
+  short sightings are other trains. Decode the varying bytes. Piper's BLE beacons (B Division, not the L) power countdown clocks,
+  on trains or stations; not yet identified. Phones and trackers (Apple, Find My Device `0x40` Eddystone) are riders.
+- **Crowding**: BLE device counts (300 to 600 on platforms), but the unfiltered scan pauses with the screen off, so normalize for that;
+  the user's Aranet4 (in the BLE data) gives CO2 (640 to 1180 ppm on a crowded 2), temperature, humidity, and a second barometer.
+- **Pressure**: 0.6 m noise; stair descents are clear; tunnel pressure waves are large (a "-95 m" dip under the East River),
+  so a grade term needs them rejected. Battery temperature is useless (phone heat, 1 minute steps).
+- **Operation**: detect CBTC (beacon, line, smooth spacing) and ATO vs ATPM (ATO's repeatable jerk-limited profile and stopping point;
+  ATPM's notched, hunting speed). Out of Flushing on `184134`, speed hunted 56 to 60 km/h, unlike the smooth peaks later:
+  consistent with the first stop out of a terminal being ATPM. Needs labeled rides.
+
+Next, in order:
+1. Stations into the fusion: stops as zero speed (chime, radio, lurch, power), station-to-station distances from the
+   line's geometry, entrance station from the last fix. Wi-Fi, cell, and needed audio features go into Rust so live matches replay.
+2. Line and station identification from the stop/pass sequence; an access point database built from rides.
+3. Subway mode from "Boarded" to "Alighted", through the settle queue; the 1.4 m/s^2 bound only if it helps
+   (the runaway came from 0.2 to 0.4 m/s^2 of bias).
+4. Magnetometer in the world frame, gain learned with GNSS; inverter pitch tracking.
+5. Beacon decoding; Piper; CBTC and ATO/ATPM classification.
+6. Pressure grade term, robust to tunnel waves (grades up to 4.6% on the 7 under the East River, 5.5% on the Manhattan Bridge).
+7. Recording: the input device in the session, and the ambient temperature sensor if the phone has one.
+   Ask for "train stopped/started" taps on rides, the most precise labels.
+
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
   Airliner speed/altitude are within consumer GNSS limits (~1900 km/h, 18 km).
