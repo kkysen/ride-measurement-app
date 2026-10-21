@@ -251,6 +251,13 @@ Next, in order:
 Carried over from earlier sessions, still open:
 - Combined estimator stage 1: a horizontal position layer (own GNSS position and velocity, phone fixes without an own solution,
   IMU along-track speed and gyro heading between), smoothed backward like speed; gated on `just test-sdc` with GNSS cut out.
+  Built (2026-10-21): `crates/fusion/src/position.rs`, fed by `Fusion`, in `Replay::positions`; not in the app yet.
+  On the 2026-10-20 rides it's a median 1.2 to 1.9 m from the fixes, but our own GNSS solutions are left out
+  (`USE_OWN_SOLUTIONS_FOR_POSITION`): they made it far worse, hundreds of meters off with tight covariances.
+  The gate is `just test-sdc-position`, and it fails on the speed estimator, not the position filter:
+  in 120 s outages the speed runs away (95 m/s against 15) or sticks at zero while moving, with an untruthful sigma.
+  Through the 32-minute tunnel from Jackson Heights to Herald Square, gyro heading alone wanders by kilometers:
+  that needs the track geometry (map matching).
   Position, velocity, and acceleration each from the best fusion available, and one failing never takes down the others.
   The ride's average speed by position as a cross-check, over the rough path (small position changes ignored).
 - GNSS: all five constellations decode (GPS, QZSS, Galileo, BeiDou, GLONASS) but bit positions are unverified on a real S26+ log;
