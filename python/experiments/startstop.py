@@ -151,5 +151,150 @@ def score():
     print(f"(IMU found {len(starts)} starts and {len(stops)} stops over the whole ride)")
 
 
+
+
+def horizontal_50hz():
+    """Horizontal acceleration (gravity, as its 20 s mean, removed) at 50 Hz, smoothed over 0.2 s: (t_ns, xyz)."""
+    a = ride.read_stream(SESSION, "accel_uncal")
+    rate = 50.0
+    t = np.arange(a.timestamps_ns[0], a.timestamps_ns[-1], int(1e9 / rate))
+    av = a.values[:, :3].astype(float) - a.values[:, 3:6]
+    i = np.searchsorted(t, a.timestamps_ns)
+    acc = np.stack([np.bincount(i, av[:, k], len(t) + 1)[: len(t)] for k in range(3)], 1)
+    acc /= np.maximum(np.bincount(i, None, len(t) + 1)[: len(t)], 1)[:, None]
+    k = int(20 * rate)
+    g = np.stack([np.convolve(acc[:, j], np.ones(k) / k, mode="same") for j in range(3)], 1)
+    up = g / np.linalg.norm(g, axis=1, keepdims=True)
+    lin = acc - g
+    horiz = lin - (lin * up).sum(1, keepdims=True) * up
+    k2 = int(0.2 * rate)
+    return t, np.stack([np.convolve(horiz[:, j], np.ones(k2) / k2, mode="same") for j in range(3)], 1)
+
+
+def surge_ends(t, h, rate=50.0, before_s=3.0, sustained=0.35, collapse=0.4, within_s=0.6):
+    """Moments a sustained horizontal acceleration collapses: over the `before_s` before, its mean has size
+    over `sustained` (m/s^2); within `within_s` after, its component along that mean falls by over `collapse`
+    of it. Returns (times ns, the sustained size, the drop along it). One per 3 s at most."""
+    nb, nw = int(before_s * rate), int(within_s * rate)
+    c = np.cumsum(np.vstack([np.zeros(3), h]), axis=0)
+    out = []
+    last = -np.inf
+    for i in range(nb, len(h) - nw):
+        mean = (c[i] - c[i - nb]) / nb
+        size = np.linalg.norm(mean)
+        if size < sustained:
+            continue
+        u = mean / size
+        after = (h[i : i + nw] @ u).min()
+        drop = size - after
+        if drop > collapse * size and drop > 0.3 and t[i] - last > 3e9:
+            out.append((t[i], size, drop))
+            last = t[i]
+    return out
+
+
+def lurch():
+    t, h = horizontal_50hz()
+    tp = taps()
+    ends = surge_ends(t, h)
+    et = np.array([e[0] for e in ends])
+    stops, starts = tp["TRAIN_STOPPED"], tp["TRAIN_STARTED"]
+    print(f"{len(ends)} collapses of a sustained horizontal acceleration over the ride")
+    o = offsets(et, stops, 5.0)
+    print(f"stop taps with one within 5 s: {np.sum(~np.isnan(o))} of {len(stops)}; offsets (s) {np.round(o, 2).tolist()}")
+    # Each stop tap's nearest collapse: how big, against all the others.
+    near = [min(ends, key=lambda e: abs(e[0] - s)) for s in stops]
+    print("  at the stop taps: sustained " + ", ".join(f"{e[1]:.2f}" for e in near) + " m/s^2; drop " + ", ".join(f"{e[2]:.2f}" for e in near))
+    allt = np.concatenate([stops, starts])
+    others = [e for e in ends if np.min(np.abs(allt - e[0])) > 15e9]
+    print(f"  {len(others)} away from any start/stop tap; their drops: median {np.median([e[2] for e in others]):.2f}, "
+          f"90th percentile {np.percentile([e[2] for e in others], 90):.2f} m/s^2")
+
+
+
+def world_horizontal_50hz(tau_s=60.0):
+    """Horizontal acceleration in a fixed frame at 50 Hz: orientation from the gyro, pulled toward the accelerometer's
+    gravity with a `tau_s` time constant, so tilting the phone in hand doesn't leak gravity into it. (t_ns, (n, 2))."""
+    rate = 50.0
+    a = ride.read_stream(SESSION, "accel_uncal")
+    g = ride.read_stream(SESSION, "gyro_uncal")
+    t = np.arange(max(a.timestamps_ns[0], g.timestamps_ns[0]), min(a.timestamps_ns[-1], g.timestamps_ns[-1]), int(1e9 / rate))
+
+    def binned(s):
+        v = s.values[:, :3].astype(float) - s.values[:, 3:6]
+        i = np.clip(np.searchsorted(t, s.timestamps_ns), 0, len(t))
+        out = np.stack([np.bincount(i, v[:, k], len(t) + 1)[: len(t)] for k in range(3)], 1)
+        return out / np.maximum(np.bincount(i, None, len(t) + 1)[: len(t)], 1)[:, None]
+
+    acc, gyr = binned(a), binned(g)
+    dt, alpha = 1 / rate, 1 / (rate * tau_s)
+    r = np.eye(3)
+    # Start with world z along the first second's mean acceleration.
+    z = acc[:50].mean(0)
+    z /= np.linalg.norm(z)
+    x = np.cross([0.0, 1.0, 0.0], z) if abs(z[1]) < 0.9 else np.cross([1.0, 0.0, 0.0], z)
+    x /= np.linalg.norm(x)
+    r = np.stack([x, np.cross(z, x), z])  # rows: world axes in the phone's frame
+    out = np.zeros((len(t), 3))
+    for k in range(len(t)):
+        w = gyr[k] * dt
+        angle = np.linalg.norm(w)
+        if angle > 0:
+            ax = w / angle
+            kx = np.array([[0, -ax[2], ax[1]], [ax[2], 0, -ax[0]], [-ax[1], ax[0], 0]])
+            rot = np.eye(3) + np.sin(angle) * kx + (1 - np.cos(angle)) * kx @ kx
+            # The phone turned by `rot`, so the world axes, in its frame, turn the other way.
+            r = r @ rot
+        # Pull world z toward the measured acceleration's direction, slowly.
+        m = acc[k] / max(np.linalg.norm(acc[k]), 1e-9)
+        zc = r[2] + alpha * (m - r[2])
+        zc /= np.linalg.norm(zc)
+        xc = r[0] - (r[0] @ zc) * zc
+        xc /= np.linalg.norm(xc)
+        r = np.stack([xc, np.cross(zc, xc), zc])
+        out[k] = r @ acc[k]
+    out[:, 2] -= 9.80665
+    k2 = int(0.2 * rate)
+    sm = np.stack([np.convolve(out[:, j], np.ones(k2) / k2, mode="same") for j in range(3)], 1)
+    return t, sm
+
+
+def lurch_world():
+    t, h3 = world_horizontal_50hz()
+    h = np.column_stack([h3[:, 0], h3[:, 1], np.zeros(len(h3))])
+    tp = taps()
+    stops, starts = tp["TRAIN_STOPPED"], tp["TRAIN_STARTED"]
+    allt = np.concatenate([stops, starts])
+    for sustained in [0.3, 0.4, 0.5]:
+        for collapse in [0.5, 0.7]:
+            ends = surge_ends(t, h, sustained=sustained, collapse=collapse)
+            et = np.array([e[0] for e in ends])
+            o = offsets(et, stops, 3.0)
+            ok = o[~np.isnan(o)]
+            others = [e for e in ends if np.min(np.abs(allt - e[0])) > 15e9]
+            print(f"sustained > {sustained}, collapse > {collapse:.0%}: {len(ends)} found; stop taps within 3 s {len(ok)} of {len(stops)}"
+                  + (f" (median {np.median(ok):+.2f} s, offsets {np.round(o, 1).tolist()})" if len(ok) else "")
+                  + f"; {len(others)} away from taps")
+
+
+def stop_lurches(min_braking=0.5, max_after_rms=0.3):
+    """Final stop lurches: a collapse of sustained braking (`surge_ends` in the gyro-tracked frame) that was braking
+    for `min_braking` of the 10 s before, with the phone still after (horizontal rms over 1 to 6 s after under
+    `max_after_rms`). On `20261021-135509`: 5 of 9 stops, a median 0.8 s before the tap, none elsewhere."""
+    t, h3 = world_horizontal_50hz()
+    h = np.column_stack([h3[:, 0], h3[:, 1], np.zeros(len(h3))])
+    out = []
+    for ti, _, _ in surge_ends(t, h, sustained=0.3, collapse=0.5):
+        i = np.searchsorted(t, ti)
+        u = h[i - 150 : i].mean(0)
+        u /= np.linalg.norm(u)
+        braking = ((h[max(0, i - 500) : i - 25] @ u) > 0.2).mean()
+        after = np.linalg.norm(h[i + 50 : i + 300, :2], axis=1)
+        if braking >= min_braking and np.sqrt((after**2).mean()) <= max_after_rms:
+            out.append(ti)
+    return np.array(out)
+
+
+
 if __name__ == "__main__":
-    score() if sys.argv[1:] == ["score"] else main()
+    {"score": score, "lurch": lurch, "lurch-world": lurch_world}.get(sys.argv[1] if sys.argv[1:] else "", main)()
