@@ -1,6 +1,7 @@
 """Door chimes and OMNY beeps as events, at 32 ms resolution, scored against the rider's marks
 (which only score): a chime should come in the 8 s before each "doors closed" press,
-and an OMNY beep at each turnstile (three known Google Wallet taps on 2026-10-20).
+and an OMNY beep at each turnstile (Google Wallet taps: three on 2026-10-20, one on 2026-10-21 at 110 St,
+placed by the pressure: between the stairs from the street and the stairs to the platform).
 
 Chime pitches differ by car type (441/555 Hz on the 7, 2, F, R, M; 645/516 Hz on the 1), so each ride's are found
 from the data: the 8 Hz bins whose tone is prominent before "doors closed" presses far more often than elsewhere.
@@ -21,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 NPERSEG, HOP = 2048, 512
 PROMINENT_DB = 15.0
 # The Google Wallet taps of 2026-10-20 (UTC milliseconds from their local times, EDT).
-OMNY_TAPS = {"184134": ["18:56:03", "19:16:02"], "214427": ["21:45:06.8"]}
+OMNY_TAPS = {"184134": ["18:56:03", "19:16:02"], "214427": ["21:45:06.8"], "135509": ["13:57:06 (110 St)"]}
 
 
 def load(name):
@@ -108,7 +109,14 @@ def omny(name):
     f, t, prom = prominence(sr, pcm, 2700, 3150)
     tn = frame_times_ns(t, sr, ts)
     band = (f >= 2800) & (f <= 3050)
-    tone = (prom[band] > 20).any(0)
+    # Above 20 dB, bridging gaps of up to two 32 ms frames: one frame below broke
+    # the 2026-10-21 tap at 110 St into pieces too short to count. (A lower floor instead joined background tones on.)
+    strong = (prom[band] > 20).any(0)
+    tone = strong.copy()
+    on = np.nonzero(strong)[0]
+    for a, b in zip(on[:-1], on[1:]):
+        if 1 < b - a <= 3:
+            tone[a:b] = True
     found = runs(tone, tn, 0.15, 0.5)
     # Clock times from a fix's UTC milliseconds.
     with open(ANALYSIS / name / "fixes.csv") as fh:
@@ -123,7 +131,8 @@ def omny(name):
 
 
 if __name__ == "__main__":
-    for r in RIDES:
-        chimes(r)
+    if sys.argv[1:] != ["omny"]:
+        for r in RIDES:
+            chimes(r)
     for r in RIDES:
         omny(r)
