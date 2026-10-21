@@ -253,7 +253,7 @@ Next, in order:
    off-train windows with a fix, some of which are platforms; the labels can't tell platforms from the street.
    Chimes and OMNY beeps are events, not window features (`chime_omny.py`, 32 ms): chimes precede 28 of 31
    "doors closed" presses on phone-mic rides, pitches found per car type; all 4 known OMNY taps found within 0.3 s
-   (2026-10-21's at 110 St, 13:57:06.1, between two stair descents in the pressure), with 3 to 8 other beeps per ride
+   (2026-10-21's at 110 St, 13:57:06.1, between two stair descents in the pressure; Google Wallet says 1:57 pm), with 3 to 8 other beeps per ride
    (other riders, an elevator): pair a beep with the stair pattern to tell the rider's own.
    Weak per window: pressure. Hunting came out backwards:
    walking's ~2 Hz steps swamp it; separate lateral sway from steps' vertical bounce.
