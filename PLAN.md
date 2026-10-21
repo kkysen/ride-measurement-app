@@ -250,12 +250,12 @@ Next, in order:
 6. Pressure grade term, robust to tunnel waves (grades up to 4.6% on the 7 under the East River, 5.5% on the Manhattan Bridge).
 7. Recording: the input device in the session, and the ambient temperature sensor if the phone has one.
    Ask for "train stopped/started" taps on rides, the most precise labels.
-   The ride of 2026-10-21 has them: every "train stopped/started" tap is precise enough to tune on,
-   except one "train stopped" tapped by mistake, a bit late, just before a "train started";
-   drop that one (it predates the Taps screen for deleting taps).
-   It also has an elevator up 34 floors at 2:29 (local; am or pm to check against the session's times):
-   a check for detecting vertical motion (pressure should fall about 12 to 14 hPa over roughly 100 to 120 m,
-   with the accelerometer's push at the start and end).
+   The ride of 2026-10-21 (`20261021-135509`) has them: every "train stopped/started" tap is precise enough to tune on,
+   except the "train stopped" at 1087.5 s, a mistap 0.9 s before the "train started" (it predates the Taps screen).
+   It also has an elevator up 34 floors, plain in the pressure: 1018.6 to 1005.0 hPa (about 113 m)
+   from 2066 to 2090 s (14:29:35 to 14:29:59), cruising at 0.70 hPa/s (about 5.8 m/s);
+   a check for detecting vertical motion, with the accelerometer's push at the start and end.
+   "Alighted" at 884.6 s and again at 1067.3 s with no "Boarded" between: likely a missed or mistaken tap.
 
 Carried over from earlier sessions, still open:
 - Combined estimator stage 1: a horizontal position layer (own GNSS position and velocity, phone fixes without an own solution,
