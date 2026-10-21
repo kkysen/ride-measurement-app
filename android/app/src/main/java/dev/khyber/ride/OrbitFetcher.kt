@@ -3,6 +3,7 @@ package dev.khyber.ride
 import android.util.Log
 import java.io.File
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.net.ConnectException
 import java.net.HttpURLConnection
 import java.net.NoRouteToHostException
@@ -42,6 +43,10 @@ class OrbitFetcher(private val sessionDir: File) {
                     val downloaded = Health.guard("orbit download") {
                         try {
                             download(file.url, File(file.path))
+                        } catch (e: InterruptedIOException) {
+                            // Stopping the recording interrupts a download in flight: expected, not a problem.
+                            if (!running) return
+                            throw e
                         } catch (e: IOException) {
                             // No network, as underground: normal, not a problem with recording; the next refresh retries.
                             if (e !is UnknownHostException && e !is ConnectException && e !is NoRouteToHostException) throw e
