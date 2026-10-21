@@ -14,6 +14,8 @@ pub struct Replay {
     pub smoothed: Vec<SmoothedSpeed>,
     /// Navigation messages, ephemerides, and epochs solved from raw GNSS.
     pub gnss: Stats,
+    /// Smoothed position at every sample (see [`crate::position`]).
+    pub positions: Vec<crate::position::PositionEstimate>,
 }
 
 impl Replay {
@@ -136,5 +138,6 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
     Ok(Replay {
         smoothed: fusion.smoothed(),
         gnss: fusion.navigator().stats.clone(),
+        positions: fusion.positions(),
     })
 }

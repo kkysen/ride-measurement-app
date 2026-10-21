@@ -13,6 +13,9 @@
 //!   of GNSS after it: so the fixes after a tunnel, however long, correct all of it, up to [`MAX_UNMEASURED_NS`].
 //!   The backward pass carries the first good fix after a tunnel back through it, which a forward filter can't.
 //!   It starts from the forward pass's frame (gravity, travel axis, bias), which constant speed can't teach it.
+//! - Position (see [`crate::position`]) is filtered from the same settled inputs: our own GNSS solutions,
+//!   the fixes, the gyro's turns about up, and the forward speed at each sample; its inputs are light,
+//!   so they're kept for the whole ride and smoothed when asked.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -20,6 +23,16 @@ use ride_gnss::solve::{Navigator, geodetic_to_ecef};
 use ride_session::proto::{GnssMeasurementsEvent, GnssNavigationMessage};
 
 use crate::live_speed::{Estimate, LiveSpeedEstimator};
+use crate::position::{PositionEstimate, PositionInput, smooth};
+
+/// Whether our own GNSS position and velocity solutions update the position filter.
+/// Not yet: on the first rides (2026-10-20) they made it much worse even when cross-checked,
+/// hundreds of meters off with tight covariances (once 31 km), while the phone's fixes alone left it
+/// a median 1 to 2 m from them; the decoders are still unverified on this phone. Turn on once they are.
+const USE_OWN_SOLUTIONS_FOR_POSITION: bool = false;
+
+/// A fix without an accuracy is taken to be this good (m, 68%): about a GPS fix in a city.
+const DEFAULT_FIX_ACCURACY_M: f64 = 20.0;
 
 /// Own velocity solutions this recent suppress the phone's fix speed (which comes from the same Doppler).
 const OWN_SOLUTION_HOLD_NS: i64 = 3_000_000_000;
@@ -202,6 +215,11 @@ pub struct Fusion {
     /// The distance (m) covered by the frozen values (trapezoidally), from the first one's time
     /// to the last one's, whose time and speed the window's distance continues from.
     frozen_distance: Distance,
+    /// The position filter's inputs for the whole ride, in settled order.
+    position_inputs: Vec<(i64, PositionInput)>,
+    /// The turn about up (rad) since the last sample, and the last gyro sample's time.
+    turn: f64,
+    last_gyro_ns: Option<i64>,
 }
 
 impl Default for Fusion {
@@ -243,6 +261,9 @@ impl Fusion {
             measured_ns: None,
             smoothed_measured_ns: None,
             frozen_distance: Distance::default(),
+            position_inputs: Vec::new(),
+            turn: 0.0,
+            last_gyro_ns: None,
         }
     }
 
@@ -330,7 +351,7 @@ impl Fusion {
 
     fn settle(&mut self, t_ns: i64, input: Pending) {
         self.settled_ns = Some(self.settled_ns.map_or(t_ns, |s| s.max(t_ns)));
-        let own = match &input {
+        let solution = match &input {
             Pending::Measurements(event) => self.navigator.on_measurements(event).ok(),
             Pending::Fix(f) => {
                 self.navigator.set_approximate_position(geodetic_to_ecef(
@@ -341,9 +362,11 @@ impl Fusion {
                 None
             }
             _ => None,
-        }
-        .and_then(|sol| sol.velocity)
-        .map(|v| (v.speed(), v.speed_sigma()));
+        };
+        self.position_input(t_ns, &input, solution.as_ref());
+        let own = solution
+            .and_then(|sol| sol.velocity)
+            .map(|v| (v.speed(), v.speed_sigma()));
         let Some(kept) = step(
             &mut self.estimator,
             &mut self.last_own_solution_ns,
@@ -367,8 +390,19 @@ impl Fusion {
         }
         self.buffer(t_ns, kept);
         if sample {
-            self.forward
-                .push_back((t_ns, self.estimator.estimate(t_ns)));
+            let estimate = self.estimator.estimate(t_ns);
+            if estimate.initialized {
+                if self.turn != 0.0 {
+                    self.position_inputs
+                        .push((t_ns, PositionInput::Turn(std::mem::take(&mut self.turn))));
+                }
+                self.position_inputs.push((
+                    t_ns,
+                    PositionInput::Speed(estimate.speed_mps, estimate.sigma_mps),
+                ));
+            }
+            self.position_inputs.push((t_ns, PositionInput::Sample));
+            self.forward.push_back((t_ns, estimate));
         }
         if self.window_ns.is_some() {
             let next = *self.next_smooth_ns.get_or_insert(t_ns);
@@ -379,6 +413,68 @@ impl Fusion {
                     Some(t_ns - t_ns.rem_euclid(SMOOTH_EVERY_NS) + SMOOTH_EVERY_NS);
             }
         }
+    }
+
+    /// Keeps what the position filter needs of a settled input.
+    fn position_input(
+        &mut self,
+        t_ns: i64,
+        input: &Pending,
+        solution: Option<&ride_gnss::solve::Solution>,
+    ) {
+        match input {
+            Pending::Gyro(w) => {
+                // The rate about up turns the direction of travel, whichever way the phone is held.
+                if let (Some(last), Some(up)) = (self.last_gyro_ns, self.estimator.up()) {
+                    let dt = (t_ns - last) as f64 * 1e-9;
+                    if dt > 0.0 && dt < 1.0 {
+                        self.turn += (w[0] * up[0] + w[1] * up[1] + w[2] * up[2]) * dt;
+                    }
+                }
+                self.last_gyro_ns = Some(t_ns);
+            }
+            Pending::Fix(f) => self.position_inputs.push((
+                t_ns,
+                PositionInput::Fix {
+                    lat: f.lat,
+                    lon: f.lon,
+                    accuracy_m: f.accuracy.unwrap_or(DEFAULT_FIX_ACCURACY_M),
+                },
+            )),
+            Pending::Measurements(_) => {
+                let Some(sol) = solution else { return };
+                if !USE_OWN_SOLUTIONS_FOR_POSITION {
+                    return;
+                }
+                if let Some(p) = &sol.position {
+                    self.position_inputs.push((
+                        t_ns,
+                        PositionInput::OwnPosition {
+                            ecef: p.position,
+                            covariance: p.position_covariance,
+                        },
+                    ));
+                }
+                if let Some(v) = &sol.velocity {
+                    self.position_inputs.push((
+                        t_ns,
+                        PositionInput::OwnVelocity {
+                            ecef: v.velocity,
+                            covariance: v.velocity_covariance,
+                        },
+                    ));
+                }
+            }
+            Pending::Accel(_) => {}
+        }
+    }
+
+    /// Positions at every fix and sample time so far, smoothed over the whole ride.
+    pub fn positions(&self) -> Vec<PositionEstimate> {
+        // Settled inputs are in time order, except any that arrived late.
+        let mut inputs = self.position_inputs.clone();
+        inputs.sort_by_key(|(t, _)| *t);
+        smooth(&inputs)
     }
 
     /// The estimate at `now_ns`: the settled forward pass carried on, in a copy, through the inputs still
