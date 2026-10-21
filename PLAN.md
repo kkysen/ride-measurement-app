@@ -252,7 +252,7 @@ Next, in order:
    Ask for "train stopped/started" taps on rides, the most precise labels.
    The ride of 2026-10-21 has them: every "train stopped/started" tap is precise enough to tune on,
    except one "train stopped" tapped by mistake, a bit late, just before a "train started";
-   drop that one (it predates the `Undo` button).
+   drop that one (it predates the Taps screen for deleting taps).
    It also has an elevator up 34 floors at 2:29 (local; am or pm to check against the session's times):
    a check for detecting vertical motion (pressure should fall about 12 to 14 hPa over roughly 100 to 120 m,
    with the accelerometer's push at the start and end).
