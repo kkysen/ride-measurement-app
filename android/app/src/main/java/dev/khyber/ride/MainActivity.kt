@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -110,15 +109,15 @@ class MainActivity : ComponentActivity() {
                 style = MaterialTheme.typography.bodySmall,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { add(ManualEvent.Kind.KIND_BOARDED, "boarded") }, Modifier.weight(1f)) { Text("Boarded") }
-                Button(onClick = { add(ManualEvent.Kind.KIND_ALIGHTED, "alighted") }, Modifier.weight(1f)) { Text("Alighted") }
+                HapticButton(onClick = { add(ManualEvent.Kind.KIND_BOARDED, "boarded") }, Modifier.weight(1f)) { Text("Boarded") }
+                HapticButton(onClick = { add(ManualEvent.Kind.KIND_ALIGHTED, "alighted") }, Modifier.weight(1f)) { Text("Alighted") }
             }
             Text("You got on or off a train.", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { add(ManualEvent.Kind.KIND_TRAIN_STOPPED, "train stopped") }, Modifier.weight(1f)) {
+                HapticButton(onClick = { add(ManualEvent.Kind.KIND_TRAIN_STOPPED, "train stopped") }, Modifier.weight(1f)) {
                     Text("Train stopped")
                 }
-                Button(onClick = { add(ManualEvent.Kind.KIND_TRAIN_STARTED, "train started") }, Modifier.weight(1f)) {
+                HapticButton(onClick = { add(ManualEvent.Kind.KIND_TRAIN_STARTED, "train started") }, Modifier.weight(1f)) {
                     Text("Train started")
                 }
             }
@@ -127,8 +126,8 @@ class MainActivity : ComponentActivity() {
                 style = MaterialTheme.typography.bodySmall,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { add(ManualEvent.Kind.KIND_DOORS_OPEN, "doors opening") }, Modifier.weight(1f)) { Text("Doors opening") }
-                Button(onClick = { add(ManualEvent.Kind.KIND_DOORS_CLOSED, "doors closed") }, Modifier.weight(1f)) { Text("Doors closed") }
+                HapticButton(onClick = { add(ManualEvent.Kind.KIND_DOORS_OPEN, "doors opening") }, Modifier.weight(1f)) { Text("Doors opening") }
+                HapticButton(onClick = { add(ManualEvent.Kind.KIND_DOORS_CLOSED, "doors closed") }, Modifier.weight(1f)) { Text("Doors closed") }
             }
             Text(
                 "Tap as the doors start to open, and once they've finished closing. " +
@@ -136,7 +135,7 @@ class MainActivity : ComponentActivity() {
                     "so together they bracket each stop.",
                 style = MaterialTheme.typography.bodySmall,
             )
-            Button(
+            HapticButton(
                 onClick = { add(ManualEvent.Kind.KIND_AT_STATION, "at station", note).also { note = "" } },
                 Modifier.fillMaxWidth(),
             ) { Text("At station") }
@@ -145,7 +144,7 @@ class MainActivity : ComponentActivity() {
                 style = MaterialTheme.typography.bodySmall,
             )
             OutlinedTextField(note, { note = it }, label = { Text("Station name or note (optional)") })
-            Button(onClick = { add(ManualEvent.Kind.KIND_NOTE, "note", note).also { note = "" } }) { Text("Add note") }
+            HapticButton(onClick = { add(ManualEvent.Kind.KIND_NOTE, "note", note).also { note = "" } }) { Text("Add note") }
             Text("Anything else worth knowing later, e.g. \"screen on for beacons\" or \"phone in pocket\".", style = MaterialTheme.typography.bodySmall)
             if (last.isNotEmpty()) Text(last)
         }
@@ -201,7 +200,7 @@ class MainActivity : ComponentActivity() {
         ) {
             if (!Environment.isExternalStorageManager()) {
                 Text("Recordings are kept in shared storage so an uninstall can't delete them; this needs all-files access.")
-                Button(onClick = {
+                HapticButton(onClick = {
                     startActivity(
                         Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")),
                     )
@@ -211,7 +210,7 @@ class MainActivity : ComponentActivity() {
 
             if (!getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)) {
                 Text("Battery optimization can stop recording mid-ride; exempting this app makes that much less likely.")
-                Button(onClick = {
+                HapticButton(onClick = {
                     startActivity(
                         Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")),
                     )
@@ -220,7 +219,7 @@ class MainActivity : ComponentActivity() {
 
             if (checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                 Text("If Android stops and restarts recording, it can only use location with \"Allow all the time\".")
-                Button(onClick = { backgroundLocation.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION) }) {
+                HapticButton(onClick = { backgroundLocation.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION) }) {
                     Text("Allow location all the time")
                 }
             }
@@ -253,12 +252,12 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            Button(onClick = {
+            HapticButton(onClick = {
                 if (state.recording) RecorderService.stop(this@MainActivity) else RecorderService.start(this@MainActivity)
             }) { Text(if (state.recording) "Stop" else "Start") }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onShowMap) { Text("Map") }
-                Button(onClick = onShowRides) { Text("Past rides") }
+                HapticButton(onClick = onShowMap) { Text("Map") }
+                HapticButton(onClick = onShowRides) { Text("Past rides") }
             }
 
             if (state.recording) SpeedDisplay()
@@ -266,7 +265,7 @@ class MainActivity : ComponentActivity() {
 
             Text(if (auth.configured) oneDriveStatus else "OneDrive: no client ID in this build")
             if (auth.configured) {
-                Button(onClick = {
+                HapticButton(onClick = {
                     scope.launch {
                         try {
                             val code = withContext(Dispatchers.IO) { auth.startDeviceCode() }
@@ -279,7 +278,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }) { Text(if (auth.signedIn) "Sign in again" else "Sign in to OneDrive") }
-                Button(onClick = { RecompressWorker.enqueueThenUpload(this@MainActivity) }) { Text("Upload now") }
+                HapticButton(onClick = { RecompressWorker.enqueueThenUpload(this@MainActivity) }) { Text("Upload now") }
             }
             Text("App ${BuildConfig.VERSION_NAME}, " + rustCoreStatus, style = MaterialTheme.typography.bodySmall)
         }

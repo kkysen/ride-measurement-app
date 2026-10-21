@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,7 +49,7 @@ fun PastRidesScreen(onBack: () -> Unit) {
         Modifier.padding(24.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Button(onClick = onBack) { Text("Back") }
+        HapticButton(onClick = onBack) { Text("Back") }
         Text("Past rides", style = MaterialTheme.typography.headlineMedium)
         Text(
             "Kept in RideLogger/sessions on the phone; copy them off with `just pull`. " +

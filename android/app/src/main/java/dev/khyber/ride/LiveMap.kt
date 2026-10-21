@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -66,7 +65,7 @@ fun LiveMapScreen(onBack: () -> Unit) {
     } catch (e: Throwable) {
         Log.e("RideLogger", "speed scales failed", e)
         Column(Modifier.padding(16.dp)) {
-            Button(onClick = onBack) { Text("Back") }
+            HapticButton(onClick = onBack) { Text("Back") }
             Text("Map colors failed to load (recording still works):\n${Log.getStackTraceString(e)}")
         }
         return
@@ -74,12 +73,12 @@ fun LiveMapScreen(onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onBack) { Text("Back") }
-            Button(onClick = { follow = true }, enabled = !follow) { Text("Follow") }
-            Button(onClick = { colorByAccel = !colorByAccel }) { Text(if (colorByAccel) "Color: accel" else "Color: speed") }
+            HapticButton(onClick = onBack) { Text("Back") }
+            HapticButton(onClick = { follow = true }, enabled = !follow) { Text("Follow") }
+            HapticButton(onClick = { colorByAccel = !colorByAccel }) { Text(if (colorByAccel) "Color: accel" else "Color: speed") }
             // Cycles automatic, then each scale.
             if (!colorByAccel) {
-                Button(onClick = {
+                HapticButton(onClick = {
                     val choices = listOf(null) + SpeedScale.entries
                     chosenScale = choices[(choices.indexOf(chosenScale) + 1) % choices.size]
                 }) { Text("Scale: " + if (chosenScale == null) "auto" else scale.name) }
