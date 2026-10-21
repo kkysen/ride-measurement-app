@@ -244,6 +244,9 @@ Next, in order:
 6. Pressure grade term, robust to tunnel waves (grades up to 4.6% on the 7 under the East River, 5.5% on the Manhattan Bridge).
 7. Recording: the input device in the session, and the ambient temperature sensor if the phone has one.
    Ask for "train stopped/started" taps on rides, the most precise labels.
+   The ride of 2026-10-21 has them: every "train stopped/started" tap is precise enough to tune on,
+   except one "train stopped" tapped by mistake, a bit late, just before a "train started";
+   drop that one (it predates the `Undo` button).
 
 Carried over from earlier sessions, still open:
 - Combined estimator stage 1: a horizontal position layer (own GNSS position and velocity, phone fixes without an own solution,
