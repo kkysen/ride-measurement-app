@@ -313,6 +313,11 @@ message ManualEvent {
   string text = 2;
   // For `KIND_DELETE`: the deleted mark's `Record.received_elapsed_realtime_ns`.
   int64 deletes_received_elapsed_realtime_ns = 3;
+  // For a mark recorded after the fact, as when correcting a past ride's: the moment it marks, on the recording's
+  // `elapsedRealtimeNanos` clock (the record's own time may be after a reboot, on another). 0: the record's own time.
+  int64 at_elapsed_realtime_ns = 4;
+  // For a mark recorded after the fact: when, as Unix milliseconds.
+  int64 edited_unix_ms = 5;
 }
 
 // `BatteryManager` and the sticky `ACTION_BATTERY_CHANGED` broadcast.

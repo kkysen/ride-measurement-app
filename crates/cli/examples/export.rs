@@ -29,23 +29,18 @@ fn main() -> anyhow::Result<()> {
     }
     let mut f = std::fs::File::create(out.join("events.csv"))?;
     writeln!(f, "t_ns,kind,text")?;
-    if s.stream_path("events").exists() {
-        for r in s
-            .read_records("events")?
-            .chunks
-            .iter()
-            .flat_map(|c| &c.records)
-        {
-            if let Some(Payload::ManualEvent(e)) = &r.payload {
-                writeln!(
-                    f,
-                    "{},{},\"{}\"",
-                    r.received_elapsed_realtime_ns,
-                    e.kind().as_str_name(),
-                    e.text.replace('"', "'")
-                )?;
-            }
-        }
+    // As the rider means them now: deleted ones left out, changed ones as changed.
+    for m in ride_session::marks::marks(&s)?
+        .into_iter()
+        .filter(|m| !m.deleted)
+    {
+        writeln!(
+            f,
+            "{},{},\"{}\"",
+            m.t_ns,
+            m.kind.as_str_name(),
+            m.text.replace('"', "'")
+        )?;
     }
     // Our own raw-Doppler speeds, solved in time order (like the replay, but every epoch, never dropped).
     let mut nav = ride_gnss::solve::Navigator::default();

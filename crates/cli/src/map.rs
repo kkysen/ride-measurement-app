@@ -9,8 +9,6 @@ use ride_fusion::speed_colors::{
     ACCEL_BOUNDS_MPS2, ACCEL_RAMP_ARGB, RAMP_ARGB, SpeedScale, UNKNOWN_ARGB, accel_band,
     edge_accel, edge_speed,
 };
-use ride_session::proto::manual_event;
-use ride_session::proto::record::Payload;
 use ride_session::read::Session;
 use ride_session::track::{TrackPoint, gps_segments};
 use serde_json::{Value, json};
@@ -59,26 +57,17 @@ pub fn map(
     if session.stream_path("events").exists() {
         let contents = session.read_records("events")?;
         warn_unclean("events", contents.truncated, contents.damage.len());
-        let records = || contents.chunks.iter().flat_map(|c| &c.records);
-        // Marks the rider deleted, by their recorded time; the deletions themselves aren't shown either.
-        let deleted: std::collections::HashSet<i64> = records()
-            .filter_map(|r| match &r.payload {
-                Some(Payload::ManualEvent(e)) if e.kind() == manual_event::Kind::Delete => {
-                    Some(e.deletes_received_elapsed_realtime_ns)
-                }
-                _ => None,
-            })
-            .collect();
-        for r in records() {
-            let Some(Payload::ManualEvent(e)) = &r.payload else {
-                continue;
+        // As the rider means them now: deleted ones left out, changed ones as changed.
+        for m in ride_session::marks::marks(session)?
+            .into_iter()
+            .filter(|m| !m.deleted)
+        {
+            let e = ride_session::proto::ManualEvent {
+                kind: m.kind.into(),
+                text: m.text,
+                ..Default::default()
             };
-            if e.kind() == manual_event::Kind::Delete
-                || deleted.contains(&r.received_elapsed_realtime_ns)
-            {
-                continue;
-            }
-            let t = r.received_elapsed_realtime_ns;
+            let t = m.t_ns;
             let Some(p) = segments
                 .iter()
                 .flatten()

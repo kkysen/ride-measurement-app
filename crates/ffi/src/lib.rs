@@ -395,6 +395,67 @@ pub struct StreamRecompression {
 }
 
 /// The file a session gets once post-ride recompression handled every stream; uploads wait for it.
+/// A tap in a past ride, as the rider means it now (see `ride_session::marks`).
+#[derive(uniffi::Record)]
+pub struct SessionMark {
+    /// What deleting or changing it names it by.
+    pub received_ns: i64,
+    pub unix_ms: i64,
+    /// `ManualEvent.Kind`'s number.
+    pub kind: i32,
+    pub text: String,
+    pub deleted: bool,
+    pub edited: bool,
+}
+
+/// A finished session's taps in time order, deleted ones flagged; never the recording in progress,
+/// whose `events` stream the app is still writing.
+#[uniffi::export]
+pub fn session_marks(session_dir: String) -> Result<Vec<SessionMark>, RideError> {
+    let session = ride_session::read::Session::open(&session_dir)?;
+    Ok(ride_session::marks::marks(&session)?
+        .into_iter()
+        .map(|m| SessionMark {
+            received_ns: m.received_ns,
+            unix_ms: m.unix_ms,
+            kind: m.kind.into(),
+            text: m.text,
+            deleted: m.deleted,
+            edited: m.edited,
+        })
+        .collect())
+}
+
+/// Deletes a finished session's tap, or with `kind`, changes it to that kind and `text`;
+/// either way by appending records, so nothing is lost. `now_ns` and `now_unix_ms`: the phone's clocks now.
+#[uniffi::export]
+pub fn edit_session_mark(
+    session_dir: String,
+    received_ns: i64,
+    kind: Option<i32>,
+    text: String,
+    now_ns: i64,
+    now_unix_ms: i64,
+) -> Result<(), RideError> {
+    use ride_session::proto::manual_event::Kind;
+    let session = ride_session::read::Session::open(&session_dir)?;
+    let marks = ride_session::marks::marks(&session)?;
+    let Some(mark) = marks
+        .iter()
+        .find(|m| m.received_ns == received_ns && !m.deleted)
+    else {
+        return Err(anyhow::anyhow!("no such tap in {session_dir}").into());
+    };
+    match kind {
+        None => ride_session::marks::delete_mark(&session, mark, now_ns, now_unix_ms)?,
+        Some(k) => {
+            let k = Kind::try_from(k).map_err(|_| anyhow::anyhow!("unknown tap kind {k}"))?;
+            ride_session::marks::change_mark(&session, mark, k, &text, now_ns, now_unix_ms)?
+        }
+    }
+    Ok(())
+}
+
 #[uniffi::export]
 pub fn recompressed_marker() -> String {
     ride_session::recompress::MARKER.into()

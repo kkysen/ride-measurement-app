@@ -1,6 +1,7 @@
 //! Reading and writing ride sessions, as described in `proto/ride/v1/session.proto`.
 
 mod delimited;
+pub mod marks;
 pub mod read;
 pub mod recompress;
 pub mod track;
