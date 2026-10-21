@@ -179,4 +179,5 @@ def system_rule():
         )
 
 
-main() if sys.argv[1:] != ["rule"] else system_rule()
+if __name__ == "__main__":
+    main() if sys.argv[1:] != ["rule"] else system_rule()
