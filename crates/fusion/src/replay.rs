@@ -40,6 +40,17 @@ enum Event {
 /// Every input is merged by time; live, they arrive slightly out of order, so the replay can differ a little
 /// from what the phone showed, never by design.
 pub fn replay(session: &Session) -> anyhow::Result<Replay> {
+    replay_with(session, &Options::default())
+}
+
+/// What the app is told about a ride, beyond what it records.
+#[derive(Clone, Debug, Default)]
+pub struct Options {
+    /// See [`Fusion::set_max_speed`].
+    pub max_speed_mps: Option<f64>,
+}
+
+pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Replay> {
     let mut events: Vec<(i64, Event)> = Vec::new();
     // The recorded streams the app feeds live, preferring uncalibrated (see `RecorderService.kt`).
     for (name, fallback) in [("accel_uncal", "accel"), ("gyro_uncal", "gyro")] {
@@ -105,6 +116,7 @@ pub fn replay(session: &Session) -> anyhow::Result<Replay> {
     events.sort_by_key(|(t, _)| *t);
 
     let mut fusion = Fusion::whole_ride();
+    fusion.set_max_speed(options.max_speed_mps);
     // Downloaded orbits (`just orbits`), for constellations whose navigation messages the phone missed.
     for eph in ride_gnss::orbits::read_session_orbits(&session.dir)? {
         fusion.navigator_mut().add_ephemeris(eph);

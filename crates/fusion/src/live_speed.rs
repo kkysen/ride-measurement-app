@@ -22,6 +22,8 @@ pub enum Sensor {
     GnssDoppler,
     GnssPosition,
     Stop,
+    /// The mode's top speed, applied when the estimate goes over it (see [`LiveSpeedEstimator::set_max_speed`]).
+    SpeedLimit,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -104,6 +106,9 @@ const POSITION_MAX_SIGMA_MPS: f64 = 3.0;
 /// Mach 1 at sea level: nothing this records goes faster, so a faster measurement is always wrong,
 /// even as the first one or during a re-initialization, when gating can't catch it.
 pub const MAX_SPEED_MPS: f64 = 343.0;
+/// NYC subway trains cruise at 40 to 45 mph and may reach 50, where power cuts off; they never exceed 55 mph.
+/// Other rail (LIRR, Metro-North) is faster, so this is only for subway rides.
+pub const SUBWAY_MAX_SPEED_MPS: f64 = 55.0 * 0.44704;
 /// Trains, buses, and planes in normal operation stay well under 1 g along the track,
 /// so a GNSS speed that would take more than this to reach from the previous plausible one is wrong.
 pub const MAX_ACCEL_MPS2: f64 = 9.80665;
@@ -173,6 +178,8 @@ pub struct LiveSpeedEstimator {
     rejected: BTreeMap<Sensor, u32>,
     /// Per GNSS sensor, the last plausible speed, to check the next against [`MAX_ACCEL_MPS2`].
     speed_refs: BTreeMap<Sensor, SpeedRef>,
+    /// The fastest the vehicle can go, if the mode is known to have a limit.
+    max_speed_mps: Option<f64>,
 }
 
 impl Default for LiveSpeedEstimator {
@@ -218,6 +225,7 @@ impl Default for LiveSpeedEstimator {
             last_used_ns: BTreeMap::new(),
             rejected: BTreeMap::new(),
             speed_refs: BTreeMap::new(),
+            max_speed_mps: None,
         }
     }
 }
@@ -249,8 +257,18 @@ impl LiveSpeedEstimator {
             axis_from_gnss: self.axis_from_gnss,
             b: -self.b,
             p11: self.p11,
+            max_speed_mps: self.max_speed_mps,
             ..Self::default()
         }
+    }
+
+    /// The fastest the vehicle can go (m/s), e.g. [`SUBWAY_MAX_SPEED_MPS`] on the subway, or `None` for no limit.
+    /// Underground, with no GNSS, a small error in the accelerometer bias otherwise integrates without bound;
+    /// a speed over the limit is projected back onto it, and the bias moves with it by their correlation.
+    /// The projection leaves the covariance alone: a bound says the speed is at most the limit, not that it's there,
+    /// so it mustn't make the estimate more certain (it would then outweigh the backward pass when smoothing).
+    pub fn set_max_speed(&mut self, max_speed_mps: Option<f64>) {
+        self.max_speed_mps = max_speed_mps;
     }
 
     /// Gyro sample (rad/s), bias already removed.
@@ -354,6 +372,16 @@ impl LiveSpeedEstimator {
         self.predict(along, dt);
         self.predicted_ns = t_ns;
         self.mark_used(Sensor::Imu, t_ns);
+        if let Some(max) = self.max_speed_mps
+            && self.v.abs() > max
+        {
+            let y = self.v.signum() * max - self.v;
+            if self.p00 > 0.0 {
+                self.b += self.p01 / self.p00 * y;
+            }
+            self.v += y;
+            self.mark_used(Sensor::SpeedLimit, t_ns);
+        }
         self.along_since_gnss += along * dt;
 
         let was_stopped = self.stopped;

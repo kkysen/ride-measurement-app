@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::f64::consts::PI;
 
-use ride_fusion::live_speed::{LiveSpeedEstimator, Sensor};
+use ride_fusion::live_speed::{LiveSpeedEstimator, SUBWAY_MAX_SPEED_MPS, Sensor};
 
 const G: f64 = 9.80665;
 const RATE: f64 = 400.0;
@@ -99,6 +99,22 @@ fn imu_only_departure_from_stop() {
         assert_eq!(e.sensors, BTreeSet::from([Sensor::Imu]));
         assert_close(speed, e.speed_mps, 0.1 * speed);
     }
+}
+
+#[test]
+fn speed_limit_bounds_the_speed_without_making_it_more_certain() {
+    // Stop 5 s, then 1 m/s^2 for 35 s: 35 m/s by the IMU, over the subway's limit.
+    let profile = |t: f64| if t < 5.0 { 0.0 } else { 1.0 };
+    let mut free = LiveSpeedEstimator::new();
+    let (_, end) = simulate(&mut free, 40.0, profile, 1.0, None);
+    let mut limited = LiveSpeedEstimator::new();
+    limited.set_max_speed(Some(SUBWAY_MAX_SPEED_MPS));
+    simulate(&mut limited, 40.0, profile, 1.0, None);
+    let (free, limited) = (free.estimate(ns(end)), limited.estimate(ns(end)));
+    assert!(free.speed_mps > 30.0);
+    assert_close(SUBWAY_MAX_SPEED_MPS, limited.speed_mps, 0.01);
+    assert!(limited.sensors.contains(&Sensor::SpeedLimit));
+    assert_close(free.sigma_mps, limited.sigma_mps, 1e-9);
 }
 
 #[test]

@@ -246,6 +246,11 @@ impl Fusion {
         }
     }
 
+    /// The fastest the vehicle can go, for the whole ride (see [`LiveSpeedEstimator::set_max_speed`]).
+    pub fn set_max_speed(&mut self, max_speed_mps: Option<f64>) {
+        self.estimator.set_max_speed(max_speed_mps);
+    }
+
     pub fn navigator(&self) -> &Navigator {
         &self.navigator
     }
