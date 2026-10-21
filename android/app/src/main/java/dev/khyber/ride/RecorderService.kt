@@ -134,9 +134,8 @@ class RecorderService : Service() {
                 gnssRecorder = GnssRecorder(getSystemService(LocationManager::class.java), gnss, locations)
             }
         }
-        val gnssRef = gnssRecorder
         if (radio != null) {
-            radioRecorder = Health.guard("radio") { RadioRecorder(this, radio) { gnssRef?.lastGpsFixElapsedNs ?: 0L } }
+            radioRecorder = Health.guard("radio") { RadioRecorder(this, radio) }
             bleRecorder = Health.guard("ble") { BleRecorder(this, radio) }
         }
         _marks.value = emptyList()

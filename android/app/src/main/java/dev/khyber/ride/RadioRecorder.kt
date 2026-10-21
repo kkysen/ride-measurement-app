@@ -35,15 +35,13 @@ import java.util.concurrent.Executor
  * Cell info (polled; passive, the modem doesn't search), service state, signal strength, WiFi scans, and battery,
  * all into the `radio` stream.
  *
- * WiFi scans are requested only while GNSS is lost, since Android allows 4 scans per 2 minutes;
- * results from scans anyone else triggers are always recorded, for free.
+ * Cell info is requested every second, and WiFi scans every 4 s (as often as Android's throttle allows, which
+ * Developer options can turn off); results from scans anyone else triggers are always recorded, for free.
  * None of this is ever used as a position directly, only as fingerprints.
  */
 class RadioRecorder(
     private val context: Context,
     private val radio: RecordStreamRecorder,
-    /** `elapsedRealtimeNanos` of the last GPS fix. */
-    private val lastGpsFixElapsedNs: () -> Long,
 ) {
     private val telephony = context.getSystemService(TelephonyManager::class.java)
     private val wifi = context.getSystemService(WifiManager::class.java)
@@ -116,10 +114,17 @@ class RadioRecorder(
         }
     }
 
+    // Cells every second: their signal peaks at each station, and passing one on an express takes about 10 s.
+    private val cellPoll = object : Runnable {
+        override fun run() {
+            Health.guard("cell info") { requestCellInfo() }
+            handler.postDelayed(this, CELL_POLL_MS)
+        }
+    }
+
     private val poll = object : Runnable {
         // Each separately, so one failing doesn't stop the others or the polling itself.
         override fun run() {
-            Health.guard("cell info") { requestCellInfo() }
             Health.guard("wifi scan") { maybeScanWifi() }
             Health.guard("battery") { recordBattery(null) }
             Health.guard("thermal") { recordThermal() }
@@ -145,10 +150,12 @@ class RadioRecorder(
         }
         Health.guard("thermal") { power.addThermalStatusListener(Executor { handler.post(it) }, thermalListener) }
         handler.post(poll)
+        handler.post(cellPoll)
     }
 
     fun stop() {
         handler.removeCallbacks(poll)
+        handler.removeCallbacks(cellPoll)
         if (telephonyRegistered) Health.guard("stop telephony") { telephony.unregisterTelephonyCallback(telephonyCallback) }
         Health.guard("stop wifi scan results") { context.unregisterReceiver(wifiReceiver) }
         Health.guard("stop battery") { context.unregisterReceiver(batteryReceiver) }
@@ -173,9 +180,11 @@ class RadioRecorder(
 
     @Suppress("DEPRECATION") // `startScan` is deprecated but still the only way to request a scan.
     private fun maybeScanWifi() {
+        // Always, not only without GNSS: the street's networks are what the subway's are told apart from.
+        // Android refuses requests past its throttle (4 per 2 minutes unless Developer options turn it off),
+        // and `requested` records which scans were this app's.
         val now = SystemClock.elapsedRealtimeNanos()
-        val gnssLost = now - lastGpsFixElapsedNs() > GNSS_LOST_NS
-        if (!gnssLost || now - lastScanRequestNs < SCAN_INTERVAL_NS) return
+        if (now - lastScanRequestNs < SCAN_INTERVAL_NS) return
         lastScanRequestNs = now
         scanRequested = wifi.startScan()
     }
@@ -198,8 +207,8 @@ class RadioRecorder(
 
     companion object {
         private const val POLL_MS = 5_000L
-        private const val GNSS_LOST_NS = 10_000_000_000L
-        private const val SCAN_INTERVAL_NS = 30_000_000_000L
+        private const val CELL_POLL_MS = 1_000L
+        private const val SCAN_INTERVAL_NS = 4_000_000_000L
     }
 }
 

@@ -35,11 +35,6 @@ class GnssRecorder(
     private val gnss: RecordStreamRecorder,
     private val locations: RecordStreamRecorder,
 ) {
-    /** `elapsedRealtimeNanos` of the last GPS fix, to tell when GNSS is lost (e.g. underground). */
-    @Volatile
-    var lastGpsFixElapsedNs = 0L
-        private set
-
     private val measurementsCallback = object : GnssMeasurementsEvent.Callback() {
         override fun onGnssMeasurementsReceived(event: GnssMeasurementsEvent) {
             val receivedNs = SystemClock.elapsedRealtimeNanos()
@@ -67,7 +62,6 @@ class GnssRecorder(
 
     // Building records is guarded in `add`; `LiveSpeed` and `LiveTrack` guard themselves.
     private val gpsListener = LocationListener { location ->
-        lastGpsFixElapsedNs = SystemClock.elapsedRealtimeNanos()
         locations.add { this.location = location.toProto() }
         LiveSpeed.onGpsLocation(location)
         LiveTrack.onGpsLocation(location)
