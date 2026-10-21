@@ -262,6 +262,13 @@ impl LiveSpeedEstimator {
         }
     }
 
+    /// Up in the phone's frame (a unit vector, opposite to gravity), once the accelerometer has given one:
+    /// the gyro's rate about it is the turn rate of the direction of travel.
+    pub fn up(&self) -> Option<[f64; 3]> {
+        let g = norm(&self.gravity);
+        (self.gravity_init && g > 0.0).then(|| self.gravity.map(|x| x / g))
+    }
+
     /// The fastest the vehicle can go (m/s), e.g. [`SUBWAY_MAX_SPEED_MPS`] on the subway, or `None` for no limit.
     /// Underground, with no GNSS, a small error in the accelerometer bias otherwise integrates without bound;
     /// a speed over the limit is projected back onto it, and the bias moves with it by their correlation.
