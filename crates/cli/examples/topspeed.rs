@@ -15,5 +15,23 @@ fn main() -> anyhow::Result<()> {
         top / 0.44704,
         fwd / 0.44704
     );
+    // Stretches where the forward pass (the live display) is over 55 mph.
+    let t0 = r.smoothed[0].elapsed_realtime_ns;
+    let mut start: Option<(f64, f64)> = None;
+    for s in &r.smoothed {
+        let t = (s.elapsed_realtime_ns - t0) as f64 * 1e-9;
+        match (s.forward_mps > 55.0 * 0.44704 + 0.5, start) {
+            (true, None) => start = Some((t, s.forward_mps)),
+            (true, Some((a, m))) => start = Some((a, m.max(s.forward_mps))),
+            (false, Some((a, m))) => {
+                println!(
+                    "  forward over 55 mph {a:.0} to {t:.0} s, top {:.0} mph",
+                    m / 0.44704
+                );
+                start = None;
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }
