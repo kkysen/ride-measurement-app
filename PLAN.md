@@ -251,12 +251,12 @@ Next, in order:
 7. Recording: the input device in the session, and the ambient temperature sensor if the phone has one.
    Ask for "train stopped/started" taps on rides, the most precise labels.
    The ride of 2026-10-21 (`20261021-135509`) has them: every "train stopped/started" tap is precise enough to tune on,
-   except the "train stopped" at 1087.5 s, a mistap 0.9 s before the "train started" (it predates the Taps screen).
+   except the "train stopped" at 14:17:29, a mistap 0.9 s before the "train started" (it predates the Taps screen).
    It also has an elevator up 34 floors, plain in the pressure: 1018.6 to 1005.0 hPa (about 113 m)
-   from 2066 to 2090 s (14:29:35 to 14:29:59), cruising at 0.70 hPa/s (about 5.8 m/s);
+   from 14:29:35 to 14:29:59, cruising at 0.70 hPa/s (about 5.8 m/s);
    a check for detecting vertical motion, with the accelerometer's push at the start and end.
-   The "Alighted" at 1067.3 s should have been "Boarded": off the D at 7 Av/53 St (884.6 s),
-   then onto the E there (its doors closed at 1083.9 s, "7 Av/53 St (E)" at 1085.9 s).
+   The "Alighted" at 14:17:09 should have been "Boarded": off the D at 7 Av/53 St (14:14:06),
+   then onto the E there (its doors closed 17 s later, then "7 Av/53 St (E)").
 
 Carried over from earlier sessions, still open:
 - Combined estimator stage 1: a horizontal position layer (own GNSS position and velocity, phone fixes without an own solution,
