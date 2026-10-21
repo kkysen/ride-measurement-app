@@ -140,7 +140,7 @@ private fun describe(p: LiveTrack.Point?, latest: Boolean): String {
         "${p.accelMps2?.let { "%+.2f".format(Units.accel(it)) } ?: "unknown"} ${Units.accelUnit}" +
         "\nsmoothed ${f(p.smoothedSpeedMps?.let(Units::speed), 1)} · live ${f(p.fusedSpeedMps?.let(Units::speed), 1)} · " +
         "GPS ${f(p.gpsSpeedMps?.let(Units::speed), 1)} ± ${f(p.gpsSpeedAccuracyMps?.let(Units::speed), 1)} ${Units.speedUnit}" +
-        " · position ± ${f(p.accuracyM?.let(Units::distance), 0)} ${Units.distanceUnit}"
+        " · position ± ${p.accuracyM?.let(Units::distance) ?: "unknown"}"
 }
 
 @SuppressLint("ClickableViewAccessibility")

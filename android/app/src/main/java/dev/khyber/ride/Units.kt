@@ -22,23 +22,25 @@ import androidx.compose.ui.unit.dp
 object Units {
     private const val PREFS = "units"
     private const val MPH = "mph"
-    private const val FEET_PER_S2 = "ft_per_s2"
-    private const val FEET = "feet"
+    // Stored under their earlier names (ft/s², feet), so the choice carries over.
+    private const val MPH_PER_S = "ft_per_s2"
+    private const val IMPERIAL_DISTANCE = "feet"
     private const val MPS_PER_MPH = 0.44704
     private const val M_PER_FT = 0.3048
+    private const val M_PER_MI = 1609.344
 
     var mph by mutableStateOf(false)
         private set
-    var feetPerS2 by mutableStateOf(false)
+    var mphPerS by mutableStateOf(false)
         private set
-    var feet by mutableStateOf(false)
+    var imperialDistance by mutableStateOf(false)
         private set
 
     fun load(context: Context) {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         mph = p.getBoolean(MPH, false)
-        feetPerS2 = p.getBoolean(FEET_PER_S2, false)
-        feet = p.getBoolean(FEET, false)
+        mphPerS = p.getBoolean(MPH_PER_S, false)
+        imperialDistance = p.getBoolean(IMPERIAL_DISTANCE, false)
     }
 
     private fun save(context: Context, key: String, value: Boolean) {
@@ -46,8 +48,7 @@ object Units {
     }
 
     val speedUnit get() = if (mph) "mph" else "km/h"
-    val accelUnit get() = if (feetPerS2) "ft/s²" else "m/s²"
-    val distanceUnit get() = if (feet) "ft" else "m"
+    val accelUnit get() = if (mphPerS) "mph/s" else "m/s²"
 
     /** A speed (m/s) in the chosen unit. */
     fun speed(mps: Double) = if (mph) mps / MPS_PER_MPH else mps * 3.6
@@ -55,9 +56,15 @@ object Units {
     /** A band boundary (km/h, as the color scales define them) in the chosen unit. */
     fun speedFromKmh(kmh: Double) = speed(kmh / 3.6)
 
-    fun accel(mps2: Double) = if (feetPerS2) mps2 / M_PER_FT else mps2
+    fun accel(mps2: Double) = if (mphPerS) mps2 / MPS_PER_MPH else mps2
 
-    fun distance(m: Double) = if (feet) m / M_PER_FT else m
+    /** A distance (m) with its unit, in whichever fits its size: m or km, or ft or mi. */
+    fun distance(m: Double): String = when {
+        imperialDistance && m < 1000 * M_PER_FT -> "%.0f ft".format(m / M_PER_FT)
+        imperialDistance -> "%.1f mi".format(m / M_PER_MI)
+        m < 1000 -> "%.0f m".format(m)
+        else -> "%.1f km".format(m / 1000)
+    }
 
     /** Toggles for each, for the main screen. */
     @Composable
@@ -65,8 +72,8 @@ object Units {
         val context = LocalContext.current
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Toggle("Speed in mph", mph) { mph = it; save(context, MPH, it) }
-            Toggle("Acceleration in ft/s²", feetPerS2) { feetPerS2 = it; save(context, FEET_PER_S2, it) }
-            Toggle("Distances in feet", feet) { feet = it; save(context, FEET, it) }
+            Toggle("Acceleration in mph/s", mphPerS) { mphPerS = it; save(context, MPH_PER_S, it) }
+            Toggle("Distances in feet and miles", imperialDistance) { imperialDistance = it; save(context, IMPERIAL_DISTANCE, it) }
         }
     }
 
