@@ -27,11 +27,15 @@ test-cross: test-android python-env
 test-sdc: fetch-sdc
     RIDE_SDC_DRIVE={{sdc}} cargo test -p ride-gnss --test sdc -- --nocapture
 
+# The position filter on the same drive with GNSS cut out, from its IMU (see `crates/fusion/tests/sdc_position.rs`).
+test-sdc-position: fetch-sdc
+    RIDE_SDC_DRIVE={{sdc}} cargo test --release -p ride-fusion --test sdc_position -- --nocapture
+
 # Download the drive into `data/sdc/` (not committed: Kaggle's rules).
 # Needs a Kaggle API token in `~/.kaggle/access_token` and the competition's rules accepted on its Data tab.
 fetch-sdc:
     mkdir -p {{sdc}}
-    cd {{sdc}} && for f in supplemental/gnss_log.txt ground_truth.csv; do \
+    cd {{sdc}} && for f in supplemental/gnss_log.txt ground_truth.csv device_imu.csv; do \
         [ -e "$(basename $f)" ] || uvx --from kaggle kaggle competitions download -q \
             -c smartphone-decimeter-2023 -f sdc2023/train/{{sdc_drive}}/$f -p .; \
     done
