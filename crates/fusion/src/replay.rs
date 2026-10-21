@@ -36,6 +36,7 @@ enum Event {
     Fix(Fix),
     Measurements(ride_session::proto::GnssMeasurementsEvent),
     Navigation(ride_session::proto::GnssNavigationMessage),
+    WifiScan(Vec<String>),
 }
 
 /// Uses the uncalibrated accelerometer and gyro if recorded, else the calibrated ones, like the app.
@@ -75,7 +76,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
             }
         }
     }
-    for stream in ["location", "gnss"] {
+    for stream in ["location", "gnss", "radio"] {
         if !session.stream_path(stream).exists() {
             continue;
         }
@@ -110,6 +111,11 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                 Some(Payload::GnssNavigationMessage(m)) => {
                     events.push((received, Event::Navigation(m)))
                 }
+                // At the time the app recorded it, which is also when it fed it live.
+                Some(Payload::WifiScan(w)) => events.push((
+                    received,
+                    Event::WifiScan(w.results.into_iter().map(|r| r.ssid).collect()),
+                )),
                 _ => {}
             }
         }
@@ -132,6 +138,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                 fusion.on_gnss_measurements(t, &m);
             }
             Event::Navigation(m) => fusion.on_navigation_message(&m),
+            Event::WifiScan(ssids) => fusion.on_wifi_scan(t, ssids),
         }
     }
     fusion.finish();

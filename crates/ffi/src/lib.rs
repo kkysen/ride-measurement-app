@@ -151,6 +151,11 @@ impl Fusion {
         Ok(())
     }
 
+    /// A Wi-Fi scan's SSIDs, at the time it was recorded, for telling when the phone is in the subway.
+    pub fn on_wifi_scan(&self, t_ns: i64, ssids: Vec<String>) {
+        self.lock().on_wifi_scan(t_ns, ssids);
+    }
+
     /// A downloaded orbit file (from [`orbit_fetch_plan`]); returns how many ephemerides it held.
     pub fn add_orbit_file(&self, path: String) -> Result<u32, RideError> {
         let ephemerides = ride_gnss::orbits::read_orbit_file(std::path::Path::new(&path))

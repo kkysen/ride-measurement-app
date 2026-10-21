@@ -124,6 +124,12 @@ object LiveSpeed {
         h.post { safely { fusion?.onNavigationMessage(encoded) } }
     }
 
+    /** A Wi-Fi scan's SSIDs, at its recorded time: Rust tells from them when the phone is in the subway. */
+    fun onWifiScan(tNs: Long, ssids: List<String>) {
+        val h = handler ?: return
+        h.post { safely { fusion?.onWifiScan(tNs, ssids) } }
+    }
+
     /** A downloaded orbit file ([OrbitFetcher]); a bad one is reported and live speed carries on without it. */
     fun addOrbitFile(path: String) {
         val h = handler ?: return

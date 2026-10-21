@@ -13,6 +13,9 @@
 //!   of GNSS after it: so the fixes after a tunnel, however long, correct all of it, up to [`MAX_UNMEASURED_NS`].
 //!   The backward pass carries the first good fix after a tunnel back through it, which a forward filter can't.
 //!   It starts from the forward pass's frame (gravity, travel axis, bias), which constant speed can't teach it.
+//! - Whether the phone is in the subway ([`SubwayDetector`], from Wi-Fi and GNSS, never the rider's marks)
+//!   switches the speed's upper bound to the subway's top speed while it is. Its inputs settle like any other,
+//!   so live and offline switch at the same point.
 //! - Position (see [`crate::position`]) is filtered from the same settled inputs: our own GNSS solutions,
 //!   the fixes, the gyro's turns about up, and the forward speed at each sample; its inputs are light,
 //!   so they're kept for the whole ride and smoothed when asked.
@@ -22,8 +25,9 @@ use std::collections::{BTreeMap, VecDeque};
 use ride_gnss::solve::{Navigator, geodetic_to_ecef};
 use ride_session::proto::{GnssMeasurementsEvent, GnssNavigationMessage};
 
-use crate::live_speed::{Estimate, LiveSpeedEstimator};
+use crate::live_speed::{Estimate, LiveSpeedEstimator, SUBWAY_MAX_SPEED_MPS};
 use crate::position::{PositionEstimate, PositionInput, smooth};
+use crate::subway::SubwayDetector;
 
 /// Whether our own GNSS position and velocity solutions update the position filter.
 /// Not yet: on the first rides (2026-10-20) they made it much worse even when cross-checked,
@@ -47,6 +51,9 @@ enum Input {
     Fix(Box<Fix>),
     /// Our own velocity solution's speed and standard deviation.
     Speed(f64, f64),
+    /// Entering or leaving the subway changed the speed's upper bound from this,
+    /// which the backward pass goes back to.
+    MaxSpeedBefore(Option<f64>),
 }
 
 /// Inputs settle into the forward pass, in time order, once input this much newer has arrived: Android delivers
@@ -62,6 +69,8 @@ enum Pending {
     Gyro([f64; 3]),
     Fix(Fix),
     Measurements(Box<GnssMeasurementsEvent>),
+    /// A Wi-Fi scan's SSIDs.
+    WifiScan(Vec<String>),
 }
 
 impl Pending {
@@ -72,13 +81,59 @@ impl Pending {
             Self::Gyro(_) => 1,
             Self::Fix(_) => 2,
             Self::Measurements(_) => 3,
+            Self::WifiScan(_) => 4,
         }
     }
 }
 
-/// Feeds one settled (or provisional) input to the estimator; returns what smoothing keeps of it.
+/// What sets the speed's upper bound: the vehicle's top speed if known, else the subway's while in it.
+#[derive(Clone, Debug, Default)]
+struct Context {
+    subway: SubwayDetector,
+    in_subway: bool,
+    /// See [`Fusion::set_max_speed`].
+    base_max_speed_mps: Option<f64>,
+}
+
+impl Context {
+    fn max_speed_mps(&self) -> Option<f64> {
+        self.base_max_speed_mps
+            .or(self.in_subway.then_some(SUBWAY_MAX_SPEED_MPS))
+    }
+}
+
+/// Feeds one settled (or provisional) input to the estimator; returns what smoothing keeps of it,
+/// and the bound before it if it changed the speed's upper bound.
 /// `own` is the speed and standard deviation of the velocity solved from `Measurements`, if any.
 fn step(
+    estimator: &mut LiveSpeedEstimator,
+    last_own_solution_ns: &mut Option<i64>,
+    context: &mut Context,
+    t_ns: i64,
+    input: &Pending,
+    own: Option<(f64, f64)>,
+) -> (Option<Input>, Option<Option<f64>>) {
+    match input {
+        Pending::WifiScan(ssids) => context
+            .subway
+            .on_wifi_scan(t_ns, ssids.iter().map(String::as_str)),
+        Pending::Fix(fix) => context.subway.on_fix(t_ns, fix.accuracy),
+        _ => {}
+    }
+    let in_subway = context.subway.in_subway(t_ns);
+    let bound_before = (in_subway != context.in_subway).then(|| {
+        let before = context.max_speed_mps();
+        context.in_subway = in_subway;
+        estimator.set_max_speed(context.max_speed_mps());
+        before
+    });
+    (
+        step_estimator(estimator, last_own_solution_ns, t_ns, input, own),
+        bound_before,
+    )
+}
+
+fn step_estimator(
     estimator: &mut LiveSpeedEstimator,
     last_own_solution_ns: &mut Option<i64>,
     t_ns: i64,
@@ -86,6 +141,7 @@ fn step(
     own: Option<(f64, f64)>,
 ) -> Option<Input> {
     match input {
+        Pending::WifiScan(_) => None,
         Pending::Accel(a) => {
             estimator.on_accel(t_ns, a[0], a[1], a[2]);
             Some(Input::Accel(*a))
@@ -190,6 +246,7 @@ pub struct Fusion {
     estimator: LiveSpeedEstimator,
     navigator: Navigator,
     last_own_solution_ns: Option<i64>,
+    context: Context,
     /// Inputs not yet settled, by time, rank, and arrival.
     pending: BTreeMap<(i64, u8, u64), Pending>,
     arrivals: u64,
@@ -246,6 +303,7 @@ impl Fusion {
             estimator: LiveSpeedEstimator::new(),
             navigator: Navigator::default(),
             last_own_solution_ns: None,
+            context: Context::default(),
             pending: BTreeMap::new(),
             arrivals: 0,
             latest_ns: None,
@@ -267,9 +325,21 @@ impl Fusion {
         }
     }
 
-    /// The fastest the vehicle can go, for the whole ride (see [`LiveSpeedEstimator::set_max_speed`]).
+    /// The fastest the vehicle can go, for the whole ride (see [`LiveSpeedEstimator::set_max_speed`]);
+    /// without one, the subway's top speed applies while in the subway.
     pub fn set_max_speed(&mut self, max_speed_mps: Option<f64>) {
-        self.estimator.set_max_speed(max_speed_mps);
+        self.context.base_max_speed_mps = max_speed_mps;
+        self.estimator.set_max_speed(self.context.max_speed_mps());
+    }
+
+    /// Whether the phone is in the subway as of the settled inputs.
+    pub fn in_subway(&self) -> bool {
+        self.context.in_subway
+    }
+
+    /// A Wi-Fi scan's SSIDs, at the time it was recorded.
+    pub fn on_wifi_scan(&mut self, t_ns: i64, ssids: Vec<String>) {
+        self.arrive(t_ns, Pending::WifiScan(ssids));
     }
 
     pub fn navigator(&self) -> &Navigator {
@@ -367,13 +437,18 @@ impl Fusion {
         let own = solution
             .and_then(|sol| sol.velocity)
             .map(|v| (v.speed(), v.speed_sigma()));
-        let Some(kept) = step(
+        let (kept, bound_before) = step(
             &mut self.estimator,
             &mut self.last_own_solution_ns,
+            &mut self.context,
             t_ns,
             &input,
             own,
-        ) else {
+        );
+        if let Some(before) = bound_before {
+            self.buffer(t_ns, Input::MaxSpeedBefore(before));
+        }
+        let Some(kept) = kept else {
             return;
         };
         let sample = match kept {
@@ -465,7 +540,7 @@ impl Fusion {
                     ));
                 }
             }
-            Pending::Accel(_) => {}
+            Pending::Accel(_) | Pending::WifiScan(_) => {}
         }
     }
 
@@ -485,6 +560,7 @@ impl Fusion {
         }
         let mut estimator = self.estimator.clone();
         let mut last_own = self.last_own_solution_ns;
+        let mut context = self.context.clone();
         for (&(t, _, _), input) in &self.pending {
             let own = match input {
                 Pending::Measurements(event) => self
@@ -495,7 +571,7 @@ impl Fusion {
                     .map(|v| (v.speed(), v.speed_sigma())),
                 _ => None,
             };
-            step(&mut estimator, &mut last_own, t, input, own);
+            step(&mut estimator, &mut last_own, &mut context, t, input, own);
         }
         estimator.estimate(now_ns)
     }
@@ -601,6 +677,8 @@ impl Fusion {
                 Input::Accel(a) => backward.on_accel(tr, a[0], a[1], a[2]),
                 Input::Gyro(w) => backward.on_gyro(-w[0], -w[1], -w[2]),
                 Input::Speed(speed, sigma) => backward.on_gnss_speed(tr, speed, sigma),
+                // Going back past a switch, the bound is the one before it.
+                Input::MaxSpeedBefore(before) => backward.set_max_speed(before),
                 Input::Fix(ref f) => {
                     backward.on_gnss_fix(tr, f.lat, f.lon, f.accuracy, f.speed, f.speed_sigma)
                 }

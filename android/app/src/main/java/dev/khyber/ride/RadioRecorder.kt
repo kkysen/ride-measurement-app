@@ -89,7 +89,12 @@ class RadioRecorder(
             val requested = scanRequested
             scanRequested = false
             val results = Health.guard("wifi scan results") { wifi.scanResults } ?: return
-            radio.add { wifiScan = WifiScan.newBuilder().setRequested(requested).addAllResults(results.map { it.toProto() }).build() }
+            val scan = Health.guard("wifi scan proto") {
+                WifiScan.newBuilder().setRequested(requested).addAllResults(results.map { it.toProto() }).build()
+            } ?: return
+            val t = radio.add { wifiScan = scan } ?: return
+            // The SSIDs exactly as recorded, so live sees what replay does.
+            LiveSpeed.onWifiScan(t, scan.resultsList.map { it.ssid })
         }
     }
 
