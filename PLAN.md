@@ -279,8 +279,14 @@ Next, in order:
    In the gyro-tracked frame (not a gravity average, which tilting in hand leaks into), the final lurch is clear:
    a collapse of sustained braking 0.5 to 0.9 s before all 9 stop taps (the rider's reaction, median 0.78 s);
    braking for half the 10 s before plus a still phone after keeps 5 of 9 with no false ones on the ride.
-   Next: the door sounds (chime; HVAC louder while doors are open) for the rest, the magnetometer in the world frame
-   for starts, and the speed estimator's zero-velocity handling underground.
+   The rider often moves to exit right after a stop, so confirm stops with the train, not the phone being still.
+   Doors in the sound (`doors.py`): above 200 Hz, +4 to 7 dB as they open, -2 to 4 dB as they close (chime 2 s before);
+   a door cycle (step up, step down 8 to 90 s later with a chime) finds 25 of 39 openings and 26 of 31 closings
+   at 22 an hour elsewhere. Next: combine lurch, door cycle, and start surge into one stop sequence; the magnetometer
+   in the world frame for starts; then port to Rust and the speed estimator's zero-velocity handling underground.
+   Express passes: each station's Wi-Fi is seen in one scan per pass (every ~5 s), cell signal peaks at stations
+   (sampled every 5 s): speed between stations from pass times and distances, not within one. Poll cell every 1 s,
+   look for fixed station BLE beacons, and check `is_80211mc_responder` (now recorded) for Wi-Fi ranging.
 
 Carried over from earlier sessions, still open:
 - Combined estimator stage 1: a horizontal position layer (own GNSS position and velocity, phone fixes without an own solution,
