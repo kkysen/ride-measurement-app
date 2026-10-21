@@ -217,6 +217,10 @@ Signals, what they showed, and how to use them:
   "not motoring, so not accelerating" and as a phase signal. Balises can't be seen (passive, MHz, read only by the train).
 - **Inverter (VVVF) sound**: fixed lines at 385, 1418, 1924 Hz are auxiliary or HVAC; a 1 kHz line at 5 to 20 km/h on the 7 may be
   the traction inverter's fixed carrier. To do: spectrogram ridge tracking for lines whose pitch follows speed, a GNSS-free speed.
+- **OMNY taps**: the reader's beep is a pure tone near 2.85 to 3.0 kHz, about 0.25 s, at a stair transition (pressure).
+  All three Google Wallet taps on 2026-10-20 match: Flushing 18:56:03 (2852 Hz, `184134`), Grand Av 19:16:02 (2945 Hz, `184134`),
+  Times Sq 21:45:06.8 (2984 Hz, `214427`; fainter same-pitch beeps after it are other riders).
+  A station-entry signal for the fusion, with the station's Wi-Fi APs; to do: a detector, checked on more taps.
 - **Train beacons**: a BLE beacon family (manufacturer `02FD`, ID prefix `e2c56db5-dffb-48d2-b060-d0f5a710`) rides with each train
   on the 7, R, M, F (CBTC lines) and was absent on the 1, 2, 3. Gives exact boarding/alighting and the trainset;
   short sightings are other trains. Decode the varying bytes. Piper's BLE beacons (B Division, not the L) power countdown clocks,
