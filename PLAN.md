@@ -243,6 +243,9 @@ Next, in order:
    a version driven by them was built and reverted). Detect the subway from the sensors instead:
    position against the subway map, station Wi-Fi, train and station Bluetooth, cell service patterns,
    pressure, sound (traction, chimes), vibration. The marks then score the detection.
+   Built (2026-10-21): `SubwayDetector`, from the subway's Wi-Fi or no fix among few networks;
+   the speed is held to 55 mph while in it, live and in replay, and every ride's smoothed top speed is now 55 mph.
+   It misses elevated lines (GNSS keeps the speed in check there); adding position on the subway map would catch them.
    The same applies to walking (runaways up to 187 mph on transfers underground)
    and to trains faster than the subway (LIRR, Amtrak).
 4. Magnetometer in the world frame, gain learned with GNSS; inverter pitch tracking.
