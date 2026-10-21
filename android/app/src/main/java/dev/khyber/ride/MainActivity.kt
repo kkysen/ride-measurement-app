@@ -14,10 +14,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
@@ -63,7 +65,8 @@ class MainActivity : ComponentActivity() {
             val v = Units.speed(estimate.speedMps)
             val sigma = Units.speed(estimate.sigmaMps)
             val unit = Units.speedUnit
-            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            // Wraps the average to the next line rather than squeezing it into a column of single letters.
+            FlowRow(verticalArrangement = Arrangement.Bottom, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
                     when {
                         estimate.stopped -> "0 $unit"
@@ -225,7 +228,8 @@ class MainActivity : ComponentActivity() {
 
         // Two panes that each scroll on their own, so that text changing size in one,
         // like a new problem or another line of speed details, never moves a button in the other under a finger.
-        Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+        // Clear of the status bar, the navigation bar, and the keyboard.
+        Column(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 24.dp)) {
             Column(
                 Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
