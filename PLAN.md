@@ -255,7 +255,8 @@ Next, in order:
    It also has an elevator up 34 floors, plain in the pressure: 1018.6 to 1005.0 hPa (about 113 m)
    from 2066 to 2090 s (14:29:35 to 14:29:59), cruising at 0.70 hPa/s (about 5.8 m/s);
    a check for detecting vertical motion, with the accelerometer's push at the start and end.
-   "Alighted" at 884.6 s and again at 1067.3 s with no "Boarded" between: likely a missed or mistaken tap.
+   The "Alighted" at 1067.3 s should have been "Boarded": off the D at 7 Av/53 St (884.6 s),
+   then onto the E there (its doors closed at 1083.9 s, "7 Av/53 St (E)" at 1085.9 s).
 
 Carried over from earlier sessions, still open:
 - Combined estimator stage 1: a horizontal position layer (own GNSS position and velocity, phone fixes without an own solution,
