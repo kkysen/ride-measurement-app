@@ -2,12 +2,16 @@ package dev.khyber.ride
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.ParcelUuid
 import android.util.Log
@@ -19,10 +23,24 @@ import dev.khyber.ride.proto.BleScanResults
  * Bluetooth LE advertisements around the phone, into the radio stream: beacons in stations and trains
  * (e.g. Piper beacons on B Division subway cars) are fingerprints for where the phone is, underground too.
  * Every advertisement is kept whole, so any beacon format can be decoded later.
+ * Scanning follows Bluetooth: it starts whenever Bluetooth is turned on, mid-ride too, and ends when it's turned off.
  */
 class BleRecorder(private val context: Context, private val radio: RecordStreamRecorder) {
     private val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
     private var scanning = false
+    private var listening = false
+
+    private val stateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Health.guard("ble") {
+                when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
+                    BluetoothAdapter.STATE_ON -> if (!scanning) startScans()
+                    // Turning off ends the scans without any callback.
+                    BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> scanning = false
+                }
+            }
+        }
+    }
 
     private inner class Callback(val filtered: Boolean) : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -45,6 +63,10 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
     private val unfilteredCallback = Callback(filtered = false)
 
     fun start() {
+        Health.guard("ble") {
+            context.registerReceiver(stateReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+            listening = true
+        }
         Health.guard("ble") { startScans() }
     }
 
@@ -55,7 +77,7 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
             return
         }
         val scanner = adapter?.takeIf { it.isEnabled }?.bluetoothLeScanner ?: run {
-            Health.report("ble", IllegalStateException("Bluetooth is off: not recording beacons (turn it on and restart)"))
+            Health.report("ble", IllegalStateException("Bluetooth is off: not recording beacons (recording starts when it's turned on)"))
             return
         }
         val settings = ScanSettings.Builder()
@@ -72,6 +94,10 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
 
     @SuppressLint("MissingPermission")
     fun stop() {
+        if (listening) {
+            Health.guard("stop ble") { context.unregisterReceiver(stateReceiver) }
+            listening = false
+        }
         if (!scanning) return
         try {
             adapter?.bluetoothLeScanner?.run {
