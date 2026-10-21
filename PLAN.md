@@ -275,8 +275,12 @@ Next, in order:
    Against its 9 stop and 9 start taps (`python/experiments/startstop.py`): the start surge is sharp
    (detections a median 0.1 to 0.3 s after the tap) but handling makes false ones; stops don't show in the
    acceleration's size (braking fades; stopped-in-hand looks like moving); the replayed speed estimator registers
-   only 3 of 9 stops and 3 of 9 starts. Next: the signed acceleration along the travel axis (the stop's lurch is a
-   sign change of jerk), the chime and door sounds, and the speed estimator's zero-velocity handling underground.
+   only 3 of 9 stops and 3 of 9 starts.
+   In the gyro-tracked frame (not a gravity average, which tilting in hand leaks into), the final lurch is clear:
+   a collapse of sustained braking 0.5 to 0.9 s before all 9 stop taps (the rider's reaction, median 0.78 s);
+   braking for half the 10 s before plus a still phone after keeps 5 of 9 with no false ones on the ride.
+   Next: the door sounds (chime; HVAC louder while doors are open) for the rest, the magnetometer in the world frame
+   for starts, and the speed estimator's zero-velocity handling underground.
 
 Carried over from earlier sessions, still open:
 - Combined estimator stage 1: a horizontal position layer (own GNSS position and velocity, phone fixes without an own solution,
