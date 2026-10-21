@@ -77,5 +77,5 @@ Details for each step are in `README.md` under "Your steps".
 ## Later, whenever
 
 - [ ] OneDrive: Azure app registration, add `ride.onedriveClientId` to `~/.gradle/gradle.properties`, reinstall, sign in in the app.
-- [ ] GitHub Actions: add the four `RIDE_SIGNING_*` repository secrets (README step 6), then ask me to push.
+- [x] GitHub Actions: add the four `RIDE_SIGNING_*` repository secrets (README step 6), then ask me to push.
       They let CI sign APKs with your one key, so CI builds install over local ones; it means uploading the key to GitHub.
