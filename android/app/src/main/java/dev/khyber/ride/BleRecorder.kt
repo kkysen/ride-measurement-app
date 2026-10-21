@@ -68,6 +68,8 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
             listening = true
         }
         Health.guard("ble") { startScans() }
+        // A new scanning level takes a new scan.
+        Scanning.onChange = { if (scanning) { stopScans(); startScans() } }
     }
 
     @SuppressLint("MissingPermission")
@@ -81,8 +83,8 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
             return
         }
         val settings = ScanSettings.Builder()
-            // Listening all the time, not a duty cycle: a station's beacons pass in seconds on an express.
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            // At its most frequent, listening all the time: a station's beacons pass in seconds on an express.
+            .setScanMode(Scanning.level.bleScanMode)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .setLegacy(false)
             // Batch in the controller where it can, to save power; results keep their own timestamps.
@@ -95,10 +97,16 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
 
     @SuppressLint("MissingPermission")
     fun stop() {
+        Scanning.onChange = null
         if (listening) {
             Health.guard("stop ble") { context.unregisterReceiver(stateReceiver) }
             listening = false
         }
+        stopScans()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun stopScans() {
         if (!scanning) return
         try {
             adapter?.bluetoothLeScanner?.run {

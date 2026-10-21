@@ -35,8 +35,9 @@ import java.util.concurrent.Executor
  * Cell info (polled; passive, the modem doesn't search), service state, signal strength, WiFi scans, and battery,
  * all into the `radio` stream.
  *
- * Cell info is requested every second, and WiFi scans every 4 s (as often as Android's throttle allows, which
- * Developer options can turn off); results from scans anyone else triggers are always recorded, for free.
+ * Cell info and WiFi scans are requested as often as `Scanning.level` says (at its most, cells every second and
+ * WiFi every 4 s, if Android's throttle allows, which Developer options can turn off);
+ * results from scans anyone else triggers are always recorded, for free.
  * None of this is ever used as a position directly, only as fingerprints.
  */
 class RadioRecorder(
@@ -114,11 +115,12 @@ class RadioRecorder(
         }
     }
 
-    // Cells every second: their signal peaks at each station, and passing one on an express takes about 10 s.
+    // As often as `Scanning.level` says: at its most, every second, since a cell's signal peaks at each station
+    // and passing one on an express takes about 10 s.
     private val cellPoll = object : Runnable {
         override fun run() {
             Health.guard("cell info") { requestCellInfo() }
-            handler.postDelayed(this, CELL_POLL_MS)
+            handler.postDelayed(this, Scanning.level.cellPollMs)
         }
     }
 
@@ -183,8 +185,9 @@ class RadioRecorder(
         // Always, not only without GNSS: the street's networks are what the subway's are told apart from.
         // Android refuses requests past its throttle (4 per 2 minutes unless Developer options turn it off),
         // and `requested` records which scans were this app's.
+        val interval = Scanning.level.wifiScanIntervalNs ?: return
         val now = SystemClock.elapsedRealtimeNanos()
-        if (now - lastScanRequestNs < SCAN_INTERVAL_NS) return
+        if (now - lastScanRequestNs < interval) return
         lastScanRequestNs = now
         scanRequested = wifi.startScan()
     }
@@ -207,8 +210,6 @@ class RadioRecorder(
 
     companion object {
         private const val POLL_MS = 5_000L
-        private const val CELL_POLL_MS = 1_000L
-        private const val SCAN_INTERVAL_NS = 4_000_000_000L
     }
 }
 

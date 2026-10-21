@@ -160,6 +160,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Units.load(this)
+        Scanning.load(this)
         permissions.launch(
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
@@ -268,6 +269,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Units.Settings()
+                Scanning.Settings()
 
                 Text(if (state.recording) "Recording ${state.sessionId}" else "Not recording")
                 state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall) }

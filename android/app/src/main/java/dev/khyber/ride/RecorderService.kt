@@ -47,6 +47,8 @@ class RecorderService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (recorders.isNotEmpty()) return START_STICKY
+        // Also when Android restarts recording without the app's screen, which loads it otherwise.
+        Scanning.load(this)
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         // A null intent means Android killed the service and restarted it (`START_STICKY`).
         val restarted = intent == null
