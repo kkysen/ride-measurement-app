@@ -149,6 +149,9 @@ tasks.withType<Test>().configureEach {
     dependsOn(uniffiBindings)
     // Where JNA finds the host build of the library.
     systemProperty("jna.library.path", File(cargoTarget, "release").path)
+    // `FixtureTest` writes sessions here for the Rust and Python cross-checks,
+    // so a build cache hit has to restore them too, not just the test results.
+    outputs.dir(layout.buildDirectory.dir("fixtures"))
 }
 
 protobuf {
