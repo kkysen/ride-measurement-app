@@ -251,7 +251,9 @@ Next, in order:
    CBTC and C/D/E rides, absent on the 1, 2, 3); a fix within 25 m of a track while moving catches the elevated 7.
    With those OR'd in, trains are caught 99 to 100% of the time (elevated 7: 61 to 99%), but it fires in 20 to 50% of
    off-train windows with a fix, some of which are platforms; the labels can't tell platforms from the street.
-   Weak per window: pressure, chimes, OMNY (events, need event detection). Hunting came out backwards:
+   Chimes and OMNY beeps are events, not window features (`chime_omny.py`, 32 ms): chimes precede 28 of 31
+   "doors closed" presses on phone-mic rides, pitches found per car type; all 3 known OMNY taps found within 0.3 s.
+   Weak per window: pressure. Hunting came out backwards:
    walking's ~2 Hz steps swamp it; separate lateral sway from steps' vertical bounce.
    A logistic regression did worse than the rules, trained on labels that call stations "off".
    The same applies to walking (runaways up to 187 mph on transfers underground)
