@@ -246,6 +246,14 @@ Next, in order:
    Built (2026-10-21): `SubwayDetector`, from the subway's Wi-Fi or no fix among few networks;
    the speed is held to 55 mph while in it, live and in replay, and every ride's smoothed top speed is now 55 mph.
    It misses elevated lines (GNSS keeps the speed in check there); adding position on the subway map would catch them.
+   More signals scored (`python/experiments/subway_signals.py`, AUC train vs off): the magnetometer's spread is the best
+   (0.76 to 0.91 on every ride; median 13 to 31 uT on trains, 3 to 6 on the street); the train beacon (0.78 to 0.98 on
+   CBTC and C/D/E rides, absent on the 1, 2, 3); a fix within 25 m of a track while moving catches the elevated 7.
+   With those OR'd in, trains are caught 99 to 100% of the time (elevated 7: 61 to 99%), but it fires in 20 to 50% of
+   off-train windows with a fix, some of which are platforms; the labels can't tell platforms from the street.
+   Weak per window: pressure, chimes, OMNY (events, need event detection). Hunting came out backwards:
+   walking's ~2 Hz steps swamp it; separate lateral sway from steps' vertical bounce.
+   A logistic regression did worse than the rules, trained on labels that call stations "off".
    The same applies to walking (runaways up to 187 mph on transfers underground)
    and to trains faster than the subway (LIRR, Amtrak).
 4. Magnetometer in the world frame, gain learned with GNSS; inverter pitch tracking.
