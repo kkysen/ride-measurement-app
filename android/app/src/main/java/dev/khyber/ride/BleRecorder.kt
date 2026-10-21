@@ -81,7 +81,8 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
             return
         }
         val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
+            // Listening all the time, not a duty cycle: a station's beacons pass in seconds on an express.
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .setLegacy(false)
             // Batch in the controller where it can, to save power; results keep their own timestamps.
