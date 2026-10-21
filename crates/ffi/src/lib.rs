@@ -151,6 +151,14 @@ impl Fusion {
         Ok(())
     }
 
+    /// A mark the rider tapped (`ManualEvent.Kind`'s number), at the time it was recorded,
+    /// so live switches the speed's bound exactly where replay does. An unknown kind is ignored.
+    pub fn on_manual_event(&self, t_ns: i64, kind: i32) {
+        if let Ok(kind) = ride_session::proto::manual_event::Kind::try_from(kind) {
+            self.lock().on_manual_event(t_ns, kind);
+        }
+    }
+
     /// A downloaded orbit file (from [`orbit_fetch_plan`]); returns how many ephemerides it held.
     pub fn add_orbit_file(&self, path: String) -> Result<u32, RideError> {
         let ephemerides = ride_gnss::orbits::read_orbit_file(std::path::Path::new(&path))

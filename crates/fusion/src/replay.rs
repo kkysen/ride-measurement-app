@@ -36,6 +36,7 @@ enum Event {
     Fix(Fix),
     Measurements(ride_session::proto::GnssMeasurementsEvent),
     Navigation(ride_session::proto::GnssNavigationMessage),
+    Mark(ride_session::proto::manual_event::Kind),
 }
 
 /// Uses the uncalibrated accelerometer and gyro if recorded, else the calibrated ones, like the app.
@@ -48,7 +49,7 @@ pub fn replay(session: &Session) -> anyhow::Result<Replay> {
 /// What the app is told about a ride, beyond what it records.
 #[derive(Clone, Debug, Default)]
 pub struct Options {
-    /// See [`Fusion::set_max_speed`].
+    /// Until the first "Boarded" or "Alighted": see [`Fusion::set_max_speed`].
     pub max_speed_mps: Option<f64>,
 }
 
@@ -75,7 +76,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
             }
         }
     }
-    for stream in ["location", "gnss"] {
+    for stream in ["location", "gnss", "events"] {
         if !session.stream_path(stream).exists() {
             continue;
         }
@@ -110,6 +111,8 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                 Some(Payload::GnssNavigationMessage(m)) => {
                     events.push((received, Event::Navigation(m)))
                 }
+                // At the time the app recorded it, which is also when it fed it live.
+                Some(Payload::ManualEvent(e)) => events.push((received, Event::Mark(e.kind()))),
                 _ => {}
             }
         }
@@ -132,6 +135,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                 fusion.on_gnss_measurements(t, &m);
             }
             Event::Navigation(m) => fusion.on_navigation_message(&m),
+            Event::Mark(kind) => fusion.on_manual_event(t, kind),
         }
     }
     fusion.finish();

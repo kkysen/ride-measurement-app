@@ -247,7 +247,9 @@ class RecorderService : Service() {
         /** Records a manual event (boarded, at station, ...) into the current session; false if not recording. */
         fun addEvent(kind: ManualEvent.Kind, text: String = ""): Boolean {
             val events = eventsStream ?: return false
-            events.add { manualEvent = ManualEvent.newBuilder().setKind(kind).setText(text).build() }
+            val t = events.add { manualEvent = ManualEvent.newBuilder().setKind(kind).setText(text).build() } ?: return false
+            // At the recorded time, so live speed switches its bound where replay does (e.g. the subway's top speed).
+            LiveSpeed.onManualEvent(t, kind.number)
             return true
         }
 
