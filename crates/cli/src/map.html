@@ -100,8 +100,8 @@ function show(p) {
   const time = new Date(p[3]).toLocaleTimeString();
   document.getElementById("info").innerHTML =
     `<div class="speed">${fmt(p[7] == null ? null : p[7] * KMH, 1)} km/h · ${p[10] != null && p[10] >= 0 ? "+" : ""}${fmt(p[10], 2)} m/s²</div>` +
-    `<div class="muted">smoothed (IMU and GNSS) ${fmt(p[7], 2)} ± ${fmt(p[8], 2)} m/s, ${fmt(p[10], 2)} m/s²</div>` +
-    `<div class="muted">GPS ${fmt(p[4], 2)} ± ${fmt(p[5], 2)} m/s</div>` +
+    `<div class="muted">smoothed (IMU and GNSS) ${fmt(p[7] == null ? null : p[7] * KMH, 1)} ± ${fmt(p[8] == null ? null : p[8] * KMH, 1)} km/h, ${fmt(p[10], 2)} m/s²</div>` +
+    `<div class="muted">GPS ${fmt(p[4] == null ? null : p[4] * KMH, 1)} ± ${fmt(p[5] == null ? null : p[5] * KMH, 1)} km/h</div>` +
     `<div class="muted">${time} · ${fmt(p[2], 0)} s in · position ± ${fmt(p[6], 0)} m</div>`;
 }
 // The fix nearest the pointer, if it's within a finger's width.
