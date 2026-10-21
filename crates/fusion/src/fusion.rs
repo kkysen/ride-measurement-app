@@ -13,8 +13,6 @@
 //!   of GNSS after it: so the fixes after a tunnel, however long, correct all of it, up to [`MAX_UNMEASURED_NS`].
 //!   The backward pass carries the first good fix after a tunnel back through it, which a forward filter can't.
 //!   It starts from the forward pass's frame (gravity, travel axis, bias), which constant speed can't teach it.
-//! - The rider's marks switch the speed's upper bound at their times: the subway's top speed from "Boarded"
-//!   to "Alighted", undone by "Undo". They settle like any input, so live and offline switch at the same point.
 //! - Position (see [`crate::position`]) is filtered from the same settled inputs: our own GNSS solutions,
 //!   the fixes, the gyro's turns about up, and the forward speed at each sample; its inputs are light,
 //!   so they're kept for the whole ride and smoothed when asked.
@@ -22,10 +20,9 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use ride_gnss::solve::{Navigator, geodetic_to_ecef};
-use ride_session::proto::manual_event::Kind;
 use ride_session::proto::{GnssMeasurementsEvent, GnssNavigationMessage};
 
-use crate::live_speed::{Estimate, LiveSpeedEstimator, SUBWAY_MAX_SPEED_MPS};
+use crate::live_speed::{Estimate, LiveSpeedEstimator};
 use crate::position::{PositionEstimate, PositionInput, smooth};
 
 /// Whether our own GNSS position and velocity solutions update the position filter.
@@ -50,8 +47,6 @@ enum Input {
     Fix(Box<Fix>),
     /// Our own velocity solution's speed and standard deviation.
     Speed(f64, f64),
-    /// A mark changed the speed's upper bound from this, which the backward pass goes back to.
-    MaxSpeedBefore(Option<f64>),
 }
 
 /// Inputs settle into the forward pass, in time order, once input this much newer has arrived: Android delivers
@@ -67,7 +62,6 @@ enum Pending {
     Gyro([f64; 3]),
     Fix(Fix),
     Measurements(Box<GnssMeasurementsEvent>),
-    Mark(Kind),
 }
 
 impl Pending {
@@ -78,45 +72,6 @@ impl Pending {
             Self::Gyro(_) => 1,
             Self::Fix(_) => 2,
             Self::Measurements(_) => 3,
-            Self::Mark(_) => 4,
-        }
-    }
-}
-
-/// The rider's marks that set the speed's upper bound, as an "Undo" needs them.
-#[derive(Clone, Debug, Default)]
-struct Marks {
-    /// Every mark so far that "Undo" can undo, newest last.
-    kinds: Vec<Kind>,
-    /// The bound before any "Boarded" or "Alighted" (see [`Fusion::set_max_speed`]).
-    base_max_speed_mps: Option<f64>,
-}
-
-impl Marks {
-    /// Takes a mark, and returns the bound it changed to, if it changed.
-    fn on_mark(&mut self, kind: Kind) -> Option<Option<f64>> {
-        let before = self.max_speed_mps();
-        match kind {
-            // Undoes the mark before it, whatever it was; an "Undo" of nothing does nothing.
-            Kind::Undo => {
-                self.kinds.pop();
-            }
-            _ => self.kinds.push(kind),
-        }
-        let after = self.max_speed_mps();
-        (after != before).then_some(after)
-    }
-
-    fn max_speed_mps(&self) -> Option<f64> {
-        match self
-            .kinds
-            .iter()
-            .rev()
-            .find(|k| matches!(k, Kind::Boarded | Kind::Alighted))
-        {
-            Some(Kind::Boarded) => Some(SUBWAY_MAX_SPEED_MPS),
-            Some(_) => None,
-            None => self.base_max_speed_mps,
         }
     }
 }
@@ -126,17 +81,11 @@ impl Marks {
 fn step(
     estimator: &mut LiveSpeedEstimator,
     last_own_solution_ns: &mut Option<i64>,
-    marks: &mut Marks,
     t_ns: i64,
     input: &Pending,
     own: Option<(f64, f64)>,
 ) -> Option<Input> {
     match input {
-        Pending::Mark(kind) => {
-            let before = marks.max_speed_mps();
-            estimator.set_max_speed(marks.on_mark(*kind)?);
-            Some(Input::MaxSpeedBefore(before))
-        }
         Pending::Accel(a) => {
             estimator.on_accel(t_ns, a[0], a[1], a[2]);
             Some(Input::Accel(*a))
@@ -241,7 +190,6 @@ pub struct Fusion {
     estimator: LiveSpeedEstimator,
     navigator: Navigator,
     last_own_solution_ns: Option<i64>,
-    marks: Marks,
     /// Inputs not yet settled, by time, rank, and arrival.
     pending: BTreeMap<(i64, u8, u64), Pending>,
     arrivals: u64,
@@ -298,7 +246,6 @@ impl Fusion {
             estimator: LiveSpeedEstimator::new(),
             navigator: Navigator::default(),
             last_own_solution_ns: None,
-            marks: Marks::default(),
             pending: BTreeMap::new(),
             arrivals: 0,
             latest_ns: None,
@@ -320,16 +267,9 @@ impl Fusion {
         }
     }
 
-    /// The fastest the vehicle can go until the rider marks "Boarded" or "Alighted"
-    /// (see [`LiveSpeedEstimator::set_max_speed`]).
+    /// The fastest the vehicle can go, for the whole ride (see [`LiveSpeedEstimator::set_max_speed`]).
     pub fn set_max_speed(&mut self, max_speed_mps: Option<f64>) {
-        self.marks.base_max_speed_mps = max_speed_mps;
-        self.estimator.set_max_speed(self.marks.max_speed_mps());
-    }
-
-    /// A mark the rider tapped, at its recorded time. Every kind counts, so that "Undo" undoes the right one.
-    pub fn on_manual_event(&mut self, t_ns: i64, kind: Kind) {
-        self.arrive(t_ns, Pending::Mark(kind));
+        self.estimator.set_max_speed(max_speed_mps);
     }
 
     pub fn navigator(&self) -> &Navigator {
@@ -430,7 +370,6 @@ impl Fusion {
         let Some(kept) = step(
             &mut self.estimator,
             &mut self.last_own_solution_ns,
-            &mut self.marks,
             t_ns,
             &input,
             own,
@@ -526,7 +465,7 @@ impl Fusion {
                     ));
                 }
             }
-            Pending::Accel(_) | Pending::Mark(_) => {}
+            Pending::Accel(_) => {}
         }
     }
 
@@ -546,7 +485,6 @@ impl Fusion {
         }
         let mut estimator = self.estimator.clone();
         let mut last_own = self.last_own_solution_ns;
-        let mut marks = self.marks.clone();
         for (&(t, _, _), input) in &self.pending {
             let own = match input {
                 Pending::Measurements(event) => self
@@ -557,7 +495,7 @@ impl Fusion {
                     .map(|v| (v.speed(), v.speed_sigma())),
                 _ => None,
             };
-            step(&mut estimator, &mut last_own, &mut marks, t, input, own);
+            step(&mut estimator, &mut last_own, t, input, own);
         }
         estimator.estimate(now_ns)
     }
@@ -663,8 +601,6 @@ impl Fusion {
                 Input::Accel(a) => backward.on_accel(tr, a[0], a[1], a[2]),
                 Input::Gyro(w) => backward.on_gyro(-w[0], -w[1], -w[2]),
                 Input::Speed(speed, sigma) => backward.on_gnss_speed(tr, speed, sigma),
-                // Going back past a mark, the bound is the one before it.
-                Input::MaxSpeedBefore(before) => backward.set_max_speed(before),
                 Input::Fix(ref f) => {
                     backward.on_gnss_fix(tr, f.lat, f.lon, f.accuracy, f.speed, f.speed_sigma)
                 }
@@ -726,36 +662,5 @@ fn combine(t: i64, f: &Estimate, b: &Estimate) -> SmoothedSpeed {
         backward_mps: b.speed_mps,
         // In reversed time, speeding up is slowing down.
         accel_mps2: (f.accel_mps2 * wf - b.accel_mps2 * wb) / (wf + wb),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn marks_set_the_subway_bound_and_undo_takes_it_back() {
-        let mut m = Marks::default();
-        assert_eq!(m.on_mark(Kind::TrainStopped), None);
-        assert_eq!(m.on_mark(Kind::Boarded), Some(Some(SUBWAY_MAX_SPEED_MPS)));
-        assert_eq!(m.on_mark(Kind::TrainStarted), None);
-        // Undoing a mark that didn't change the bound leaves it.
-        assert_eq!(m.on_mark(Kind::Undo), None);
-        assert_eq!(m.on_mark(Kind::Alighted), Some(None));
-        // An "Alighted" by mistake: undone, the rider is still on the train.
-        assert_eq!(m.on_mark(Kind::Undo), Some(Some(SUBWAY_MAX_SPEED_MPS)));
-        assert_eq!(m.on_mark(Kind::Alighted), Some(None));
-    }
-
-    #[test]
-    fn undo_of_nothing_does_nothing() {
-        let mut m = Marks {
-            base_max_speed_mps: Some(10.0),
-            ..Marks::default()
-        };
-        assert_eq!(m.on_mark(Kind::Undo), None);
-        assert_eq!(m.max_speed_mps(), Some(10.0));
-        assert_eq!(m.on_mark(Kind::Boarded), Some(Some(SUBWAY_MAX_SPEED_MPS)));
-        assert_eq!(m.on_mark(Kind::Undo), Some(Some(10.0)));
     }
 }

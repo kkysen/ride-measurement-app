@@ -124,12 +124,6 @@ object LiveSpeed {
         h.post { safely { fusion?.onNavigationMessage(encoded) } }
     }
 
-    /** A mark the rider tapped, at its recorded time (`ManualEvent.Kind`'s number). */
-    fun onManualEvent(tNs: Long, kind: Int) {
-        val h = handler ?: return
-        h.post { safely { fusion?.onManualEvent(tNs, kind) } }
-    }
-
     /** A downloaded orbit file ([OrbitFetcher]); a bad one is reported and live speed carries on without it. */
     fun addOrbitFile(path: String) {
         val h = handler ?: return
