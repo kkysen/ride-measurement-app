@@ -27,6 +27,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import uniffi.ride_ffi.coreVersion
 import uniffi.ride_ffi.formatVersion
 import uniffi.ride_ffi.writeSessionInfo
@@ -138,6 +139,7 @@ class RecorderService : Service() {
             radioRecorder = Health.guard("radio") { RadioRecorder(this, radio) { gnssRef?.lastGpsFixElapsedNs ?: 0L } }
             bleRecorder = Health.guard("ble") { BleRecorder(this, radio) }
         }
+        _marks.value = emptyList()
         eventsStream = events
         if (audioAllowed) audioRecorder = Health.guard("audio") { AudioStreamRecorder(this, dir) }
         Health.guard("session info") { writeSessionInfo(
@@ -244,10 +246,31 @@ class RecorderService : Service() {
         @Volatile
         private var eventsStream: RecordStreamRecorder? = null
 
+        /** A mark the rider tapped in this session, for the list of taps. */
+        data class Mark(val receivedNs: Long, val wallMs: Long, val kind: ManualEvent.Kind, val text: String, val deleted: Boolean)
+
+        private val _marks = MutableStateFlow<List<Mark>>(emptyList())
+        /** This session's marks, oldest first; a restart's new session starts empty. */
+        val marks: StateFlow<List<Mark>> = _marks
+
         /** Records a manual event (boarded, at station, ...) into the current session; false if not recording. */
         fun addEvent(kind: ManualEvent.Kind, text: String = ""): Boolean {
             val events = eventsStream ?: return false
-            events.add { manualEvent = ManualEvent.newBuilder().setKind(kind).setText(text).build() }
+            val t = events.add { manualEvent = ManualEvent.newBuilder().setKind(kind).setText(text).build() } ?: return false
+            _marks.update { it + Mark(t, System.currentTimeMillis(), kind, text, deleted = false) }
+            return true
+        }
+
+        /** Deletes a mark: records that it was wrong, keeping the mark itself, so nothing is lost. */
+        fun deleteEvent(mark: Mark): Boolean {
+            val events = eventsStream ?: return false
+            events.add {
+                manualEvent = ManualEvent.newBuilder()
+                    .setKind(ManualEvent.Kind.KIND_DELETE)
+                    .setDeletesReceivedElapsedRealtimeNs(mark.receivedNs)
+                    .build()
+            } ?: return false
+            _marks.update { marks -> marks.map { if (it.receivedNs == mark.receivedNs) it.copy(deleted = true) else it } }
             return true
         }
 

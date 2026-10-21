@@ -39,15 +39,17 @@ class RecordStreamRecorder(val name: String, dir: File) {
      * Stamps the record with the receive time now, on the caller's thread, then queues it.
      * If building it throws (e.g. an Android getter fails), that's reported to [Health] and the record skipped.
      */
-    fun add(build: Record.Builder.() -> Unit) {
+    /** Returns the time it's recorded at, or null if building the record failed. */
+    fun add(build: Record.Builder.() -> Unit): Long? {
         val receivedNs = SystemClock.elapsedRealtimeNanos()
         val record = Health.guard("records $name") {
             Record.newBuilder().setReceivedElapsedRealtimeNs(receivedNs).apply(build).build()
-        } ?: return
+        } ?: return null
         handler.post {
             pending.add(record)
             recordCount++
         }
+        return receivedNs
     }
 
     fun stop() {

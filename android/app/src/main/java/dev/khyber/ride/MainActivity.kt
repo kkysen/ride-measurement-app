@@ -104,26 +104,12 @@ class MainActivity : ComponentActivity() {
     private fun EventButtons() {
         var note by remember { mutableStateOf("") }
         var last by remember { mutableStateOf("Nothing marked yet") }
-        // The mark "Undo" would undo, if any.
-        var undoable by remember { mutableStateOf<String?>(null) }
         fun add(kind: ManualEvent.Kind, label: String, text: String = "") {
-            val ok = RecorderService.addEvent(kind, text)
-            last = if (ok) "Marked: $label" else "Not recording"
-            undoable = if (ok) label else null
+            last = if (RecorderService.addEvent(kind, text)) "Marked: $label" else "Not recording"
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // At the top and one line always, so it can't move the buttons below.
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(last, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                HapticButton(
-                    onClick = {
-                        val label = undoable ?: return@HapticButton
-                        last = if (RecorderService.addEvent(ManualEvent.Kind.KIND_UNDO, label)) "Undid: $label" else "Not recording"
-                        undoable = null
-                    },
-                    enabled = undoable != null,
-                ) { Text("Undo") }
-            }
+            Text(last, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 "Tap these as things happen: each marks the moment in the recording, " +
                     "so speeds can be matched to real events afterwards.",
@@ -191,7 +177,8 @@ class MainActivity : ComponentActivity() {
                     when (page) {
                         "map" -> LiveMapScreen(onBack = { page = "main" })
                         "rides" -> PastRidesScreen(onBack = { page = "main" })
-                        else -> Screen(onShowMap = { page = "map" }, onShowRides = { page = "rides" })
+                        "taps" -> TapsScreen(onBack = { page = "main" })
+                        else -> Screen(onShowMap = { page = "map" }, onShowRides = { page = "rides" }, onShowTaps = { page = "taps" })
                     }
                 }
             }
@@ -199,7 +186,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Screen(onShowMap: () -> Unit, onShowRides: () -> Unit) {
+    private fun Screen(onShowMap: () -> Unit, onShowRides: () -> Unit, onShowTaps: () -> Unit) {
         // Recording doesn't use the Rust core, so if it fails to load, show why and keep going.
         val rustCoreStatus = remember {
             try {
@@ -241,6 +228,7 @@ class MainActivity : ComponentActivity() {
                     }) { Text(if (state.recording) "Stop" else "Start") }
                     HapticButton(onClick = onShowMap) { Text("Map") }
                     HapticButton(onClick = onShowRides) { Text("Past rides") }
+                    HapticButton(onClick = onShowTaps) { Text("Taps") }
                 }
 
                 if (!getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)) {

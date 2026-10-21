@@ -125,6 +125,7 @@ fn record_stream_round_trips() {
                 payload: Some(Payload::ManualEvent(ManualEvent {
                     kind: manual_event::Kind::AtStation.into(),
                     text: "14 St".into(),
+                    ..Default::default()
                 })),
             },
         ],
