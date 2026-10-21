@@ -324,7 +324,7 @@ Decisions (the user's):
 - Taps are corrected losslessly (appended `KIND_DELETE` / changed marks); whole rides aren't deleted from the app.
 - Bump the version in its own commit before every install on the phone.
 
-App, 0.1.1 to 0.1.3 (0.1.2 on the phone; 0.1.3 built, waiting to install):
+App, 0.1.1 to 0.1.3 (0.1.3 on the phone, installed 2026-10-21 from `26fccd6`):
 haptic buttons; Start/Map/Past rides/Taps on top (wrapping), ride buttons in a fixed pane; the Taps screen (this ride's
 taps, deletable); past rides' taps viewable, deletable, and changeable (`ride_session::marks`, appended records);
 back gesture returns to the main page; screens clear the status bar; offline orbit downloads and a stop mid-download
@@ -341,8 +341,8 @@ Gotchas learned:
 - Wireless debugging's address changes on every reconnect; `just adb-server` first after a WSL restart.
 
 Open, roughly in order:
-1. Install 0.1.3; check `adb shell settings get global wifi_scan_throttle_enabled` (the user should turn off
-   Developer options > Wi-Fi scan throttling, or the 4 s requests are mostly refused).
+1. Wi-Fi scan throttling is on (`wifi_scan_throttle_enabled` unset, so the default): the user should turn off
+   Developer options > Wi-Fi scan throttling, or the 4 s requests are mostly refused.
 2. Next ride: whether any subway access point answers ranging; how often cell readings really refresh at 1 s.
 3. One stop detector from lurch, door cycle (sound step plus chime), and start surge; magnetometer in the world frame
    for starts; then port to Rust and give the speed estimator zero-velocity updates underground (it registers
@@ -353,6 +353,8 @@ Open, roughly in order:
 6. The speed estimator's runaway and sigma (the position gate, `just test-sdc-position`, fails on it),
    and its start-up runaway in the first minute (221 mph on `184134`).
 7. Stations from pass times and distances on express runs; station BLE beacons if any.
+   Express passes to check: the 2 past 59 St and 66 St (`214427`), and the F express in Queens on `184134`,
+   which passed 65 St very fast and 36 St more slowly (per the rider).
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
