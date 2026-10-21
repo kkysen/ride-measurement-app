@@ -43,7 +43,7 @@ fetch-sdc:
     cd {{sdc}} && [ -e orbits.rnx ] || curl -sfL {{sdc_orbits}} | gunzip > orbits.rnx
 
 python-env:
-    cd python && uv venv -q --allow-existing .venv && uv pip install -q --python .venv maturin pytest && uv pip install -q --python .venv -e .
+    cd python && uv venv -q --allow-existing .venv && uv pip install -q --python .venv maturin pytest && uv pip install -q --python .venv -e '.[experiments]'
 
 apk:
     cd android && ./gradlew :app:assembleDebug
