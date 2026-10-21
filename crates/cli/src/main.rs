@@ -436,11 +436,43 @@ fn payload_name(payload: Option<&Payload>) -> &'static str {
 }
 
 fn csv(session: &Session, stream: &str) -> anyhow::Result<()> {
+    // Record and audio streams don't decode as sensor samples: say so rather than print nonsense.
+    let kind = session
+        .info
+        .streams
+        .iter()
+        .find(|s| s.name == stream)
+        .map(|s| s.kind());
+    match kind {
+        Some(StreamKind::Records) => {
+            anyhow::bail!(
+                "{stream} is a record stream; `csv` prints sensor streams (`summary` lists its records)"
+            )
+        }
+        Some(StreamKind::Audio) => {
+            anyhow::bail!(
+                "{stream} is an audio stream; `csv` prints sensor streams (`wav` exports audio)"
+            )
+        }
+        Some(StreamKind::Sensor) | None => {}
+    }
     let contents = session.read_stream(stream)?;
     for chunk in &contents.chunks {
         let n = chunk.values_per_sample as usize;
         let values: Vec<f32> = chunk.values().collect();
-        for (i, t) in chunk.timestamps_ns().into_iter().enumerate() {
+        let timestamps = chunk.timestamps_ns();
+        // A chunk whose parts disagree in length is malformed: print what's complete, and say so.
+        let complete = timestamps
+            .len()
+            .min(chunk.accuracy.len())
+            .min(values.len().checked_div(n).unwrap_or(0));
+        if complete < timestamps.len() {
+            eprintln!(
+                "warning: {stream}: a chunk has {} timestamps but only {complete} complete samples",
+                timestamps.len()
+            );
+        }
+        for (i, t) in timestamps.into_iter().take(complete).enumerate() {
             print!("{t},{}", chunk.accuracy[i]);
             for v in &values[i * n..(i + 1) * n] {
                 // `{:?}` prints the shortest representation that parses back to the same `f32`.
@@ -465,6 +497,30 @@ mod tests {
     use ride_session::read::Session;
     use ride_session::write::{StreamWriter, write_session_info};
     use ride_session::{AudioChunk, FORMAT_VERSION, SessionInfo};
+
+    #[test]
+    fn csv_refuses_record_and_audio_streams() {
+        let dir = tempfile::tempdir().unwrap();
+        let stream = |name: &str, kind: StreamKind| StreamInfo {
+            name: name.into(),
+            kind: kind.into(),
+            ..Default::default()
+        };
+        let info = SessionInfo {
+            format_version: FORMAT_VERSION,
+            streams: vec![
+                stream("events", StreamKind::Records),
+                stream("audio", StreamKind::Audio),
+            ],
+            ..Default::default()
+        };
+        write_session_info(dir.path(), &info).unwrap();
+        let session = Session::open(dir.path()).unwrap();
+        let e = super::csv(&session, "events").unwrap_err().to_string();
+        assert!(e.contains("record stream"), "{e}");
+        let e = super::csv(&session, "audio").unwrap_err().to_string();
+        assert!(e.contains("audio stream"), "{e}");
+    }
 
     #[test]
     fn wav_has_header_and_exact_pcm() {
