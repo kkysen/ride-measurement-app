@@ -312,6 +312,48 @@ Carried over from earlier sessions, still open:
   Alstom ONIX on the R142. Measure NYC signatures ourselves from rides with GNSS, by car type.
 - Slow cell reconnection at stations: measured from `ServiceState` (no app can force a network search).
 
+## Session 2026-10-21: decisions, app changes, and what's open
+
+Decisions (the user's):
+- The rider's marks (taps) are labels for calibrating and scoring, never inputs to the speed or anything live;
+  context (subway, walking, other trains) is detected from the sensors. A mark-driven speed bound was built and reverted.
+- Always analyze the IMU and magnetometer in a gyro-tracked world frame, never with a moving-average gravity.
+- The rider often moves to exit right after a stop: confirm stops from the train (lurch, doors, chime), not stillness.
+- Recorder and sensor changes come first: data not recorded can't be recovered, analysis can be redone.
+- Buttons never move under a finger (fixed panes); every button gives haptic feedback.
+- Taps are corrected losslessly (appended `KIND_DELETE` / changed marks); whole rides aren't deleted from the app.
+- Bump the version in its own commit before every install on the phone.
+
+App, 0.1.1 to 0.1.3 (0.1.2 on the phone; 0.1.3 built, waiting to install):
+haptic buttons; Start/Map/Past rides/Taps on top (wrapping), ride buttons in a fixed pane; the Taps screen (this ride's
+taps, deletable); past rides' taps viewable, deletable, and changeable (`ride_session::marks`, appended records);
+back gesture returns to the main page; screens clear the status bar; offline orbit downloads and a stop mid-download
+aren't reported as problems; the average speed wraps; subway detection holds the live speed to 55 mph in the subway;
+cell polled every 1 s, Wi-Fi scans requested every 4 s always, BLE low latency, under a "Radio scanning" level
+(Frequent, Normal, Battery saver); `is_80211mc_responder` recorded per access point.
+
+Gotchas learned:
+- Android records SSIDs quoted (`"BoldynWiFi"`); `BoldynPasspoint` is a street network, `PasspointBoldyn` the subway's.
+- `ride summary` gives tap times from the first tap, not the session start; give clock times instead.
+- `wifi.csv` from `crates/cli/examples/radio.rs` has each network's last-seen time, not the scan's.
+- The app can't upload to OneDrive (no client ID in the build); the user uploads through the website to
+  `Documents/RideLogger/sessions`, which syncs to `/mnt/c/Users/kkyse/OneDrive/Khyber/Documents/RideLogger/sessions`.
+- Wireless debugging's address changes on every reconnect; `just adb-server` first after a WSL restart.
+
+Open, roughly in order:
+1. Install 0.1.3; check `adb shell settings get global wifi_scan_throttle_enabled` (the user should turn off
+   Developer options > Wi-Fi scan throttling, or the 4 s requests are mostly refused).
+2. Next ride: whether any subway access point answers ranging; how often cell readings really refresh at 1 s.
+3. One stop detector from lurch, door cycle (sound step plus chime), and start surge; magnetometer in the world frame
+   for starts; then port to Rust and give the speed estimator zero-velocity updates underground (it registers
+   only 3 of 9 stops on `20261021-135509`).
+4. Subway detection in Rust: add the magnetometer, train beacon, and fix-on-track signals (scored in
+   `subway_signals.py`), and walking detection for runaways off the train; position on the subway map for elevated lines.
+5. Hunting, as lateral sway told from walking's vertical bounce; OMNY tap detection paired with the stair pattern.
+6. The speed estimator's runaway and sigma (the position gate, `just test-sdc-position`, fails on it),
+   and its start-up runaway in the first minute (221 mph on `184134`).
+7. Stations from pass times and distances on express runs; station BLE beacons if any.
+
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
   Airliner speed/altitude are within consumer GNSS limits (~1900 km/h, 18 km).
