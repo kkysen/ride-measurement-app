@@ -3,6 +3,7 @@ package dev.khyber.ride
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
@@ -17,6 +18,26 @@ fun HapticButton(
 ) {
     val view = LocalView.current
     Button(
+        onClick = {
+            view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+            onClick()
+        },
+        modifier = modifier,
+        enabled = enabled,
+        content = content,
+    )
+}
+
+/** An `OutlinedButton` that buzzes like [HapticButton], for secondary actions. */
+@Composable
+fun HapticOutlinedButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val view = LocalView.current
+    OutlinedButton(
         onClick = {
             view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
             onClick()

@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -58,7 +57,7 @@ fun TapsScreen(onBack: () -> Unit) {
                             RecorderService.deleteEvent(mark)
                             confirming = null
                         }) { Text("Confirm") }
-                        else -> OutlinedButton(onClick = { confirming = mark.receivedNs }) { Text("Delete") }
+                        else -> HapticOutlinedButton(onClick = { confirming = mark.receivedNs }) { Text("Delete") }
                     }
                 }
             }
