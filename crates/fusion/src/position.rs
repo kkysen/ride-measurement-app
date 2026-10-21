@@ -27,6 +27,9 @@ const TURN_SIGMA_RAD_PER_S: f64 = 0.005;
 const SLOW_MPS: f64 = 0.5;
 /// Innovations beyond this (chi-squared, 2 degrees of freedom: 1 in 3000 by chance) are outliers.
 const GATE_CHI2: f64 = 16.0;
+/// This many position updates rejected in a row means the filter, not the measurements, went wrong
+/// (e.g. dead reckoning off a phone in a pocket): it restarts at the next one.
+const RESET_AFTER_REJECTED: u32 = 5;
 /// Android's horizontal accuracy is a 68% radius; a per-axis sigma is about this fraction of it.
 const ACCURACY_TO_SIGMA: f64 = 1.0 / 1.515;
 /// How long the speed estimator's error stays correlated (s): about the time between stops,
@@ -179,6 +182,9 @@ pub struct PositionFilter {
     /// Whether this pass runs backward in time (velocities and turns negated).
     reversed: bool,
     pub rejected: u32,
+    /// Position updates rejected since the last one accepted, and how many times that forced a restart.
+    rejected_in_row: u32,
+    pub resets: u32,
 }
 
 impl PositionFilter {
@@ -197,6 +203,8 @@ impl PositionFilter {
             last_own_velocity_ns: None,
             reversed,
             rejected: 0,
+            rejected_in_row: 0,
+            resets: 0,
         }
     }
 
@@ -302,7 +310,12 @@ impl PositionFilter {
     }
 
     fn update_position(&mut self, t_ns: i64, en: [f64; 2], r: [[f64; 2]; 2]) {
-        if !self.initialized() {
+        let restart = self.rejected_in_row >= RESET_AFTER_REJECTED;
+        if restart {
+            self.resets += 1;
+        }
+        if !self.initialized() || restart {
+            self.rejected_in_row = 0;
             self.x = [en[0], en[1], 0.0, 0.0, 0.0];
             self.p = [[0.0; N]; N];
             self.p[0][0] = r[0][0];
@@ -316,11 +329,15 @@ impl PositionFilter {
             self.last_ns = Some(t_ns);
             return;
         }
-        self.update(
+        if self.update(
             &[[1.0, 0.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0, 0.0]],
             en,
             r,
-        );
+        ) {
+            self.rejected_in_row = 0;
+        } else {
+            self.rejected_in_row += 1;
+        }
     }
 
     fn update_velocity(&mut self, v: [f64; 2], r: [[f64; 2]; 2]) {
@@ -727,6 +744,25 @@ mod tests {
             "{:?}",
             estimates[30]
         );
+    }
+
+    #[test]
+    fn restarts_when_it_rejects_fix_after_fix() {
+        // Dead reckoning carried it 290 m east, but the fixes resume 210 m west: 500 m from where it thinks.
+        let plane = Plane::new(LAT0, LON0);
+        let mut f = PositionFilter::new();
+        f.on_input(0, &fix(&plane, [0.0, 0.0]));
+        f.on_input(S, &fix(&plane, [10.0, 0.0]));
+        for t in 2..60 {
+            f.on_input(t * S, &PositionInput::Speed(if t < 30 { 10.0 } else { 0.0 }, 0.1));
+        }
+        let mut last = None;
+        for t in 60..80 {
+            f.on_input(t * S, &fix(&plane, [-210.0, 0.0]));
+            last = f.on_input(t * S, &PositionInput::Sample);
+        }
+        assert_eq!(f.resets, 1);
+        assert!(error_m(&plane, &last.unwrap(), [-210.0, 0.0]) < 5.0, "{last:?}");
     }
 
     #[test]
