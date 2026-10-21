@@ -1,8 +1,13 @@
 package dev.khyber.ride
 
+import android.util.Log
 import java.io.File
+import java.io.IOException
+import java.net.ConnectException
 import java.net.HttpURLConnection
+import java.net.NoRouteToHostException
 import java.net.URL
+import java.net.UnknownHostException
 import uniffi.ride_ffi.orbitFetchPlan
 import uniffi.ride_ffi.orbitRefreshMs
 
@@ -10,7 +15,8 @@ import uniffi.ride_ffi.orbitRefreshMs
  * Downloads broadcast orbits while recording, for live speed from every constellation's satellites.
  * Rust decides everything (`ride_gnss::orbits::fetch_plan`, the same plan `just orbits` follows offline):
  * which files, from where, into the session's `orbits/`, how often; this only does the HTTP requests.
- * Each failure (no network, a server error, a bad file) is reported and skipped; recording never depends on it.
+ * Each failure (a server error, a bad file) is reported and skipped; recording never depends on it.
+ * Having no network at all, as underground, is only logged.
  */
 class OrbitFetcher(private val sessionDir: File) {
     @Volatile
@@ -33,7 +39,17 @@ class OrbitFetcher(private val sessionDir: File) {
             for (day in plan.orEmpty()) {
                 for (file in day) {
                     if (!running) return
-                    if (Health.guard("orbit download") { download(file.url, File(file.path)) } == true) {
+                    val downloaded = Health.guard("orbit download") {
+                        try {
+                            download(file.url, File(file.path))
+                        } catch (e: IOException) {
+                            // No network, as underground: normal, not a problem with recording; the next refresh retries.
+                            if (e !is UnknownHostException && e !is ConnectException && e !is NoRouteToHostException) throw e
+                            Log.i("RideLogger", "orbit download: offline: $e")
+                            false
+                        }
+                    }
+                    if (downloaded == true) {
                         LiveSpeed.addOrbitFile(file.path)
                         break
                     }
