@@ -3,6 +3,7 @@ package dev.khyber.ride
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -15,11 +16,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** One recording on the phone, as far as its files tell without decoding them. */
 private data class PastRide(val id: String, val start: Long?, val lastWrite: Long, val bytes: Long, val recompressed: Boolean)
@@ -46,7 +47,7 @@ fun PastRidesScreen(onBack: () -> Unit) {
     var rides by remember { mutableStateOf<List<PastRide>?>(null) }
     LaunchedEffect(Unit) { rides = withContext(Dispatchers.IO) { pastRides() } }
     Column(
-        Modifier.padding(24.dp).verticalScroll(rememberScrollState()),
+        Modifier.safeDrawingPadding().padding(24.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         HapticButton(onClick = onBack) { Text("Back") }

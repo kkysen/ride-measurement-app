@@ -7,9 +7,10 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.os.PowerManager
-import android.util.Log
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -174,6 +175,8 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) {
                     var page by remember { mutableStateOf("main") }
+                    // The phone's back gesture returns to the main page rather than leaving the app.
+                    BackHandler(enabled = page != "main") { page = "main" }
                     when (page) {
                         "map" -> LiveMapScreen(onBack = { page = "main" })
                         "rides" -> PastRidesScreen(onBack = { page = "main" })
@@ -221,8 +224,8 @@ class MainActivity : ComponentActivity() {
                 Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                // First, so nothing above them can push them down.
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // First, so nothing above them can push them down; wrapping, so none is squeezed to nothing.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     HapticButton(onClick = {
                         if (state.recording) RecorderService.stop(this@MainActivity) else RecorderService.start(this@MainActivity)
                     }) { Text(if (state.recording) "Stop" else "Start") }

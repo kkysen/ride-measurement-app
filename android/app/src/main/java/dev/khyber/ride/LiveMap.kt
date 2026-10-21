@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,14 +28,11 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.io.File
+import java.text.DateFormat
+import java.util.Date
+import kotlin.math.hypot
 import org.osmdroid.config.Configuration
-import uniffi.ride_ffi.SpeedScale
-import uniffi.ride_ffi.accelBoundsMps2
-import uniffi.ride_ffi.accelEdgeColorArgb
-import uniffi.ride_ffi.speedEdgeColorArgb
-import uniffi.ride_ffi.speedScaleBandsKmh
-import uniffi.ride_ffi.speedScaleForTopSpeed
-import uniffi.ride_ffi.speedScaleName
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -42,10 +40,13 @@ import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.FolderOverlay
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Polyline
-import java.io.File
-import java.text.DateFormat
-import java.util.Date
-import kotlin.math.hypot
+import uniffi.ride_ffi.SpeedScale
+import uniffi.ride_ffi.accelBoundsMps2
+import uniffi.ride_ffi.accelEdgeColorArgb
+import uniffi.ride_ffi.speedEdgeColorArgb
+import uniffi.ride_ffi.speedScaleBandsKmh
+import uniffi.ride_ffi.speedScaleForTopSpeed
+import uniffi.ride_ffi.speedScaleName
 
 /**
  * The live map: the current recording's GPS path colored by speed or acceleration, following the newest fix.
@@ -64,14 +65,14 @@ fun LiveMapScreen(onBack: () -> Unit) {
         ScaleInfo(chosenScale ?: speedScaleForTopSpeed(points.mapNotNull { it.speedMps }.maxOrNull()))
     } catch (e: Throwable) {
         Log.e("RideLogger", "speed scales failed", e)
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.safeDrawingPadding().padding(16.dp)) {
             HapticButton(onClick = onBack) { Text("Back") }
             Text("Map colors failed to load (recording still works):\n${Log.getStackTraceString(e)}")
         }
         return
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             HapticButton(onClick = onBack) { Text("Back") }
             HapticButton(onClick = { follow = true }, enabled = !follow) { Text("Follow") }
