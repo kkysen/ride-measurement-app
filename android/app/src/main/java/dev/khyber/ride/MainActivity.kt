@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -33,6 +34,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.khyber.ride.onedrive.OneDriveAuth
@@ -98,11 +100,27 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun EventButtons() {
         var note by remember { mutableStateOf("") }
-        var last by remember { mutableStateOf("") }
+        var last by remember { mutableStateOf("Nothing marked yet") }
+        // The mark "Undo" would undo, if any.
+        var undoable by remember { mutableStateOf<String?>(null) }
         fun add(kind: ManualEvent.Kind, label: String, text: String = "") {
-            last = if (RecorderService.addEvent(kind, text)) "Marked: $label" else "Not recording"
+            val ok = RecorderService.addEvent(kind, text)
+            last = if (ok) "Marked: $label" else "Not recording"
+            undoable = if (ok) label else null
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // At the top and one line always, so it can't move the buttons below.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(last, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                HapticButton(
+                    onClick = {
+                        val label = undoable ?: return@HapticButton
+                        last = if (RecorderService.addEvent(ManualEvent.Kind.KIND_UNDO, label)) "Undid: $label" else "Not recording"
+                        undoable = null
+                    },
+                    enabled = undoable != null,
+                ) { Text("Undo") }
+            }
             Text(
                 "Tap these as things happen: each marks the moment in the recording, " +
                     "so speeds can be matched to real events afterwards.",
@@ -143,10 +161,9 @@ class MainActivity : ComponentActivity() {
                 "The train is at a station: type its name below first, so the ride can be matched to the map.",
                 style = MaterialTheme.typography.bodySmall,
             )
-            OutlinedTextField(note, { note = it }, label = { Text("Station name or note (optional)") })
+            OutlinedTextField(note, { note = it }, label = { Text("Station name or note (optional)") }, singleLine = true)
             HapticButton(onClick = { add(ManualEvent.Kind.KIND_NOTE, "note", note).also { note = "" } }) { Text("Add note") }
             Text("Anything else worth knowing later, e.g. \"screen on for beacons\" or \"phone in pocket\".", style = MaterialTheme.typography.bodySmall)
-            if (last.isNotEmpty()) Text(last)
         }
     }
 
@@ -194,93 +211,103 @@ class MainActivity : ComponentActivity() {
         var oneDriveStatus by remember { mutableStateOf(if (auth.signedIn) "OneDrive: signed in" else "OneDrive: not signed in") }
         val scope = rememberCoroutineScope()
 
-        Column(
-            Modifier.padding(24.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            if (!Environment.isExternalStorageManager()) {
+        if (!Environment.isExternalStorageManager()) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text("Recordings are kept in shared storage so an uninstall can't delete them; this needs all-files access.")
                 HapticButton(onClick = {
                     startActivity(
                         Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")),
                     )
                 }) { Text("Grant all-files access") }
-                return@Column
             }
+            return
+        }
 
-            if (!getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)) {
-                Text("Battery optimization can stop recording mid-ride; exempting this app makes that much less likely.")
-                HapticButton(onClick = {
-                    startActivity(
-                        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")),
-                    )
-                }) { Text("Don't optimize battery for this app") }
-            }
-
-            if (checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                Text("If Android stops and restarts recording, it can only use location with \"Allow all the time\".")
-                HapticButton(onClick = { backgroundLocation.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION) }) {
-                    Text("Allow location all the time")
+        // Two panes that each scroll on their own, so that text changing size in one,
+        // like a new problem or another line of speed details, never moves a button in the other under a finger.
+        Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+            Column(
+                Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                // First, so nothing above them can push them down.
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HapticButton(onClick = {
+                        if (state.recording) RecorderService.stop(this@MainActivity) else RecorderService.start(this@MainActivity)
+                    }) { Text(if (state.recording) "Stop" else "Start") }
+                    HapticButton(onClick = onShowMap) { Text("Map") }
+                    HapticButton(onClick = onShowRides) { Text("Past rides") }
                 }
-            }
 
-            var audio by remember { mutableStateOf(AudioStreamRecorder.enabled(this@MainActivity)) }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Switch(
-                    checked = audio,
-                    enabled = !state.recording,
-                    onCheckedChange = {
-                        audio = it
-                        AudioStreamRecorder.setEnabled(this@MainActivity, it)
-                    },
-                )
-                Text("Record audio (lossless, ~100 MB/h; also records conversations nearby)")
-            }
+                if (!getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)) {
+                    Text("Battery optimization can stop recording mid-ride; exempting this app makes that much less likely.")
+                    HapticButton(onClick = {
+                        startActivity(
+                            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")),
+                        )
+                    }) { Text("Don't optimize battery for this app") }
+                }
 
-            Units.Settings()
-
-            Text(if (state.recording) "Recording ${state.sessionId}" else "Not recording")
-            state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            // Parts that failed while everything else kept recording (see `Health`).
-            val problems by Health.problems.collectAsStateWithLifecycle()
-            if (problems.isNotEmpty()) {
-                Text(
-                    "Not recording fully:\n" + problems.entries.joinToString("\n") { (source, p) ->
-                        "$source: ${p.message}" + if (p.count > 1) " (${p.count} times)" else ""
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            HapticButton(onClick = {
-                if (state.recording) RecorderService.stop(this@MainActivity) else RecorderService.start(this@MainActivity)
-            }) { Text(if (state.recording) "Stop" else "Start") }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                HapticButton(onClick = onShowMap) { Text("Map") }
-                HapticButton(onClick = onShowRides) { Text("Past rides") }
-            }
-
-            if (state.recording) SpeedDisplay()
-            if (state.recording) EventButtons()
-
-            Text(if (auth.configured) oneDriveStatus else "OneDrive: no client ID in this build")
-            if (auth.configured) {
-                HapticButton(onClick = {
-                    scope.launch {
-                        try {
-                            val code = withContext(Dispatchers.IO) { auth.startDeviceCode() }
-                            oneDriveStatus = "Go to ${code.verificationUri} and enter ${code.userCode}"
-                            withContext(Dispatchers.IO) { auth.awaitDeviceCode(code) }
-                            oneDriveStatus = "OneDrive: signed in"
-                            RecompressWorker.enqueueThenUpload(this@MainActivity)
-                        } catch (e: Exception) {
-                            oneDriveStatus = "OneDrive sign-in failed: ${e.message}"
-                        }
+                if (checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                    Text("If Android stops and restarts recording, it can only use location with \"Allow all the time\".")
+                    HapticButton(onClick = { backgroundLocation.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION) }) {
+                        Text("Allow location all the time")
                     }
-                }) { Text(if (auth.signedIn) "Sign in again" else "Sign in to OneDrive") }
-                HapticButton(onClick = { RecompressWorker.enqueueThenUpload(this@MainActivity) }) { Text("Upload now") }
+                }
+
+                var audio by remember { mutableStateOf(AudioStreamRecorder.enabled(this@MainActivity)) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Switch(
+                        checked = audio,
+                        enabled = !state.recording,
+                        onCheckedChange = {
+                            audio = it
+                            AudioStreamRecorder.setEnabled(this@MainActivity, it)
+                        },
+                    )
+                    Text("Record audio (lossless, ~100 MB/h; also records conversations nearby)")
+                }
+
+                Units.Settings()
+
+                Text(if (state.recording) "Recording ${state.sessionId}" else "Not recording")
+                state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                // Parts that failed while everything else kept recording (see `Health`).
+                val problems by Health.problems.collectAsStateWithLifecycle()
+                if (problems.isNotEmpty()) {
+                    Text(
+                        "Not recording fully:\n" + problems.entries.joinToString("\n") { (source, p) ->
+                            "$source: ${p.message}" + if (p.count > 1) " (${p.count} times)" else ""
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (state.recording) SpeedDisplay()
+
+                Text(if (auth.configured) oneDriveStatus else "OneDrive: no client ID in this build")
+                if (auth.configured) {
+                    HapticButton(onClick = {
+                        scope.launch {
+                            try {
+                                val code = withContext(Dispatchers.IO) { auth.startDeviceCode() }
+                                oneDriveStatus = "Go to ${code.verificationUri} and enter ${code.userCode}"
+                                withContext(Dispatchers.IO) { auth.awaitDeviceCode(code) }
+                                oneDriveStatus = "OneDrive: signed in"
+                                RecompressWorker.enqueueThenUpload(this@MainActivity)
+                            } catch (e: Exception) {
+                                oneDriveStatus = "OneDrive sign-in failed: ${e.message}"
+                            }
+                        }
+                    }) { Text(if (auth.signedIn) "Sign in again" else "Sign in to OneDrive") }
+                    HapticButton(onClick = { RecompressWorker.enqueueThenUpload(this@MainActivity) }) { Text("Upload now") }
+                }
+                Text("App ${BuildConfig.VERSION_NAME}, " + rustCoreStatus, style = MaterialTheme.typography.bodySmall)
             }
-            Text("App ${BuildConfig.VERSION_NAME}, " + rustCoreStatus, style = MaterialTheme.typography.bodySmall)
+            if (state.recording) {
+                HorizontalDivider()
+                Column(Modifier.weight(2f).verticalScroll(rememberScrollState()).padding(vertical = 16.dp)) { EventButtons() }
+            }
         }
     }
 }

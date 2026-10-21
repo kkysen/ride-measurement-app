@@ -305,6 +305,9 @@ message ManualEvent {
     // Tapped the moment the train comes to a stop, and the moment it starts moving again.
     KIND_TRAIN_STOPPED = 7;
     KIND_TRAIN_STARTED = 8;
+    // Tapped right after a mistaken mark: the mark before it was wrong.
+    // Both stay recorded, so nothing is lost; `text` names the mark it undoes.
+    KIND_UNDO = 9;
   }
   Kind kind = 1;
   string text = 2;
