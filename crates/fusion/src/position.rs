@@ -754,7 +754,10 @@ mod tests {
         f.on_input(0, &fix(&plane, [0.0, 0.0]));
         f.on_input(S, &fix(&plane, [10.0, 0.0]));
         for t in 2..60 {
-            f.on_input(t * S, &PositionInput::Speed(if t < 30 { 10.0 } else { 0.0 }, 0.1));
+            f.on_input(
+                t * S,
+                &PositionInput::Speed(if t < 30 { 10.0 } else { 0.0 }, 0.1),
+            );
         }
         let mut last = None;
         for t in 60..80 {
@@ -762,7 +765,10 @@ mod tests {
             last = f.on_input(t * S, &PositionInput::Sample);
         }
         assert_eq!(f.resets, 1);
-        assert!(error_m(&plane, &last.unwrap(), [-210.0, 0.0]) < 5.0, "{last:?}");
+        assert!(
+            error_m(&plane, &last.unwrap(), [-210.0, 0.0]) < 5.0,
+            "{last:?}"
+        );
     }
 
     #[test]
