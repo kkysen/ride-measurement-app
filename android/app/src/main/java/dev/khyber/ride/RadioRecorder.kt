@@ -277,4 +277,5 @@ private fun android.net.wifi.ScanResult.toProto(): WifiResult = WifiResult.newBu
     .setTimestampUs(timestamp)
     .setChannelWidth(channelWidth)
     .setWifiStandard(wifiStandard)
+    .setIs80211McResponder(is80211mcResponder)
     .build()

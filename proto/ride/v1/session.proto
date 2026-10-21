@@ -289,6 +289,8 @@ message WifiResult {
   int64 timestamp_us = 5;
   int32 channel_width = 6;
   int32 wifi_standard = 7;
+  // `is80211mcResponder()`: the access point answers Wi-Fi round-trip-time ranging (meter-level distance).
+  bool is_80211mc_responder = 8;
 }
 
 message ManualEvent {
