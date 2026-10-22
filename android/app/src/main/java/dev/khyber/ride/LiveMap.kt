@@ -119,7 +119,9 @@ fun LiveMapScreen(onBack: () -> Unit) {
                     try {
                         track.sync(points, scale.scale, colorByAccel)
                         val last = points.lastOrNull()
-                        if (follow && last != null) view.controller.animateTo(GeoPoint(last.lat, last.lon))
+                        // Pans only once the newest fix nears the edge, so the map isn't always moving and
+                        // cancelling tiles that are still loading.
+                        if (follow && last != null && !nearCenter(view, last)) view.controller.animateTo(GeoPoint(last.lat, last.lon))
                         view.invalidate()
                     } catch (e: Throwable) {
                         Log.e("RideLogger", "map update failed", e)
@@ -129,6 +131,15 @@ fun LiveMapScreen(onBack: () -> Unit) {
             )
         }
     }
+}
+
+/** Whether a point is in the middle 60% of the visible map, both ways. */
+private fun nearCenter(view: MapView, p: LiveTrack.Point): Boolean {
+    val box = view.boundingBox
+    if (box.latitudeSpan <= 0.0 || box.longitudeSpanWithDateLine <= 0.0) return false
+    val y = (box.latNorth - p.lat) / box.latitudeSpan
+    val x = (p.lon - box.lonWest) / box.longitudeSpanWithDateLine
+    return x in 0.2..0.8 && y in 0.2..0.8
 }
 
 private fun describe(p: LiveTrack.Point?, latest: Boolean): String {
@@ -192,6 +203,9 @@ private class TrackOverlays {
     val casings = FolderOverlay()
     val colored = FolderOverlay()
     private var drawn = emptyList<LiveTrack.Point>()
+    /** After each drawn point: how many overlays there were, and how many points the open lines had. */
+    private data class Mark(val gaps: Int, val casings: Int, val colored: Int, val casingPoints: Int, val linePoints: Int, val lineColor: Int)
+    private val marks = ArrayList<Mark>()
     private var scale: SpeedScale? = null
     private var byAccel = false
     private var casing: Polyline? = null
@@ -199,19 +213,47 @@ private class TrackOverlays {
     private var lineColor = 0
 
     fun sync(points: List<LiveTrack.Point>, scale: SpeedScale, byAccel: Boolean) {
-        // A new recording, smoothing changed speeds already drawn, a faster top speed moved the ride to a wider
-        // scale, or switching between speed and acceleration: start over. Otherwise only the new points are added.
-        val restart = points.size < drawn.size || points.subList(0, drawn.size) != drawn
-        if (restart || scale != this.scale || byAccel != this.byAccel) {
+        // A faster top speed moved the ride to a wider scale, or switching between speed and acceleration:
+        // start over. Otherwise the path is redrawn from the first point that changed (smoothing changes only the
+        // last few minutes' speeds; a new recording changes the first), and new points are added.
+        if (scale != this.scale || byAccel != this.byAccel) {
             this.scale = scale
             this.byAccel = byAccel
+            truncate(0)
+        }
+        var same = 0
+        val n = minOf(points.size, drawn.size)
+        while (same < n && points[same] == drawn[same]) same++
+        if (same < drawn.size) truncate(same)
+        for (i in drawn.size until points.size) {
+            add(points.getOrNull(i - 1), points[i])
+            marks.add(Mark(gaps.items.size, casings.items.size, colored.items.size, casing?.actualPoints?.size ?: 0, line?.actualPoints?.size ?: 0, lineColor))
+        }
+        drawn = points
+    }
+
+    /** Back to just after the first `n` points were drawn. */
+    private fun truncate(n: Int) {
+        val m = marks.getOrNull(n - 1)
+        if (m == null) {
             listOf(gaps, casings, colored).forEach { it.items.clear() }
+            marks.clear()
             drawn = emptyList()
             casing = null
             line = null
+            return
         }
-        for (i in drawn.size until points.size) add(points.getOrNull(i - 1), points[i])
-        drawn = points
+        fun FolderOverlay.keep(k: Int) {
+            while (items.size > k) items.removeAt(items.size - 1)
+        }
+        gaps.keep(m.gaps)
+        casings.keep(m.casings)
+        colored.keep(m.colored)
+        casing = (casings.items.lastOrNull() as Polyline?)?.also { it.setPoints(it.actualPoints.take(m.casingPoints)) }
+        line = if (m.linePoints == 0) null else (colored.items.lastOrNull() as Polyline?)?.also { it.setPoints(it.actualPoints.take(m.linePoints)) }
+        lineColor = m.lineColor
+        while (marks.size > n) marks.removeAt(marks.size - 1)
+        drawn = drawn.subList(0, n)
     }
 
     private fun add(prev: LiveTrack.Point?, p: LiveTrack.Point) {
