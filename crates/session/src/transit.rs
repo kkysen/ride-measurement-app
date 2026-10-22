@@ -21,6 +21,11 @@ pub struct Poll {
     pub feed: Option<FeedMessage>,
 }
 
+/// A feed body, if it decodes.
+pub fn decode(body: &[u8]) -> Option<FeedMessage> {
+    FeedMessage::decode(body).ok()
+}
+
 /// Every recorded poll, in order. A session from before this stream existed has none.
 pub fn polls(session: &Session) -> anyhow::Result<Vec<Poll>> {
     if !session.stream_path(STREAM).exists() {
@@ -34,9 +39,7 @@ pub fn polls(session: &Session) -> anyhow::Result<Vec<Poll>> {
         .filter_map(|r| match r.payload {
             Some(Payload::GtfsRealtime(f)) => Some(Poll {
                 received_ns: r.received_elapsed_realtime_ns,
-                feed: (f.http_status == 200)
-                    .then(|| FeedMessage::decode(&f.body[..]).ok())
-                    .flatten(),
+                feed: (f.http_status == 200).then(|| decode(&f.body)).flatten(),
                 url: f.url,
                 request_unix_ms: f.request_unix_ms,
                 http_status: f.http_status,
