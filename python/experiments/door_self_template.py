@@ -3,7 +3,13 @@ in `target/doors/`) has a closing that's sure and an opening that isn't, since s
 closing. The doors' own opening sound repeats within a ride (`door_template.py`), so: average the onset spectrograms
 at every candidate step up, pick each cycle's best match, re-average from the picks, and repeat.
 Scores the picked openings against the rider's "doors open" taps (which only score), against the earliest and latest
-candidates."""
+candidates.
+
+Result on all 9 subway rides with door cycles (2026-10-22), 60 "doors open" taps, within 3 s:
+learned 30, any candidate 33, latest 17, earliest 7. Given a candidate at the opening, the learned sound picks it
+30 times in 33; but the 1 to 4 kHz step up misses 27 of the 60 openings altogether. Not ported to `doors.rs`:
+the closing alone sets the stop, and an opening at speed would zero the speed wrongly. Next: a better step-up finder.
+"""
 
 import sys
 from pathlib import Path
@@ -15,7 +21,7 @@ import doors as D  # noqa: E402
 import door_template as T  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-RIDES = ["135509", "154951", "184134", "214427", "155919", "182135", "215922"]
+RIDES = ["135509", "154951", "184134", "214427", "155919", "182135", "215922", "151449", "151825"]
 
 
 def candidates(t, lv, close):
