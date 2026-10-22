@@ -34,6 +34,11 @@ object LiveSpeed {
     val error: StateFlow<String?> = _error
 
     private var lateInputs = 0uL
+
+    /** The last position from GPS or Android's own location (lat, lon), for which transit feeds to record. */
+    @Volatile
+    var lastPosition: Pair<Double, Double>? = null
+        private set
     private var reminder: StayReminder? = null
 
     private val publish = object : Runnable {
@@ -102,6 +107,7 @@ object LiveSpeed {
         _status.value = null
         reminder?.cancel()
         reminder = null
+        lastPosition = null
     }
 
     /** A batch of one sensor's samples, from its recorder's thread. Rust decides what to use. */
@@ -116,6 +122,7 @@ object LiveSpeed {
         val t = location.elapsedRealtimeNanos
         val lat = location.latitude
         val lon = location.longitude
+        lastPosition = lat to lon
         val altitude = if (location.hasAltitude()) location.altitude else null
         val accuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else null
         val speed = if (location.hasSpeed()) location.speed.toDouble() else null
@@ -147,6 +154,7 @@ object LiveSpeed {
         val t = location.elapsedRealtimeNanos
         val lat = location.latitude
         val lon = location.longitude
+        lastPosition = lat to lon
         val accuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else null
         h.post { safely { fusion?.onNetworkFix(t, lat, lon, accuracy) } }
     }

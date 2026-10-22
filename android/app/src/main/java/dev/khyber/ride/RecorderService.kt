@@ -39,6 +39,7 @@ class RecorderService : Service() {
     private var recordStreams: List<RecordStreamRecorder> = emptyList()
     private var gnssRecorder: GnssRecorder? = null
     private var orbitFetcher: OrbitFetcher? = null
+    private var gtfsRtFetcher: GtfsRtFetcher? = null
     private var radioRecorder: RadioRecorder? = null
     private var bleRecorder: BleRecorder? = null
     private var audioRecorder: AudioStreamRecorder? = null
@@ -127,7 +128,8 @@ class RecorderService : Service() {
         val events = records("events")
         Health.events = events
         val radio = records("radio")
-        recordStreams = listOfNotNull(events, radio)
+        val transit = records("transit")
+        recordStreams = listOfNotNull(events, radio, transit)
         if (locationAllowed) {
             val gnss = records("gnss")
             val locations = records("location")
@@ -168,6 +170,7 @@ class RecorderService : Service() {
         LiveTrack.reset()
         LiveSpeed.start(this)
         orbitFetcher = Health.guard("orbits") { OrbitFetcher(dir) }
+        if (transit != null) gtfsRtFetcher = Health.guard("gtfs-rt") { GtfsRtFetcher(this, transit) }
         recorders.forEach { r -> Health.guard("sensor ${r.name}") { r.start() } }
         Health.guard("gnss") { gnssRecorder?.start() }
         Health.guard("radio") { radioRecorder?.start() }
@@ -199,6 +202,8 @@ class RecorderService : Service() {
         audioRecorder = null
         Health.guard("stop orbits") { orbitFetcher?.stop() }
         orbitFetcher = null
+        Health.guard("stop gtfs-rt") { gtfsRtFetcher?.stop() }
+        gtfsRtFetcher = null
         Health.guard("stop live speed") { LiveSpeed.stop() }
         recorders.forEach { r -> Health.guard("stop sensor ${r.name}") { r.beginStop() } }
         recorders.forEach { r -> Health.guard("stop sensor ${r.name}") { r.stop() } }
