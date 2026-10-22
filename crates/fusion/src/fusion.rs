@@ -483,6 +483,8 @@ pub struct Fusion {
     /// Door cycles from the microphone, if it's fed; and those found so far.
     doors: Option<DoorDetector>,
     door_cycles: Vec<DoorCycle>,
+    /// Each confirmed door chime: its time and pitch family.
+    chimes: Vec<(i64, ChimeCars)>,
     /// The train's stops from its motion (see [`crate::stops`]), with the station named when each was found,
     /// and its departures.
     stop_detector: StopDetector,
@@ -553,6 +555,7 @@ impl Fusion {
             last_gyro_ns: None,
             doors: None,
             door_cycles: Vec::new(),
+            chimes: Vec::new(),
             stop_detector: StopDetector::new(),
             train_stops: Vec::new(),
             departures: Vec::new(),
@@ -686,6 +689,11 @@ impl Fusion {
         }
     }
 
+    /// The door chimes a closing confirmed so far, with their pitch family.
+    pub fn chimes(&self) -> &[(i64, ChimeCars)] {
+        &self.chimes
+    }
+
     /// The door cycles found so far.
     pub fn door_cycles(&self) -> &[DoorCycle] {
         &self.door_cycles
@@ -807,7 +815,13 @@ impl Fusion {
             return;
         }
         if let (Pending::Audio(a), Some(doors)) = (&input, &mut self.doors) {
-            for cycle in doors.on_audio(a.first_frame, &a.samples, &a.timestamps) {
+            let cycles = doors.on_audio(a.first_frame, &a.samples, &a.timestamps);
+            if let Some(c) = doors.last_chime() {
+                if self.chimes.last() != Some(&c) {
+                    self.chimes.push(c);
+                }
+            }
+            for cycle in cycles {
                 self.on_door_cycle(t_ns, cycle);
             }
             return;

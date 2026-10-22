@@ -19,6 +19,8 @@ pub struct Replay {
     pub positions: Vec<crate::position::PositionEstimate>,
     /// Door cycles heard, if the session has audio.
     pub door_cycles: Vec<DoorCycle>,
+    /// Door chimes a closing confirmed, with their pitch family.
+    pub chimes: Vec<(i64, crate::doors::ChimeCars)>,
     /// The train's stops, with dwell and the doors' times (see [`crate::fusion::StopRecord`]).
     pub stops: Vec<crate::fusion::StopRecord>,
     /// The train's start surges (see [`crate::stops`]).
@@ -285,6 +287,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
         gnss: fusion.navigator().stats.clone(),
         positions: fusion.positions(),
         door_cycles: fusion.door_cycles().to_vec(),
+        chimes: fusion.chimes().to_vec(),
         stops: fusion.stop_records(),
         departures: fusion.departures().to_vec(),
         step_windows: fusion.step_windows().to_vec(),
