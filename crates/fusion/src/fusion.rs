@@ -98,6 +98,19 @@ const ALIGHT_OF: usize = 4;
 const PLATFORM_WINDOWS: usize = 3;
 const PLATFORM_BEFORE_S: f64 = 24.0;
 const PLATFORM_LAST_S: f64 = 8.0;
+/// A stop the lurch detector missed, found from the rider walking off: in the subway, a departure after at least
+/// [`MISSED_STOP_WALK_WINDOWS`] step windows (24 s, more than the rider walks along a moving train), starting with a
+/// walk off ([`ALIGHT_WINDOWS`] of [`ALIGHT_OF`]), riding before it (a departure, with no stop found from it, nor from
+/// [`MISSED_STOP_LOOKBACK_S`] before the walk, to the departure). Without the riding, walks into a station to board
+/// (`20261021-155919`, 4:00 pm; `20261020-214427`, 9:44 pm) and a wait on a platform (`20261021-215922`, 10:14 pm)
+/// came out as stops. The train stopped [`ALIGHT_AFTER_STOP_S`] before the walk began: at 96 St on
+/// `20261021-215922` (10:37 pm, a 3 to 1 transfer across the platform), tapped stopped 10:37:17 and off 10:37:23,
+/// with no lurch found, the speed ran on at 40 mph while the rider walked the platform.
+/// Its record's score is [`MISSED_STOP_SCORE`].
+const MISSED_STOP_WALK_WINDOWS: usize = 6;
+const MISSED_STOP_LOOKBACK_S: f64 = 60.0;
+const ALIGHT_AFTER_STOP_S: f64 = 6.0;
+pub const MISSED_STOP_SCORE: f64 = 0.0;
 
 /// One stop of the train, for later analyses: dwell, and the doors' times. A stop with no door cycle is a
 /// tunnel stop, or one whose doors weren't heard.
@@ -896,6 +909,15 @@ impl Fusion {
             match event {
                 train_stops::Event::Stopped(stop) => self.on_train_stop(t_ns, stop),
                 train_stops::Event::Departed(at) => {
+                    if self.context.in_subway
+                        && let Some(stop) =
+                            missed_stop(&self.step_windows, &self.train_stops, &self.departures, at)
+                    {
+                        let station = self.station_now(stop.t_ns);
+                        self.train_stops.push((stop, station, true));
+                        let from = stop.standing_ns();
+                        self.hold_standing(t_ns, from, from + (STOP_STANDING_S * 1e9) as i64);
+                    }
                     self.departures.push(at);
                     self.confirm_stops(t_ns, at);
                 }
@@ -1542,9 +1564,11 @@ fn stop_records(
 ) -> Vec<StopRecord> {
     let s_ns = |s: f64| (s * 1e9) as i64;
     type Found = (train_stops::Stop, Option<&'static Station>, bool);
-    let (fades, stops): (Vec<&Found>, Vec<&Found>) = train_stops
+    let (fades, mut stops): (Vec<&Found>, Vec<&Found>) = train_stops
         .iter()
         .partition(|(stop, ..)| departure_fade(stop, door_cycles));
+    // A missed stop is found at the departure after it, so it can come after later stops.
+    stops.sort_by_key(|(stop, ..)| stop.t_ns);
     // A departure's fading pull began as it pulled away, when its start surge was missed (Grand Central,
     // `20261020-151449`, 3:44 pm).
     let mut departures = surges.to_vec();
@@ -1634,6 +1658,50 @@ fn stop_records(
         });
     }
     out
+}
+
+/// The stop before the departure at `departure` that the lurch detector missed, found from the rider walking off
+/// (see [`MISSED_STOP_WALK_WINDOWS`]), if any.
+fn missed_stop(
+    step_windows: &[(i64, bool)],
+    train_stops: &[(train_stops::Stop, Option<&'static Station>, bool)],
+    departures: &[i64],
+    departure: i64,
+) -> Option<train_stops::Stop> {
+    let s_ns = |s: f64| (s * 1e9) as i64;
+    let window_ns = s_ns(WALK_WINDOW_S);
+    let since = departure - s_ns(RECORD_MAX_DWELL_S);
+    let windows: Vec<(i64, bool)> = step_windows
+        .iter()
+        .copied()
+        .filter(|&(t, _)| t > since && t <= departure)
+        .collect();
+    let walk_start = windows.windows(ALIGHT_OF).find_map(|w| {
+        (w.iter().filter(|(_, steps)| *steps).count() >= ALIGHT_WINDOWS)
+            .then(|| w.iter().find(|(_, steps)| *steps).unwrap().0 - window_ns)
+    })?;
+    let walked = windows
+        .iter()
+        .filter(|&&(t, steps)| steps && t > walk_start)
+        .count();
+    let stop_ns = walk_start - s_ns(ALIGHT_AFTER_STOP_S);
+    // Riding up to the walk: a departure before it, with no stop since (not walking into the station to board).
+    let rode_from = departures
+        .iter()
+        .copied()
+        .filter(|&d| d > walk_start - s_ns(RECORD_MAX_DWELL_S) && d < walk_start)
+        .max()?;
+    let found = train_stops.iter().any(|(s, ..)| {
+        s.t_ns > rode_from.min(walk_start - s_ns(MISSED_STOP_LOOKBACK_S)) && s.t_ns < departure
+    });
+    let departed_between = departures.iter().any(|&d| d > stop_ns && d < departure);
+    (walked >= MISSED_STOP_WALK_WINDOWS && !found && !departed_between).then_some(
+        train_stops::Stop {
+            t_ns: stop_ns,
+            score: MISSED_STOP_SCORE,
+            braking_since_ns: stop_ns,
+        },
+    )
 }
 
 /// The rider's car is the strongest car beacon over this long (s) before stepping off or after boarding.
@@ -1791,6 +1859,31 @@ mod tests {
         );
         assert!(!r[0].rider_left());
         assert!((r[0].dwell_s().unwrap() - 30.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_missed_stop_is_found_from_walking_off() {
+        // 96 St, `20261021-215922`: off at 100 s, 40 s of walking, standing, on with steps to 200 s, away at 210 s.
+        let mut w = windows(0, 300, 104..144);
+        w.iter_mut()
+            .filter(|(t, _)| *t == 196 * S || *t == 200 * S)
+            .for_each(|(_, s)| *s = true);
+        let found = missed_stop(&w, &[], &[30 * S], 210 * S).unwrap();
+        assert_eq!(found.t_ns, 94 * S);
+        assert_eq!(found.score, MISSED_STOP_SCORE);
+        let r = stop_records(&[(found, None, true)], &[], &[210 * S], &w);
+        assert_eq!(r[0].alighted_ns, Some(100 * S));
+        assert_eq!(r[0].boarded_ns, Some(200 * S));
+        assert!(r[0].rider_left());
+        // Not when the stop was found, nor for a short walk along the train.
+        assert_eq!(missed_stop(&w, &[stop(90)], &[30 * S], 210 * S), None);
+        // Nor walking into the station to board: no ride before the walk, or a stop after the last departure.
+        assert_eq!(missed_stop(&w, &[], &[], 210 * S), None);
+        assert_eq!(missed_stop(&w, &[stop(50)], &[30 * S], 210 * S), None);
+        assert_eq!(
+            missed_stop(&windows(0, 300, 104..120), &[], &[30 * S], 210 * S),
+            None
+        );
     }
 
     #[test]
