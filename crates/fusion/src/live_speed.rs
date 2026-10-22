@@ -147,9 +147,7 @@ pub const SUBWAY_MAX_SPEED_MPS: f64 = 55.0 * 0.44704;
 pub fn subway_accel_limits(speed_mps: f64) -> (f64, f64) {
     ((11.0 / speed_mps.max(1e-3)).min(1.6), 1.5)
 }
-/// The window (s) [`subway_accel_limits`] bounds the speed's change over, so vibration within it averages out,
-/// and the slack (m/s) for the phone's noise over it.
-const ACCEL_LIMIT_WINDOW_S: f64 = 2.0;
+/// The slack (m/s) over [`subway_accel_limits`]'s ceiling, for the phone's noise.
 const ACCEL_LIMIT_SLACK_MPS: f64 = 0.3;
 /// Trains, buses, and planes in normal operation stay well under 1 g along the track,
 /// so a GNSS speed that would take more than this to reach from the previous plausible one is wrong.
@@ -303,8 +301,8 @@ pub struct LiveSpeedEstimator {
     max_speed_mps: Option<f64>,
     /// Whether time runs backward (the smoother's backward pass), where speeding up is braking.
     backward: bool,
-    /// The speed and its time at the start of the current window for [`subway_accel_limits`]; reset by measurements.
-    accel_ref: Option<(i64, f64)>,
+    /// The most the train could be going (m/s), from the last stop or GNSS speed (see [`Self::limit_accel`]).
+    ceiling_mps: Option<f64>,
     /// The steady cars' accelerometers, and the current comparison window: since when,
     /// and the phone's along-axis acceleration integrated over it.
     cars: Vec<CarAxis>,
@@ -360,7 +358,7 @@ impl Default for LiveSpeedEstimator {
             speed_refs: BTreeMap::new(),
             max_speed_mps: None,
             backward: false,
-            accel_ref: None,
+            ceiling_mps: None,
             cars: Vec::new(),
             window_ns: 0,
             window_along_sum: 0.0,
@@ -548,7 +546,7 @@ impl LiveSpeedEstimator {
             self.v += y;
             self.mark_used(Sensor::SpeedLimit, t_ns);
         }
-        self.limit_accel(t_ns);
+        self.limit_accel(t_ns, dt);
         self.along_since_gnss += along * dt;
         for c in &mut self.cars {
             c.pending_sum += along * dt;
@@ -985,36 +983,30 @@ impl LiveSpeedEstimator {
         false
     }
 
-    /// On the subway (its top speed is the bound), keeps the speed's rise since the window's start
-    /// within what a train can do, projecting back like [`Self::set_max_speed`]'s bound
-    /// (in the backward pass, rising is braking).
-    /// Bounding the fall as well held an estimate that had run up to the top speed there,
-    /// the backward pass's at 55 mph on `154951` with GNSS cut, unable to come back down.
-    fn limit_accel(&mut self, t_ns: i64) {
-        if self.max_speed_mps != Some(SUBWAY_MAX_SPEED_MPS) || !self.initialized {
-            self.accel_ref = None;
+    /// On the subway (its top speed is the bound), keeps the speed under the most a train could reach
+    /// since the last stop or GNSS speed: the ceiling starts there and rises along [`subway_accel_limits`],
+    /// and a speed over it is projected back like [`Self::set_max_speed`]'s bound.
+    /// In the backward pass, rising is braking, so it's the most the train could have braked from before a stop.
+    /// Only rising is bounded: an estimate that has run too high must stay free to come back down
+    /// (bounding the fall too held the backward pass's estimate at 55 mph on `154951` with GNSS cut).
+    fn limit_accel(&mut self, t_ns: i64, dt: f64) {
+        if self.max_speed_mps != Some(SUBWAY_MAX_SPEED_MPS) {
+            self.ceiling_mps = None;
             return;
         }
-        let speed = self.v.abs();
-        let Some((t0, v0)) = self.accel_ref else {
-            self.accel_ref = Some((t_ns, speed));
+        let Some(c) = self.ceiling_mps.as_mut() else {
             return;
         };
-        let dt = (t_ns - t0) as f64 * 1e-9;
-        let (motoring, braking) = subway_accel_limits(v0);
-        // Only rising is bounded: an estimate that has run too high must stay free to come back down.
-        let up = if self.backward { braking } else { motoring };
-        let bounded = speed.min(v0 + up * dt + ACCEL_LIMIT_SLACK_MPS);
-        if bounded != speed {
+        let (motoring, braking) = subway_accel_limits(*c);
+        *c += if self.backward { braking } else { motoring } * dt;
+        let bounded = self.v.abs().min(*c + ACCEL_LIMIT_SLACK_MPS);
+        if bounded != self.v.abs() {
             let y = self.v.signum() * bounded - self.v;
             if self.p00 > 0.0 {
                 self.b += self.p01 / self.p00 * y;
             }
             self.v += y;
             self.mark_used(Sensor::SpeedLimit, t_ns);
-        }
-        if dt >= ACCEL_LIMIT_WINDOW_S {
-            self.accel_ref = Some((t_ns, self.v.abs()));
         }
     }
 
@@ -1101,10 +1093,12 @@ impl LiveSpeedEstimator {
 
     fn mark_used(&mut self, sensor: Sensor, t_ns: i64) {
         self.last_used_ns.insert(sensor, t_ns);
-        // A measurement says where the speed is (a GNSS restart sets it outright),
-        // so the train's limits start again from there.
-        if !matches!(sensor, Sensor::Imu | Sensor::Car | Sensor::SpeedLimit) {
-            self.accel_ref = None;
+        // A stop or a GNSS speed (a GNSS restart sets it outright) says where the speed is,
+        // so the train's ceiling starts again from there; walking can happen in a moving car, so it doesn't.
+        match sensor {
+            Sensor::Stop | Sensor::Doors => self.ceiling_mps = Some(0.0),
+            Sensor::GnssDoppler | Sensor::GnssPosition => self.ceiling_mps = Some(self.v.abs()),
+            _ => {}
         }
     }
 
