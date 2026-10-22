@@ -58,6 +58,8 @@ pub fn car_model(line: &str) -> Option<&'static str> {
         "2" => "R142",
         "7" => "R188",
         "F" | "M" | "R" => "R160",
+        // Mostly R211s, with a few R179s.
+        "C" => "R211",
         _ => return None,
     })
 }
