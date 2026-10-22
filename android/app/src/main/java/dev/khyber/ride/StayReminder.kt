@@ -34,7 +34,7 @@ class StayReminder(private val context: Context) {
             NOTIFICATION_ID,
             Notification.Builder(context, CHANNEL_ID)
                 .setContentTitle("Still recording")
-                .setContentText("You've been in one place for %.0f minutes, not in the subway. Stop the recording?".format(stayingS / 60))
+                .setContentText("You've been in one place for ${clockDuration(stayingS)}, not in the subway. Stop the recording?")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(open)
                 .setAutoCancel(true)

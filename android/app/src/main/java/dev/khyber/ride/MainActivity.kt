@@ -101,7 +101,7 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            Text(estimate.sinceGnssS?.let { if (it < 3) "GNSS: live" else "no GNSS for %.0f s".format(it) } ?: "no GNSS fix yet")
+            Text(estimate.sinceGnssS?.let { if (it < 3) "GNSS: live" else "no GNSS for ${clockDuration(it)}" } ?: "no GNSS fix yet")
             if (estimate.rejected.isNotEmpty()) {
                 Text("rejected as outliers: " + estimate.rejected.joinToString { "${it.sensor.name.lowercase().replace('_', ' ')} ${it.count}" })
             }
