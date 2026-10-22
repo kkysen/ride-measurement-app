@@ -598,6 +598,11 @@ Open, roughly in order:
      on 2026-10-20 is train `07 1536+` in both sessions; the 2 (not 3) from 96 St on 2026-10-21 at 6:27 pm; the C
      (not B) from 110 St; the F from Queens Plaza. Short legs, lines sharing stops and minutes, platform waits,
      and legs without a detected walk between trains are still unsure or wrong.
+   - Mobile data is fine for now (the rider has unlimited data).
+   - Next: cross-platform transfers with little walking (e.g. 96 St, and `215922`'s 3 to 1 unsplit):
+     detect them by the car beacon set changing (the old train's cars fade, a new set appears), and on lines without
+     beacons by the chime family changing, an extra door cycle with no departure between, and the recorded GTFS-RT
+     feed showing which trains were at the station.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
