@@ -404,10 +404,29 @@ Open, roughly in order:
    - The home elevator stays offline: anywhere in a ride, 26 other 25 s height changes of 10 m or more barely
      shake (escalators, grades, tunnel pressure); only at a ride's end does it stand out.
    - Live map: redraws only what smoothing changed, pans only near the edge (`b5299a7`); tiles kept a month (`b2e2ac0`).
-   - Express passes, from the door cycles: none heard between the 59 St and 72 St taps on `214427`
-     (the 2 passed 59 St and 66 St; at 72 St two closings 15 s apart, the doors closing, reopening, closing),
-     and none between Jackson Hts and Queens Plaza on `184134`'s F.
-   Not started: hunting, OMNY with the stairs, elevated lines on the map.
+   - Express passes, from the door cycles: none heard on `214427`'s 2 from 42 St to 72 St (it ran express,
+     passing 50 St, 59 St, and 66 St, per the rider; at 72 St two closings 15 s apart, the doors closing, reopening,
+     closing), and none between Jackson Hts and Queens Plaza on `184134`'s F (correct, per the rider).
+   - Learned door openings: the one GNSS put at 25 mph was the 7 pulling into 61 St at 4:01:27 pm (GNSS likely
+     right; the rider tapped doors open 18 s later); a clip is in `target/clips/`, for the rider to listen to.
+
+10. 2026-10-22 night, 0.1.5 on the phone (installed 2026-10-22 3:55 am):
+   - The bus out of Port Authority (`20261022-002914`): a moving fix now ends the subway Wi-Fi's hold, and no fix
+     counts as underground only with a traction-current burst (|B| std over 10 uT, without a fix, in 90 s);
+     elevated track (`open_track.py`, GTFS shapes between above-ground stations) brings elevated lines back.
+     Underground train time stays all subway; the bus and the Lincoln Tunnel are no longer subway.
+   - Walking needs 24 s of steps (the rider sometimes walks a few cars on a moving train); running holds 3 m/s.
+   - Stations from the registered cell (`station_cells.py`, from the rider's "at station" tags; 52 cells,
+     37 stations). Tags made while passing may be a station off: the rider is reviewing the table.
+   - The main screen shows the mode (walking, running, still, subway under or above ground, other vehicle), the
+     station, and the car type from the chime; a notification after 10 minutes staying put out of the subway.
+   - OMNY: a beep with stairs within 45 s keeps all 4 known taps and drops 38 beeps to 21 (`omny_stairs.py`).
+   - Stairs or riding up (`elevator.py`'s `moves`): steps during are stairs, none during but walking just before is
+     riding; an escalator can't yet be told from an elevator (both about 0.5 m/s, both walked onto).
+   - Hunting (`hunting.py`): sideways over vertical power tells a train from walking (AUC 0.86), not motion.
+   - Oct 20, 4:27 pm: the 102 mph was the rider indoors in Flushing for 4 minutes (fixes before and after within
+     10 m); next: a gap's displacement as a constraint for the smoother.
+   Next: the rider's corrections to the station table; pin positions at stations; the elevator's jolts.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
