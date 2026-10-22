@@ -126,14 +126,14 @@ fn main() -> anyhow::Result<()> {
     let mut f = std::fs::File::create(out.join("stops.csv"))?;
     writeln!(
         f,
-        "stopped_ns,score,in_subway,station,doors_open_ns,doors_open_heard,doors_closed_ns,departed_ns,dwell_s,doors_open_s"
+        "stopped_ns,score,in_subway,station,doors_open_ns,doors_open_heard,doors_closed_ns,departed_ns,on_platform,alighted_ns,boarded_ns,dwell_s,doors_open_s"
     )?;
     let opt = |v: Option<i64>| v.map_or(String::new(), |v| v.to_string());
     let opt_s = |v: Option<f64>| v.map_or(String::new(), |v| format!("{v:.1}"));
     for s in &r.stops {
         writeln!(
             f,
-            "{},{:.2},{},{},{},{},{},{},{},{}",
+            "{},{:.2},{},{},{},{},{},{},{},{},{},{},{}",
             s.stopped_ns,
             s.score,
             s.in_subway,
@@ -142,9 +142,23 @@ fn main() -> anyhow::Result<()> {
             s.doors_open_heard,
             opt(s.doors_closed_ns),
             opt(s.departed_ns),
+            s.on_platform,
+            opt(s.alighted_ns),
+            opt(s.boarded_ns),
             opt_s(s.dwell_s()),
             opt_s(s.doors_open_s()),
         )?;
+    }
+    write_tapped_stops(out, &s, &r.stops)?;
+    let mut f = std::fs::File::create(out.join("departures.csv"))?;
+    writeln!(f, "t_ns")?;
+    for t in &r.departures {
+        writeln!(f, "{t}")?;
+    }
+    let mut f = std::fs::File::create(out.join("steps.csv"))?;
+    writeln!(f, "t_ns,steps")?;
+    for (t, steps) in &r.step_windows {
+        writeln!(f, "{t},{steps}")?;
     }
     let mut f = std::fs::File::create(out.join("fused.csv"))?;
     writeln!(f, "t_ns,speed,sigma,forward,backward,accel")?;
@@ -158,6 +172,149 @@ fn main() -> anyhow::Result<()> {
             x.forward_mps,
             x.backward_mps,
             x.accel_mps2
+        )?;
+    }
+    Ok(())
+}
+
+/// The stops as the rider's taps tell them, offline only (taps never feed fusion): each "train stopped" tap starts
+/// one, filled from the taps up to the next (the last "doors closed" before "train started", since a door closing
+/// and reopening was sometimes tapped twice); "alighted" then "boarded" is a transfer. Each tapped stop is matched
+/// to the sensors' record within [`MATCH_S`], whose times fill what wasn't tapped (`source` says which), with how
+/// far the sensors were from the taps; stops only the sensors found follow, as `sensors`.
+fn write_tapped_stops(
+    out: &std::path::Path,
+    s: &Session,
+    stops: &[ride_fusion::fusion::StopRecord],
+) -> anyhow::Result<()> {
+    use ride_session::proto::manual_event::Kind;
+    const MATCH_S: f64 = 5.0;
+    let marks: Vec<_> = ride_session::marks::marks(s)?
+        .into_iter()
+        .filter(|m| !m.deleted)
+        .collect();
+    #[derive(Default)]
+    struct Tapped {
+        stopped: Option<i64>,
+        open: Option<i64>,
+        closed: Option<i64>,
+        started: Option<i64>,
+        alighted: Option<i64>,
+        boarded: Option<i64>,
+    }
+    let mut tapped: Vec<Tapped> = Vec::new();
+    for m in &marks {
+        if m.kind == Kind::TrainStopped {
+            tapped.push(Tapped {
+                stopped: Some(m.t_ns),
+                ..Default::default()
+            });
+            continue;
+        }
+        let Some(cur) = tapped.last_mut() else {
+            continue;
+        };
+        // After walking off, the doors and the departure are another train's until the rider boards it.
+        let off_train = cur.alighted.is_some() && cur.boarded.is_none();
+        match m.kind {
+            Kind::DoorsOpen if cur.open.is_none() && cur.started.is_none() && !off_train => {
+                cur.open = Some(m.t_ns)
+            }
+            Kind::DoorsClosed if cur.started.is_none() && !off_train => cur.closed = Some(m.t_ns),
+            Kind::TrainStarted if cur.started.is_none() && !off_train => cur.started = Some(m.t_ns),
+            Kind::Alighted if cur.alighted.is_none() && cur.started.is_none() => {
+                cur.alighted = Some(m.t_ns)
+            }
+            Kind::Boarded if cur.alighted.is_some() && cur.boarded.is_none() => {
+                cur.boarded = Some(m.t_ns)
+            }
+            _ => {}
+        }
+    }
+    let mut f = std::fs::File::create(out.join("stops_tapped.csv"))?;
+    writeln!(
+        f,
+        "source,stopped_ns,doors_open_ns,doors_closed_ns,departed_ns,alighted_ns,boarded_ns,transfer,dwell_s,doors_open_s,\
+         sensor_stopped_err_s,sensor_dwell_err_s,sensor_rider_left"
+    )?;
+    let opt = |v: Option<i64>| v.map_or(String::new(), |v| v.to_string());
+    let opt_s = |v: Option<f64>| v.map_or(String::new(), |v| format!("{v:.1}"));
+    let mut used = vec![false; stops.len()];
+    for t in &tapped {
+        let stopped = t.stopped.unwrap();
+        let k = stops
+            .iter()
+            .enumerate()
+            .filter(|(k, r)| !used[*k] && ((r.stopped_ns - stopped) as f64 * 1e-9).abs() <= MATCH_S)
+            .min_by_key(|(_, r)| (r.stopped_ns - stopped).abs())
+            .map(|(k, _)| k);
+        let sensed = k.map(|k| {
+            used[k] = true;
+            &stops[k]
+        });
+        let left = t.alighted.is_some();
+        let fill = |tap: Option<i64>, sensor: Option<i64>| {
+            (tap.or(sensor), tap.is_none() && sensor.is_some())
+        };
+        let (open, f1) = fill(t.open, sensed.and_then(|r| r.doors_open_ns));
+        let (closed, f2) = fill(t.closed, sensed.and_then(|r| r.doors_closed_ns));
+        let (departed, f3) = if left && t.started.is_none() {
+            (None, false)
+        } else {
+            fill(t.started, sensed.and_then(|r| r.departed_ns))
+        };
+        let source = if f1 || f2 || f3 {
+            "taps+sensors"
+        } else {
+            "taps"
+        };
+        let dwell = (!left || t.boarded.is_some())
+            .then(|| departed.map(|d| (d - stopped) as f64 * 1e-9))
+            .flatten()
+            .filter(|_| !left);
+        // A transfer's doors are two trains': the one left, opening, and the one boarded, closing.
+        let doors = open
+            .zip(closed)
+            .filter(|_| t.boarded.is_none())
+            .map(|(o, c)| (c - o) as f64 * 1e-9);
+        writeln!(
+            f,
+            "{source},{stopped},{},{},{},{},{},{},{},{},{},{},{}",
+            opt(open),
+            opt(closed),
+            opt(departed),
+            opt(t.alighted),
+            opt(t.boarded),
+            left && t.boarded.is_some(),
+            opt_s(dwell),
+            opt_s(doors),
+            opt_s(sensed.map(|r| (r.stopped_ns - stopped) as f64 * 1e-9)),
+            opt_s(
+                sensed
+                    .and_then(|r| r.dwell_s())
+                    .zip(dwell)
+                    .map(|(a, b)| a - b)
+            ),
+            sensed.map_or(String::new(), |r| r.rider_left().to_string()),
+        )?;
+    }
+    for (k, r) in stops.iter().enumerate() {
+        if used[k] || !r.in_subway {
+            continue;
+        }
+        writeln!(
+            f,
+            "sensors,{},{},{},{},{},{},{},{},{},,,{}",
+            r.stopped_ns,
+            opt(r.doors_open_ns),
+            opt(r.doors_closed_ns),
+            opt(r.departed_ns),
+            opt(r.alighted_ns),
+            opt(r.boarded_ns),
+            r.alighted_ns.is_some() && r.boarded_ns.is_some(),
+            opt_s(r.dwell_s()),
+            opt_s(r.doors_open_s()),
+            r.rider_left(),
         )?;
     }
     Ok(())
