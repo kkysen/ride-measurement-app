@@ -125,6 +125,7 @@ message Record {
     BleScanResults ble_scan = 16;
     RecorderError recorder_error = 17;
     WalletNotification wallet_notification = 18;
+    GtfsRealtimeFeed gtfs_realtime = 19;
   }
 }
 
@@ -136,6 +137,17 @@ message WalletNotification {
   string text = 3;
   // `StatusBarNotification.getPostTime`, wall clock milliseconds.
   int64 post_time_ms = 4;
+}
+
+// One poll of an MTA subway GTFS-realtime feed (`ride_fusion::gtfs_rt` picks which), in the `transit` stream:
+// the response exactly as received, so trip updates and vehicle positions are decoded later.
+message GtfsRealtimeFeed {
+  string url = 1;
+  // Wall clock milliseconds when the request was sent; the record's receive time is when the body finished.
+  int64 request_unix_ms = 2;
+  int32 http_status = 3;
+  // The response body (a `transit_realtime.FeedMessage`), unchanged.
+  bytes body = 4;
 }
 
 message GnssMeasurementsEvent {

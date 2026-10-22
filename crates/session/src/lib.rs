@@ -6,7 +6,13 @@ pub mod marks;
 pub mod read;
 pub mod recompress;
 pub mod track;
+pub mod transit;
 pub mod write;
+
+/// GTFS-realtime as the MTA's subway feeds use it (`proto/gtfs_realtime.proto`), for the `transit` stream.
+pub mod transit_realtime {
+    include!(concat!(env!("OUT_DIR"), "/transit_realtime.rs"));
+}
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/ride.v1.rs"));

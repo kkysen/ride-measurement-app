@@ -1,0 +1,91 @@
+// The parts of GTFS-realtime (https://gtfs.org/realtime/, `google/transit`'s `gtfs-realtime.proto`, Apache 2.0)
+// that the rider's analyses read from the MTA's subway feeds, with the same field numbers, so the bodies recorded
+// in `GtfsRealtimeFeed` decode with these; anything else in them is skipped.
+// The MTA's own extension (`nyct-subway.proto`) is declared as the plain field it is on the wire (1001),
+// since prost has no proto2 extensions.
+syntax = "proto2";
+
+package transit_realtime;
+
+message FeedMessage {
+  required FeedHeader header = 1;
+  repeated FeedEntity entity = 2;
+}
+
+message FeedHeader {
+  required string gtfs_realtime_version = 1;
+  optional uint64 timestamp = 3;
+}
+
+message FeedEntity {
+  required string id = 1;
+  optional TripUpdate trip_update = 3;
+  optional VehiclePosition vehicle = 4;
+}
+
+message TripUpdate {
+  required TripDescriptor trip = 1;
+
+  message StopTimeEvent {
+    optional int32 delay = 1;
+    optional int64 time = 2;
+    optional int32 uncertainty = 3;
+  }
+
+  message StopTimeUpdate {
+    optional uint32 stop_sequence = 1;
+    optional string stop_id = 4;
+    optional StopTimeEvent arrival = 2;
+    optional StopTimeEvent departure = 3;
+    // `nyct_stop_time_update`.
+    optional NyctStopTimeUpdate nyct = 1001;
+  }
+
+  repeated StopTimeUpdate stop_time_update = 2;
+  optional uint64 timestamp = 4;
+}
+
+message VehiclePosition {
+  optional TripDescriptor trip = 1;
+  optional uint32 current_stop_sequence = 3;
+  optional string stop_id = 7;
+
+  enum VehicleStopStatus {
+    INCOMING_AT = 0;
+    STOPPED_AT = 1;
+    IN_TRANSIT_TO = 2;
+  }
+
+  optional VehicleStopStatus current_status = 4 [default = IN_TRANSIT_TO];
+  optional uint64 timestamp = 5;
+}
+
+message TripDescriptor {
+  optional string trip_id = 1;
+  optional string route_id = 5;
+  optional uint32 direction_id = 6;
+  optional string start_time = 2;
+  optional string start_date = 3;
+  // `nyct_trip_descriptor`.
+  optional NyctTripDescriptor nyct = 1001;
+}
+
+// The MTA's: the train's own ID (as on its signs and in dispatching), and whether it's assigned to a car set.
+message NyctTripDescriptor {
+  optional string train_id = 1;
+  optional bool is_assigned = 2;
+
+  enum Direction {
+    NORTH = 1;
+    EAST = 2;
+    SOUTH = 3;
+    WEST = 4;
+  }
+
+  optional Direction direction = 3;
+}
+
+message NyctStopTimeUpdate {
+  optional string scheduled_track = 1;
+  optional string actual_track = 2;
+}
