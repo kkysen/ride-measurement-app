@@ -32,12 +32,13 @@ const OPEN_TRACK: &[u8] = include_bytes!("../data/open_track.bin");
 const ON_TRACK_M: f64 = 25.0;
 const ON_TRACK_MPS: f64 = 5.0;
 const ON_TRACK_HOLD_NS: i64 = 30_000_000_000;
-/// Open track points by grid cell (1e-3 degrees), for nearest-point lookups.
-fn open_track() -> &'static std::collections::HashMap<(i32, i32), Vec<(i32, i32)>> {
-    static GRID: std::sync::OnceLock<std::collections::HashMap<(i32, i32), Vec<(i32, i32)>>> =
-        std::sync::OnceLock::new();
+/// Open track points (1e-5 degrees) by grid cell (1e-3 degrees), for nearest-point lookups.
+type TrackGrid = std::collections::HashMap<(i32, i32), Vec<(i32, i32)>>;
+
+fn open_track() -> &'static TrackGrid {
+    static GRID: std::sync::OnceLock<TrackGrid> = std::sync::OnceLock::new();
     GRID.get_or_init(|| {
-        let mut grid: std::collections::HashMap<(i32, i32), Vec<(i32, i32)>> = Default::default();
+        let mut grid = TrackGrid::default();
         for p in OPEN_TRACK.as_chunks::<8>().0 {
             let lat = i32::from_le_bytes([p[0], p[1], p[2], p[3]]);
             let lon = i32::from_le_bytes([p[4], p[5], p[6], p[7]]);
