@@ -382,6 +382,28 @@ Open, roughly in order:
 8. The home elevator (`python/experiments/elevator.py`): 12 m in 25 s with the phone still is the elevator,
    with steps (4.9 to 6.4 m/s^2 std) the stairs; marks the start and end of a trip at home.
 
+9. 2026-10-22, from the sensors alone (committed, not yet on the phone):
+   - Door cycles in Rust (`crates/fusion/src/doors.rs`, `e9cb7d8`), fed live from each microphone read (`a390bac`):
+     closings match Python's exactly and never came while a train moved; openings aren't sure (several steps up
+     per closing; where GNSS could check, 4 of 4 earliest openings aboard were moving), so only closings are used.
+     A closing holds the speed at zero (ungated underground), takes the drift since the last measurement out as a
+     ramp, forward and backward, and the 8 s before it are zero for the smoother and the position filter (`b1427ca`):
+     median forward speed at tapped stops 23 to 6, 32 to 3, 55 to 9, 49 to 15 mph; smoothed under 1 m/s at 18 of 58
+     stops, from 6; fix vs position max on `214427` 331 m to 61 m. Runaways between stations still reach 55 mph.
+   - Each ride's door-opening sound, learned from its own cycles (`door_self_template.py`): 28 of the 31 openings
+     a candidate could find, against 7 for the earliest; not yet trusted for zero speed (one of two GNSS-checked
+     picks was at 11 m/s). Next: port it once more rides check it.
+   - Stations from the cell at each heard stop (`station_stops.py`): 62 cells, 6 recurring; a site (ID / 256) spans
+     a few stations. Pinning positions waits for more rides and the rider's corrected trips.
+   - Gravity re-learned in 2 s while the phone is handled before any measurement (`f1a7add`): the start-up runaway
+     on `184134` 221 to 14 mph, `215922` 55 to 11.
+   - Walking (`crates/fusion/src/walking.rs`, `11f06ec`): two 4 s windows of steps hold the speed near 1.4 m/s.
+     The 102 mph stretch on `154951` remains: quiet, not walking, not seen as the subway.
+   - The home elevator stays offline: anywhere in a ride, 26 other 25 s height changes of 10 m or more barely
+     shake (escalators, grades, tunnel pressure); only at a ride's end does it stand out.
+   - Live map: redraws only what smoothing changed, pans only near the edge (`b5299a7`); tiles kept a month (`b2e2ac0`).
+   Not started: hunting, OMNY with the stairs, elevated lines on the map, express passes.
+
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
   Airliner speed/altitude are within consumer GNSS limits (~1900 km/h, 18 km).
