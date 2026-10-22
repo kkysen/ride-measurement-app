@@ -584,7 +584,20 @@ Open, roughly in order:
    - The cars' scale (`python/experiments/car_scale.py`): the 0.6 to 0.75 gain is the readings' noise diluting the
      fit; dividing by it makes the error worse (0.38 to 0.50 m/s^2 on `a14e`), and the 3D direction adds little
      (correlation 0.65 against 0.63), so the raw single axis stays and no per-car table is kept.
-   - Pending the rider's decision: recording GTFS-RT for which train, and subwaydata.nyc's archives for past rides.
+   - Recording GTFS-RT and subwaydata.nyc's archives: the rider said yes to both; see 18.
+18. Which train actually ran (2026-10-22, in 0.1.7, not yet on the phone):
+   - The app records the MTA's subway GTFS-realtime feeds (public, no key) every 30 s into a `transit` stream,
+     each response unchanged (`GtfsRealtimeFeed`); Rust picks the feeds for lines within 1.5 km, nearest first
+     (`ride_fusion::gtfs_rt`), every feed without a position. Underground, a failed poll retries the moment the
+     network is validated again, with 5 s timeouts, so a few seconds of signal in a station are used.
+     Size: 7 to 185 KB per feed, about 4.5 times less over the air (gzip); a typical 2 to 4 feeds is roughly
+     10 to 20 MB of mobile data per hour, and stored zstd-compressed (xz gets 167 KB to 21 KB).
+   - Reading it: `ride_session::transit::polls`, `crates/cli/examples/transit.rs` (`vehicles.csv`,
+     `trip_updates.csv`, with the MTA's train ID and tracks).
+   - Past rides: `python/experiments/actual_trips.py` against subwaydata.nyc's daily archive. Clear: the 7 express
+     on 2026-10-20 is train `07 1536+` in both sessions; the 2 (not 3) from 96 St on 2026-10-21 at 6:27 pm; the C
+     (not B) from 110 St; the F from Queens Plaza. Short legs, lines sharing stops and minutes, platform waits,
+     and legs without a detected walk between trains are still unsure or wrong.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
