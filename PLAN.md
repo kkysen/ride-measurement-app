@@ -334,7 +334,8 @@ cell polled every 1 s, Wi-Fi scans requested every 4 s always, BLE low latency, 
 
 0.1.4 (on the phone, installed 2026-10-21 from `af669b8`): post-ride recompression stores audio as FLAC,
 bit-exact (`53aa61a`), 23% smaller; the 17 sessions pulled to the PC were re-encoded with `ride recompress`
-(575 MB to 443 MB of audio, every WAV export unchanged). The phone's older copies and OneDrive's are as they were.
+(575 MB to 443 MB of audio, every WAV export unchanged). The phone's copies were then replaced, each checked first
+(same audio decoded, and the copy's SHA-256 on the phone); OneDrive's are as they were (the user's call).
 
 Gotchas learned:
 - Android records SSIDs quoted (`"BoldynWiFi"`); `BoldynPasspoint` is a street network, `PasspointBoldyn` the subway's.
@@ -372,9 +373,14 @@ Open, roughly in order:
    (110 St `29646293`, Chambers St `28852869` both ways); Wi-Fi radios recur too weakly to use alone.
    Next: cell ID to station names (label by stop order along a known line), then a lurch or door cycle there
    means a stop at that station, and its position pins the path (with the stop heading fix, `ce084a5`).
+   Trip paths (`python/experiments/trip_paths.py`): 12 of 16 legs placed on routes, awaiting the user's check;
+   at speed the cells shift a station (tunnel handovers), so use only the cells at stops.
    Also: stations from pass times and distances on express runs; station BLE beacons if any.
    Express passes to check: the 2 past 59 St and 66 St (`214427`), and the F express in Queens on `184134`,
    which passed 65 St very fast and 36 St more slowly (per the rider).
+
+8. The home elevator (`python/experiments/elevator.py`): 12 m in 25 s with the phone still is the elevator,
+   with steps (4.9 to 6.4 m/s^2 std) the stairs; marks the start and end of a trip at home.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
