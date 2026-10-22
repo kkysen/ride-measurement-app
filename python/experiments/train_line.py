@@ -13,8 +13,7 @@ Scored against the rider's "at station" tags that name a line, e.g. "96 St (C)" 
 2026-10-22, 8 subway rides, 62 tags: the line is right at 44 (49 counting near-equal lines), from 35 with one pattern
 per run of stations; the stop records' walking off and on (`stops2-<ride>`) split transfers, and a station passed at
 speed (Android's fix lagging) or a hold in a skipped station no longer rules a line out. Left wrong:
-- 2 against 3: same stops and schedule; the chime (R142 NTT against R62) would settle it, but the replayed status
-  shows its last chime, R62 on a third of the 7's (all R188) rows, so it can't vote yet.
+- 2 against 3: same stops and schedule; each confirmed door chime (`chimes.csv`: R142 NTT against R62) votes.
 - C against B on Central Park West: same stops and schedule; a car beacon (R211) would point to the C if the R68s
   have none (the CBTC guess), untested.
 - Tags on a transfer's platform, which name the next train before the sensors see it.
@@ -34,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 GTFS = ROOT / "data/mta/gtfs"
 ANALYSIS = ROOT / "target/analysis"
 NY = ZoneInfo("America/New_York")
-RIDES = {r: f"stops2-{r}" for r in ["151449", "154951", "184134", "214427", "135509", "155919", "182135", "215922"]}
+RIDES = {r: f"stops3-{r}" for r in ["151449", "154951", "184134", "214427", "135509", "155919", "182135", "215922"]}
 ON_TRACK_M = 80.0
 SWITCH = float(__import__("os").environ.get("SWITCH", 2.0))
 PASS_SERVED = float(__import__("os").environ.get("PASS_SERVED", 0.7))
@@ -192,15 +191,11 @@ CHIME = {"1": "R62", "3": "R62", "2": "Ntt", "4": "Ntt", "5": "Ntt", "6": "Ntt",
 
 
 def chime_votes(ride, t0, t1):
-    rows = read(ANALYSIS / RIDES[ride] / "status.csv")
+    """Each door chime a closing confirmed in the span (`chimes.csv`), by pitch family."""
     votes = defaultdict(int)
-    prev = ""
-    for r in rows:
-        t = int(r["t_ns"])
-        # Count each chime once: a change of the shown family, or the first one in the span.
-        if t0 <= t <= t1 and r["cars"] and r["cars"] != prev:
+    for r in read(ANALYSIS / RIDES[ride] / "chimes.csv"):
+        if t0 <= int(r["t_ns"]) <= t1:
             votes[r["cars"]] += 1
-        prev = r["cars"]
     return votes
 
 
