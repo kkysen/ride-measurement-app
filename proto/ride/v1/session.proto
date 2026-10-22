@@ -321,6 +321,8 @@ message ManualEvent {
     // The rider deleted an earlier mark from the list of taps: it was wrong.
     // Both stay recorded, so nothing is lost; `deletes_received_elapsed_realtime_ns` says which one.
     KIND_DELETE = 9;
+    // The number of the subway car the rider is in, in `text`: ties the car to its beacon.
+    KIND_CAR_NUMBER = 10;
   }
   Kind kind = 1;
   string text = 2;

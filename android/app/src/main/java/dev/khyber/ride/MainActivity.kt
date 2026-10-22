@@ -89,7 +89,7 @@ class MainActivity : ComponentActivity() {
             val status by LiveSpeed.status.collectAsStateWithLifecycle()
             status?.let { st ->
                 val where = st.station?.let { (if (st.atStation) " · at " else " · near ") + it + st.lines.joinToString("/", " (", ")").takeIf { st.lines.isNotEmpty() }.orEmpty() }.orEmpty()
-                Text(st.mode + where + (st.cars?.let { " · $it cars" } ?: ""), style = MaterialTheme.typography.titleMedium)
+                Text(st.mode + where + (st.cars?.let { " · $it cars" } ?: "") + (st.car?.let { " · car $it" } ?: ""), style = MaterialTheme.typography.titleMedium)
             }
             val sensors = estimate.sensors.sortedBy { it.ordinal }.joinToString { it.name.lowercase().replace('_', ' ') }
             Text(if (estimate.stopped) "stopped · $sensors" else sensors)
@@ -159,8 +159,18 @@ class MainActivity : ComponentActivity() {
                 style = MaterialTheme.typography.bodySmall,
             )
             OutlinedTextField(note, { note = it }, label = { Text("Station name or note (optional)") }, singleLine = true)
-            HapticButton(onClick = { add(ManualEvent.Kind.KIND_NOTE, "note", note).also { note = "" } }) { Text("Add note") }
-            Text("Anything else worth knowing later, e.g. \"screen on for beacons\" or \"phone in pocket\".", style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HapticButton(onClick = { add(ManualEvent.Kind.KIND_NOTE, "note", note).also { note = "" } }, Modifier.weight(1f)) { Text("Add note") }
+                HapticButton(onClick = { add(ManualEvent.Kind.KIND_CAR_NUMBER, "car number", note).also { note = "" } }, Modifier.weight(1f)) {
+                    Text("Car number")
+                }
+            }
+            Text(
+                "Anything else worth knowing later, e.g. \"screen on for beacons\" or \"phone in pocket\". " +
+                    "For the car you're in, type the number on its end or by the doors (e.g. 4123), then tap Car number: " +
+                    "it ties the car to its beacon.",
+                style = MaterialTheme.typography.bodySmall,
+            )
             // Last on the page, so nothing moves when it goes away.
             val context = LocalContext.current
             if (!WalletListener.allowed(context)) {

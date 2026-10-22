@@ -138,7 +138,10 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
                 .setPeriodicAdvertisingInterval(r.periodicAdvertisingInterval)
                 .setConnectable(r.isConnectable)
                 .setDataStatus(r.dataStatus)
-            r.scanRecord?.bytes?.let { b.advertisingData = ByteString.copyFrom(it) }
+            r.scanRecord?.bytes?.let {
+                b.advertisingData = ByteString.copyFrom(it)
+                LiveSpeed.onBle(r.timestampNanos, it, r.rssi)
+            }
             if (r.txPower != ScanResult.TX_POWER_NOT_PRESENT) b.txPower = r.txPower
             batch.addResults(b)
         }

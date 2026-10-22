@@ -66,6 +66,8 @@ pub struct RideStatus {
     pub cars: Option<String>,
     /// How long (s) the rider has stayed within 100 m, out of the subway.
     pub staying_s: f64,
+    /// The rider's car, by its beacon's ID in hex (e.g. `a199`), if a steady one is heard.
+    pub car: Option<String>,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -241,6 +243,11 @@ impl Fusion {
             .on_network_fix(t_ns, lat_deg, lon_deg, horizontal_accuracy_m);
     }
 
+    /// A Bluetooth advertisement (`ScanResult`'s bytes and RSSI) at its own time: a subway car's beacon names the car.
+    pub fn on_ble(&self, t_ns: i64, data: Vec<u8>, rssi: i32) {
+        self.lock().on_ble(t_ns, &data, rssi);
+    }
+
     /// The registered LTE cell's ID, if any, at the time it was recorded: names the station.
     pub fn on_cell(&self, t_ns: i64, cell_id: Option<i64>) {
         self.lock().on_cell(t_ns, cell_id);
@@ -288,6 +295,7 @@ impl Fusion {
                 }
             }),
             staying_s: s.staying_s,
+            car: s.car.map(|c| format!("{c:04x}")),
         }
     }
 

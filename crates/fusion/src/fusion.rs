@@ -268,6 +268,8 @@ pub struct Status {
     pub cars: Option<ChimeCars>,
     /// How long (s) the rider has stayed within 100 m, out of the subway; the app reminds them to stop recording.
     pub staying_s: f64,
+    /// The rider's car: its beacon's ID (see [`crate::car_beacons`]).
+    pub car: Option<u16>,
 }
 
 /// Forward estimates are kept at every fix and at least this often, so smoothing covers gaps without fixes.
@@ -545,6 +547,7 @@ impl Fusion {
             staying_s: self
                 .stay
                 .map_or(0.0, |(since, _)| (t - since) as f64 * 1e-9),
+            car: self.cars.current_at(t),
         }
     }
 
@@ -597,11 +600,6 @@ impl Fusion {
         if let Some(r) = car_beacons::decode(data, rssi) {
             self.arrive(t_ns, Pending::Car(r));
         }
-    }
-
-    /// The rider's car (its beacon's ID), if a steady one is heard.
-    pub fn car(&self) -> Option<u16> {
-        self.cars.current()
     }
 
     /// A magnetometer sample (uT), for telling the subway's traction current.

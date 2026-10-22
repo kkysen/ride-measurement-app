@@ -151,6 +151,12 @@ object LiveSpeed {
         h.post { safely { fusion?.onNetworkFix(t, lat, lon, accuracy) } }
     }
 
+    /** A Bluetooth advertisement at its own time: Rust finds the rider's subway car from the cars' beacons. */
+    fun onBle(tNs: Long, data: ByteArray, rssi: Int) {
+        val h = handler ?: return
+        h.post { safely { fusion?.onBle(tNs, data, rssi) } }
+    }
+
     /** The registered LTE cell, at its recorded time: Rust names the station from it. */
     fun onCell(tNs: Long, cellId: Long?) {
         val h = handler ?: return

@@ -100,6 +100,15 @@ impl CarTracker {
     pub fn current(&self) -> Option<u16> {
         self.current
     }
+
+    /// The rider's car as of `t_ns`: only if it was heard within [`STEADY_S`], so it goes once they get off.
+    pub fn current_at(&self, t_ns: i64) -> Option<u16> {
+        self.current.filter(|c| {
+            self.heard
+                .get(c)
+                .is_some_and(|h| (t_ns - h.last_ns) as f64 * 1e-9 <= STEADY_S)
+        })
+    }
 }
 
 #[cfg(test)]
