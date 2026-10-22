@@ -354,6 +354,11 @@ Open, roughly in order:
 5. Hunting, as lateral sway told from walking's vertical bounce; OMNY tap detection paired with the stair pattern.
 6. The speed estimator's runaway and sigma (the position gate, `just test-sdc-position`, fails on it),
    and its start-up runaway in the first minute (221 mph on `184134`).
+   2026-10-21: the position filter now sets off from a stop in its last direction (`ce084a5`; median 182 m to 147 m).
+   The runaway is mostly gyro bias tilting gravity (`crates/fusion/examples/sdc_speed.rs`; the bias at rest, removed,
+   takes the first outage's end from 226 m/s to 45 m/s), and no stop ever registers in the car.
+   A bias learner is on the local branch `gyro-bias-learner` (`3bacc5c`): better on `154951` and `184134`,
+   worse on `214427`; the user decides. `CUT_GNSS` on `export.rs` scores such changes on real rides.
 7. Stations from pass times and distances on express runs; station BLE beacons if any.
    Express passes to check: the 2 past 59 St and 66 St (`214427`), and the F express in Queens on `184134`,
    which passed 65 St very fast and 36 St more slowly (per the rider).
