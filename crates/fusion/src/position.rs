@@ -176,6 +176,9 @@ pub struct PositionFilter {
     p: M,
     /// The speed estimator's latest sigma (m/s): what its error decays toward.
     speed_sigma: f64,
+    /// The direction of travel (east, north unit vector) when last moving, turned by the gyro since:
+    /// where a speed puts the velocity when the vehicle pulls away from a stop with no fixes.
+    heading: Option<[f64; 2]>,
     last_ns: Option<i64>,
     last_own_position_ns: Option<i64>,
     last_own_velocity_ns: Option<i64>,
@@ -198,6 +201,7 @@ impl PositionFilter {
             x: [0.0; N],
             p: [[0.0; N]; N],
             speed_sigma: 0.0,
+            heading: None,
             last_ns: None,
             last_own_position_ns: None,
             last_own_velocity_ns: None,
@@ -407,6 +411,9 @@ impl PositionFilter {
                     self.x[4],
                 ];
                 self.p = mul(&mul(&t, &self.p), &transpose(&t));
+                self.heading = self
+                    .heading
+                    .map(|h| [c * h[0] - s * h[1], s * h[0] + c * h[1]]);
             }
             PositionInput::Speed(speed, sigma) => {
                 // The error is in the speed's size, so it's the same either way in time.
@@ -415,6 +422,9 @@ impl PositionFilter {
                     .last_own_velocity_ns
                     .is_some_and(|t| (t_ns - t).abs() <= OWN_VELOCITY_HOLD_NS);
                 let v = self.x[2].hypot(self.x[3]);
+                if v > SLOW_MPS {
+                    self.heading = Some([self.x[2] / v, self.x[3] / v]);
+                }
                 if own_recent {
                 } else if speed < SLOW_MPS {
                     // Stopped: and the speed estimator's own zero-velocity updates leave little error in it.
@@ -423,10 +433,9 @@ impl PositionFilter {
                     let w = SPEED_WHITE_SIGMA * SPEED_WHITE_SIGMA;
                     let h = [[0.0, 0.0, 0.0, 0.0, 1.0], [0.0; N]];
                     self.update(&h, [0.0, 0.0], [[sigma * sigma + w, 0.0], [0.0, 1.0]]);
-                } else if v > SLOW_MPS {
-                    // The size of the velocity, in its own direction, plus the speed's error
-                    // (a scalar update, as one row with a loose other).
-                    let u = [self.x[2] / v, self.x[3] / v];
+                } else if let Some(u) = self.heading {
+                    // The size of the velocity, in its own direction (or the last one, setting off from a stop),
+                    // plus the speed's error (a scalar update, as one row with a loose other).
                     let h = [[0.0, 0.0, u[0], u[1], 1.0], [0.0, 0.0, -u[1], u[0], 0.0]];
                     let loose = 1e6;
                     let w = SPEED_WHITE_SIGMA * SPEED_WHITE_SIGMA;
@@ -784,5 +793,24 @@ mod tests {
         let e = last.unwrap();
         assert!(error_m(&plane, &e, [0.0, 0.0]) < 10.0, "{e:?}");
         assert!(e.velocity[0].hypot(e.velocity[1]) < 0.5, "{e:?}");
+    }
+
+    #[test]
+    fn sets_off_from_a_stop_the_way_it_last_went() {
+        // East with fixes, then with none: a stop, a left turn, and away at 1 m/s^2. It should go north.
+        let (_, mut inputs) = ride(20, 1e9, 20..21);
+        for t in 21..51 {
+            if (31..41).contains(&t) {
+                inputs.push((
+                    t * S,
+                    PositionInput::Turn(std::f64::consts::FRAC_PI_2 / 10.0),
+                ));
+            }
+            let speed = (t - 40).max(0) as f64;
+            inputs.push((t * S, PositionInput::Speed(speed, 0.1)));
+            inputs.push((t * S, PositionInput::Sample));
+        }
+        let e = forward(&inputs).pop().unwrap();
+        assert!(e.velocity[1] > 9.0 && e.velocity[0].abs() < 1.0, "{e:?}");
     }
 }
