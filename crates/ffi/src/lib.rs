@@ -27,6 +27,7 @@ pub enum Sensor {
     GnssDoppler,
     GnssPosition,
     Stop,
+    Doors,
     SpeedLimit,
 }
 
@@ -37,6 +38,7 @@ impl From<live_speed::Sensor> for Sensor {
             live_speed::Sensor::GnssDoppler => Sensor::GnssDoppler,
             live_speed::Sensor::GnssPosition => Sensor::GnssPosition,
             live_speed::Sensor::Stop => Sensor::Stop,
+            live_speed::Sensor::Doors => Sensor::Doors,
             live_speed::Sensor::SpeedLimit => Sensor::SpeedLimit,
         }
     }
@@ -154,6 +156,35 @@ impl Fusion {
     /// A Wi-Fi scan's SSIDs, at the time it was recorded, for telling when the phone is in the subway.
     pub fn on_wifi_scan(&self, t_ns: i64, ssids: Vec<String>) {
         self.lock().on_wifi_scan(t_ns, ssids);
+    }
+
+    /// One microphone read as recorded (mono 16-bit little-endian PCM from stream frame `first_frame`), at `t_ns`,
+    /// when its last frame was recorded, with the recorder's timestamps (frame positions and elapsed realtime ns)
+    /// from it: door cycles in the sound hold the speed at zero.
+    pub fn on_audio(
+        &self,
+        t_ns: i64,
+        sample_rate_hz: u32,
+        first_frame: i64,
+        pcm_s16le: Vec<u8>,
+        timestamp_frames: Vec<i64>,
+        timestamp_ns: Vec<i64>,
+    ) {
+        let samples = pcm_s16le
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&b| i16::from_le_bytes(b))
+            .collect();
+        self.lock().on_audio(
+            t_ns,
+            sample_rate_hz,
+            ride_fusion::fusion::AudioSamples {
+                first_frame,
+                samples,
+                timestamps: timestamp_frames.into_iter().zip(timestamp_ns).collect(),
+            },
+        );
     }
 
     /// A downloaded orbit file (from [`orbit_fetch_plan`]); returns how many ephemerides it held.

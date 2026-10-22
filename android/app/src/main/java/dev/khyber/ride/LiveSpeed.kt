@@ -130,6 +130,16 @@ object LiveSpeed {
         h.post { safely { fusion?.onWifiScan(tNs, ssids) } }
     }
 
+    /** One microphone read: Rust hears door cycles in it, which mean the train is standing. */
+    fun onAudio(tNs: Long, firstFrame: Long, pcm: ByteArray, timestampFrames: List<Long>, timestampNs: List<Long>) {
+        val h = handler ?: return
+        h.post {
+            safely {
+                fusion?.onAudio(tNs, AudioStreamRecorder.SAMPLE_RATE_HZ.toUInt(), firstFrame, pcm, timestampFrames, timestampNs)
+            }
+        }
+    }
+
     /** A downloaded orbit file ([OrbitFetcher]); a bad one is reported and live speed carries on without it. */
     fun addOrbitFile(path: String) {
         val h = handler ?: return

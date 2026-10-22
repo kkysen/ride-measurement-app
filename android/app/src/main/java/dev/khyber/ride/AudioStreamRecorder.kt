@@ -114,9 +114,27 @@ class AudioStreamRecorder(context: Context, dir: File) {
                 break
             }
             pcm.write(buf, 0, n)
+            val readFirstFrame = frameCount
             frameCount += n / 2
-            if (r.getTimestamp(ts, AudioTimestamp.TIMEBASE_BOOTTIME) == AudioRecord.SUCCESS) {
+            val stamped = r.getTimestamp(ts, AudioTimestamp.TIMEBASE_BOOTTIME) == AudioRecord.SUCCESS
+            if (stamped) {
                 timestamps.add(PbAudioTimestamp.newBuilder().setFramePosition(ts.framePosition).setBoottimeNs(ts.nanoTime).build())
+            }
+            // To live speed as read, timed at its last frame, as `crates/fusion/src/replay.rs` replays it.
+            Health.guard("live audio") {
+                val last = timestamps.lastOrNull()
+                val tNs = if (last != null) {
+                    last.boottimeNs + (frameCount - last.framePosition) * 1_000_000_000L / SAMPLE_RATE_HZ
+                } else {
+                    SystemClock.elapsedRealtimeNanos()
+                }
+                LiveSpeed.onAudio(
+                    tNs,
+                    readFirstFrame,
+                    buf.copyOf(n),
+                    if (stamped) listOf(ts.framePosition) else emptyList(),
+                    if (stamped) listOf(ts.nanoTime) else emptyList(),
+                )
             }
             if (pcm.size() >= CHUNK_FRAMES * 2) flush()
         }
