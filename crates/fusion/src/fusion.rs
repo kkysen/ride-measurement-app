@@ -82,8 +82,17 @@ const GAP_FIX_M: f64 = 50.0;
 const STATION_PIN_M: f64 = 90.0;
 const GAP_MIN_NS: i64 = 10_000_000_000;
 const GAP_PATH_RATIO: f64 = 2.0;
-/// Walking around (a store, a platform) between the fixes, which the straight distance doesn't see.
+/// Walking around (a store, a platform) between the fixes, which the straight distance doesn't see,
+/// for the time steps were detected (each detection covers the step window before it); and running.
 const GAP_WANDER_MPS: f64 = 1.5;
+const GAP_RUN_MPS: f64 = 4.5;
+const GAP_STEP_WINDOW_NS: i64 = 4_000_000_000;
+/// Out of a vehicle in a gap (out of the subway throughout, and the fixes no farther apart than a walk covers),
+/// each speed is held to what the rider's feet say at the time: a run, a walk (1.4 m/s and two sigma),
+/// or, with no steps, standing (shuffling in a line). At the McDonald's in Flushing (`20261020-154951`,
+/// 4:25 pm, 257 s) the bound above still left 10 mph.
+const GAP_HOLD_WALK_MPS: f64 = 2.6;
+const GAP_HOLD_STAND_MPS: f64 = 0.5;
 
 /// Inputs settle into the forward pass, in time order, once input this much newer has arrived: Android delivers
 /// sensor samples up to 1 s late (`SensorStreamRecorder.kt`'s batching), and GNSS a little after its epoch.
@@ -1105,14 +1114,41 @@ impl Fusion {
                 _ => None,
             })
             .collect();
-        bound_gaps(&mut out, &fixes);
+        let steps: Vec<(i64, bool)> = inputs
+            .iter()
+            .filter_map(|&&(t, ref input)| match *input {
+                Input::Walking(running) => Some((t, running)),
+                _ => None,
+            })
+            .collect();
+        bound_gaps(&mut out, &fixes, &steps, &self.subway_changes);
         out
     }
 }
 
 /// Scales down the smoothed speeds across each gap between good fixes to the distance the fixes allow
 /// (see [`GAP_FIX_M`]). Only a bound: a path longer than the straight line is fine up to it.
-fn bound_gaps(out: &mut [SmoothedSpeed], fixes: &[&Fix]) {
+/// Out of a vehicle, each speed in the gap is also held to the rider's feet (see [`GAP_HOLD_WALK_MPS`]).
+/// `steps`: when steps were detected, and whether running; `subway`: when the subway detector switched, and to what.
+fn bound_gaps(
+    out: &mut [SmoothedSpeed],
+    fixes: &[&Fix],
+    steps: &[(i64, bool)],
+    subway: &[(i64, bool)],
+) {
+    let in_subway_at = |t: i64| {
+        subway
+            .iter()
+            .take_while(|&&(at, _)| at <= t)
+            .last()
+            .is_some_and(|&(_, on)| on)
+    };
+    // The gait during the step window before a detection (running wins over walking).
+    let feet_at = |t: i64| {
+        let from = steps.partition_point(|&(at, _)| at < t);
+        let to = steps.partition_point(|&(at, _)| at <= t + GAP_STEP_WINDOW_NS);
+        steps[from..to].iter().map(|&(_, running)| running).max()
+    };
     for pair in fixes.windows(2) {
         let (a, b) = (pair[0], pair[1]);
         let (ta, tb) = (a.elapsed_realtime_ns, b.elapsed_realtime_ns);
@@ -1120,14 +1156,43 @@ fn bound_gaps(out: &mut [SmoothedSpeed], fixes: &[&Fix]) {
             continue;
         }
         let gap_s = (tb - ta) as f64 * 1e-9;
-        let allowed = GAP_PATH_RATIO * stations::meters((a.lat, a.lon), (b.lat, b.lon))
+        let (mut walk_s, mut run_s) = (0.0, 0.0);
+        let mut last = ta;
+        for &(t, running) in steps.iter().filter(|&&(t, _)| t > ta && t <= tb) {
+            let covered = (t - last.max(t - GAP_STEP_WINDOW_NS)).max(0) as f64 * 1e-9;
+            last = t;
+            if running {
+                run_s += covered;
+            } else {
+                walk_s += covered;
+            }
+        }
+        let straight = stations::meters((a.lat, a.lon), (b.lat, b.lon));
+        let allowed = GAP_PATH_RATIO * straight
             + a.accuracy.unwrap_or(0.0)
             + b.accuracy.unwrap_or(0.0)
-            + GAP_WANDER_MPS * gap_s;
+            + GAP_WANDER_MPS * walk_s
+            + GAP_RUN_MPS * run_s;
         let from = out.partition_point(|s| s.elapsed_realtime_ns <= ta);
         let to = out.partition_point(|s| s.elapsed_realtime_ns < tb);
         if to <= from {
             continue;
+        }
+        let on_foot = straight / gap_s < VEHICLE_MPS
+            && !in_subway_at(ta)
+            && !subway.iter().any(|&(t, on)| on && t > ta && t < tb);
+        if on_foot {
+            for s in &mut out[from..to] {
+                let hold = match feet_at(s.elapsed_realtime_ns) {
+                    Some(true) => GAP_RUN_MPS,
+                    Some(false) => GAP_HOLD_WALK_MPS,
+                    None => GAP_HOLD_STAND_MPS,
+                };
+                if s.speed_mps > hold {
+                    s.accel_mps2 *= hold / s.speed_mps;
+                    s.speed_mps = hold;
+                }
+            }
         }
         let mut distance = Distance::default();
         out[from.saturating_sub(1)..(to + 1).min(out.len())]
