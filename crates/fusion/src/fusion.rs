@@ -33,7 +33,7 @@ use crate::position::{PositionEstimate, PositionInput, smooth};
 use crate::stations::{self, Station};
 use crate::stops::{self as train_stops, StopDetector};
 use crate::subway::SubwayDetector;
-use crate::walking::{Gait, WalkingDetector};
+use crate::walking::{Gait, WINDOW_S as WALK_WINDOW_S, WalkingDetector};
 
 /// Whether our own GNSS position and velocity solutions update the position filter.
 /// Not yet: on the first rides (2026-10-20) they made it much worse even when cross-checked,
@@ -81,6 +81,23 @@ const DOORS_AFTER_STOP_S: (f64, f64) = (1.0, 10.0);
 const DOORS_OPEN_AFTER_STOP_S: f64 = 3.2;
 const DEPART_AFTER_STOP_S: f64 = 5.0;
 const RECORD_MAX_DWELL_S: f64 = 300.0;
+/// A "stop" whose braking began within [`FADE_AFTER_CLOSE_S`] after a door closing, and lasted at least
+/// [`FADE_MIN_S`], is the departure's pull fading (the train sped away, then cruised): at Grand Central on
+/// `20261020-151449` (3:44 pm), and three more, the pull began 0 to 8 s after the closing and lasted 11 to 17 s.
+/// A false closing heard while pulling in (`20261020-184134`, 7:00 pm) came 5 s before a real stop.
+const FADE_AFTER_CLOSE_S: (f64, f64) = (-0.5, 8.0);
+const FADE_MIN_S: f64 = 7.0;
+/// The rider walks off at a stop when [`ALIGHT_WINDOWS`] of the next [`ALIGHT_OF`] step-rhythm windows have
+/// steps (12 s or more of the 16), before the departure: a step out of the doors to let others off is shorter.
+/// [`PLATFORM_WINDOWS`] in the [`PLATFORM_BEFORE_S`] before a stop, still walking in the [`PLATFORM_LAST_S`]
+/// before it, mean the rider was on the platform, not riding: what's heard is another train's
+/// (or the rider's own, later boarded). Walking up the car to the doors ends as the train stops (Spring St,
+/// `20261021-215922`, 10:07 pm).
+const ALIGHT_WINDOWS: usize = 3;
+const ALIGHT_OF: usize = 4;
+const PLATFORM_WINDOWS: usize = 3;
+const PLATFORM_BEFORE_S: f64 = 24.0;
+const PLATFORM_LAST_S: f64 = 8.0;
 
 /// One stop of the train, for later analyses: dwell, and the doors' times. A stop with no door cycle is a
 /// tunnel stop, or one whose doors weren't heard.
@@ -97,13 +114,41 @@ pub struct StopRecord {
     pub doors_open_heard: bool,
     pub doors_closed_ns: Option<i64>,
     pub departed_ns: Option<i64>,
+    /// The rider was walking on the platform before this stop, so it's another train's, or the one they board.
+    pub on_platform: bool,
+    /// When the rider walked off (the start of the steps), if they did before the train left: the record's train
+    /// leaves unseen, and a closing is kept only if heard within [`HEARD_FROM_PLATFORM_S`] of the stop.
+    pub alighted_ns: Option<i64>,
+    /// When the rider boarded (the end of the steps) after walking on the platform, and before
+    /// [`StopRecord::departed_ns`], which is then the boarded train's.
+    pub boarded_ns: Option<i64>,
 }
 
+/// A closing heard after the rider walked off is still their train's if this soon after the stop (s).
+const HEARD_FROM_PLATFORM_S: f64 = 60.0;
+/// Off and back on within this (s) is stepping out of the doors (`20261020-184134`, 7:07 pm, 16 s), not a transfer.
+const STEP_OUT_S: f64 = 30.0;
+
 impl StopRecord {
-    /// From the stop to pulling away (s).
+    /// From the stop to pulling away (s), when the rider rode through it.
     pub fn dwell_s(&self) -> Option<f64> {
+        if self.on_platform || (self.alighted_ns.is_some() && !self.stepped_out()) {
+            return None;
+        }
         self.departed_ns
             .map(|d| (d - self.stopped_ns) as f64 * 1e-9)
+    }
+
+    /// Whether the rider changed trains or got off here (not just stepping out to let others off).
+    pub fn rider_left(&self) -> bool {
+        self.alighted_ns.is_some() && !self.stepped_out()
+    }
+
+    /// Whether the rider stepped off and back on within [`STEP_OUT_S`]: the same train, still ridden.
+    pub fn stepped_out(&self) -> bool {
+        self.alighted_ns
+            .zip(self.boarded_ns)
+            .is_some_and(|(a, b)| ((b - a) as f64 * 1e-9) < STEP_OUT_S)
     }
 
     /// How long the doors stood open (s).
@@ -446,6 +491,8 @@ pub struct Fusion {
     /// Stops in the subway waiting for a door closing or a departure to confirm them.
     unconfirmed_stops: Vec<train_stops::Stop>,
     walking: WalkingDetector,
+    /// Each step-rhythm window's end, and whether it had steps: for when the rider leaves or boards a train.
+    step_windows: Vec<(i64, bool)>,
     cars: CarTracker,
     /// When the subway detector switched, and to what.
     subway_changes: Vec<(i64, bool)>,
@@ -511,6 +558,7 @@ impl Fusion {
             departures: Vec::new(),
             unconfirmed_stops: Vec::new(),
             walking: WalkingDetector::default(),
+            step_windows: Vec::new(),
             cars: CarTracker::default(),
             subway_changes: Vec::new(),
             cell: None,
@@ -791,14 +839,17 @@ impl Fusion {
         }
         self.track_stay(t_ns, &input);
         if let Pending::Accel(a) = &input
-            && self
+            && let Some(walking) = self
                 .walking
                 .on_accel(t_ns, (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt())
-                == Some(true)
         {
-            let running = matches!(self.walking.last_gait(), Some((_, Some(Gait::Running))));
-            self.estimator.on_walking(t_ns, running);
-            self.buffer(t_ns, Input::Walking(running));
+            let gait = self.walking.last_gait().and_then(|(_, g)| g);
+            self.step_windows.push((t_ns, gait.is_some()));
+            if walking {
+                let running = gait == Some(Gait::Running);
+                self.estimator.on_walking(t_ns, running);
+                self.buffer(t_ns, Input::Walking(running));
+            }
         }
         let stop_events = match &input {
             Pending::Accel(a) => self.stop_detector.on_accel(t_ns, *a),
@@ -883,46 +934,29 @@ impl Fusion {
         );
     }
 
+    /// The train's start surges found so far (see [`crate::stops`]).
+    pub fn departures(&self) -> &[i64] {
+        &self.departures
+    }
+
+    /// Each step-rhythm window's end, and whether it had steps.
+    pub fn step_windows(&self) -> &[(i64, bool)] {
+        &self.step_windows
+    }
+
     /// Each stop of the train found so far, with its doors and departure (see [`StopRecord`]).
     pub fn stop_records(&self) -> Vec<StopRecord> {
-        let mut out = Vec::new();
-        for (k, &(stop, station, in_subway)) in self.train_stops.iter().enumerate() {
-            let next = self
-                .train_stops
-                .get(k + 1)
-                .map_or(i64::MAX, |(s, ..)| s.t_ns);
-            let limit = next.min(stop.t_ns + (RECORD_MAX_DWELL_S * 1e9) as i64);
-            let cycle = self.door_cycles.iter().find(|c| {
-                c.close_ns > stop.t_ns + (DOORS_AFTER_STOP_S.0 * 1e9) as i64 && c.close_ns < limit
-            });
-            let doors_open = cycle.map(|c| {
-                let heard = c.open_ns - stop.t_ns;
-                if heard as f64 * 1e-9 >= DOORS_AFTER_STOP_S.0
-                    && heard as f64 * 1e-9 <= DOORS_AFTER_STOP_S.1
-                {
-                    (c.open_ns, true)
-                } else {
-                    (stop.t_ns + (DOORS_OPEN_AFTER_STOP_S * 1e9) as i64, false)
-                }
-            });
-            let after = cycle.map_or(stop.t_ns + (DEPART_AFTER_STOP_S * 1e9) as i64, |c| {
-                c.close_ns
-            });
-            let departed = self.departures.iter().copied().find(|&d| {
-                d > after && d > stop.t_ns + (DEPART_AFTER_STOP_S * 1e9) as i64 && d < limit
-            });
-            out.push(StopRecord {
-                stopped_ns: stop.t_ns,
-                score: stop.score,
-                in_subway,
-                station,
-                doors_open_ns: doors_open.map(|d| d.0),
-                doors_open_heard: doors_open.is_some_and(|d| d.1),
-                doors_closed_ns: cycle.map(|c| c.close_ns),
-                departed_ns: departed,
-            });
-        }
-        out
+        stop_records(
+            &self.train_stops,
+            &self.door_cycles,
+            &self.departures,
+            &self.step_windows,
+        )
+    }
+
+    /// Whether a found stop is the departure's pull fading (see [`FADE_AFTER_CLOSE_S`]).
+    fn departure_fade(&self, stop: &train_stops::Stop) -> bool {
+        departure_fade(stop, &self.door_cycles)
     }
 
     /// The station Android's own location or the registered cell names as of `t_ns`, if any.
@@ -944,7 +978,7 @@ impl Fusion {
             .map(|(_, s)| s)
             .or_else(|| self.cell.and_then(|(_, c)| stations::of_cell(c)));
         self.train_stops.push((stop, station, in_subway));
-        if USE_STOPPING_LURCH && in_subway {
+        if USE_STOPPING_LURCH && in_subway && !self.departure_fade(&stop) {
             self.unconfirmed_stops.push(stop);
             // What came while the stop was being decided.
             let since: Vec<i64> = self
@@ -1421,5 +1455,238 @@ fn combine(t: i64, f: &Estimate, b: &Estimate) -> SmoothedSpeed {
         backward_mps: b.speed_mps,
         // In reversed time, speeding up is slowing down.
         accel_mps2: (f.accel_mps2 * wf - b.accel_mps2 * wb) / (wf + wb),
+    }
+}
+
+/// The stops' records from what fusion found: stops (with the station named then, and whether in the subway),
+/// door cycles, start surges, and step-rhythm windows (see [`StopRecord`]).
+fn stop_records(
+    train_stops: &[(train_stops::Stop, Option<&'static Station>, bool)],
+    door_cycles: &[DoorCycle],
+    surges: &[i64],
+    step_windows: &[(i64, bool)],
+) -> Vec<StopRecord> {
+    let s_ns = |s: f64| (s * 1e9) as i64;
+    type Found = (train_stops::Stop, Option<&'static Station>, bool);
+    let (fades, stops): (Vec<&Found>, Vec<&Found>) = train_stops
+        .iter()
+        .partition(|(stop, ..)| departure_fade(stop, door_cycles));
+    // A departure's fading pull began as it pulled away, when its start surge was missed (Grand Central,
+    // `20261020-151449`, 3:44 pm).
+    let mut departures = surges.to_vec();
+    departures.extend(fades.iter().map(|(stop, ..)| stop.braking_since_ns));
+    departures.sort_unstable();
+    let window_ns = s_ns(WALK_WINDOW_S);
+    let mut out = Vec::new();
+    for (k, &&(stop, station, in_subway)) in stops.iter().enumerate() {
+        let next = stops.get(k + 1).map_or(i64::MAX, |(s, ..)| s.t_ns);
+        let limit = next.min(stop.t_ns + s_ns(RECORD_MAX_DWELL_S));
+        let walked_before = |within: f64| {
+            step_windows
+                .iter()
+                .filter(|&&(t, steps)| steps && t > stop.t_ns - s_ns(within) && t <= stop.t_ns)
+                .count()
+        };
+        let on_platform = walked_before(PLATFORM_BEFORE_S) >= PLATFORM_WINDOWS
+            && walked_before(PLATFORM_LAST_S) > 0;
+        let after: Vec<(i64, bool)> = step_windows
+            .iter()
+            .copied()
+            .filter(|&(t, _)| t - window_ns >= stop.t_ns && t <= limit)
+            .collect();
+        let first_departure = |from: i64| {
+            departures
+                .iter()
+                .copied()
+                .find(|&d| d > from && d > stop.t_ns + s_ns(DEPART_AFTER_STOP_S) && d < limit)
+        };
+        // Walking off: enough steps in a row, starting before the train's departure.
+        let alighted = (!on_platform)
+            .then(|| {
+                after.windows(ALIGHT_OF).find_map(|w| {
+                    (w.iter().filter(|(_, steps)| *steps).count() >= ALIGHT_WINDOWS)
+                        .then(|| w.iter().find(|(_, steps)| *steps).unwrap().0 - window_ns)
+                })
+            })
+            .flatten();
+        let cycle = door_cycles.iter().find(|c| {
+            c.close_ns > stop.t_ns + s_ns(DOORS_AFTER_STOP_S.0)
+                && c.close_ns < limit
+                && alighted.is_none_or(|_| c.close_ns < stop.t_ns + s_ns(HEARD_FROM_PLATFORM_S))
+        });
+        let ridden_departure = first_departure(cycle.map_or(stop.t_ns, |c| c.close_ns));
+        let alighted = alighted.filter(|&a| ridden_departure.is_none_or(|d| a < d));
+        // Boarding: the last steps before a departure, after walking on the platform or off a train.
+        let (boarded, departed) = if on_platform || alighted.is_some() {
+            let from = alighted.unwrap_or(stop.t_ns);
+            let walked: Vec<i64> = after
+                .iter()
+                .filter(|&&(t, steps)| steps && t > from)
+                .map(|&(t, _)| t)
+                .collect();
+            match walked.last() {
+                Some(&last) => match first_departure(last) {
+                    Some(d) => (Some(last), Some(d)),
+                    None => (None, None),
+                },
+                None if on_platform => (None, ridden_departure),
+                None => (None, None),
+            }
+        } else {
+            (None, ridden_departure)
+        };
+        let doors_open = cycle.map(|c| {
+            let heard = (c.open_ns - stop.t_ns) as f64 * 1e-9;
+            if heard >= DOORS_AFTER_STOP_S.0 && heard <= DOORS_AFTER_STOP_S.1 {
+                (c.open_ns, true)
+            } else {
+                (stop.t_ns + s_ns(DOORS_OPEN_AFTER_STOP_S), false)
+            }
+        });
+        out.push(StopRecord {
+            stopped_ns: stop.t_ns,
+            score: stop.score,
+            in_subway,
+            station,
+            doors_open_ns: doors_open.map(|d| d.0),
+            doors_open_heard: doors_open.is_some_and(|d| d.1),
+            doors_closed_ns: cycle.map(|c| c.close_ns),
+            departed_ns: departed,
+            on_platform,
+            alighted_ns: alighted,
+            boarded_ns: boarded,
+        });
+    }
+    out
+}
+
+/// Whether a found stop is the departure's pull fading (see [`FADE_AFTER_CLOSE_S`]).
+fn departure_fade(stop: &train_stops::Stop, door_cycles: &[DoorCycle]) -> bool {
+    let braking_s = (stop.t_ns - stop.braking_since_ns) as f64 * 1e-9;
+    braking_s >= FADE_MIN_S
+        && door_cycles.iter().any(|c| {
+            let after = (stop.braking_since_ns - c.close_ns) as f64 * 1e-9;
+            after >= FADE_AFTER_CLOSE_S.0 && after <= FADE_AFTER_CLOSE_S.1
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const S: i64 = 1_000_000_000;
+
+    fn stop(t_s: i64) -> (train_stops::Stop, Option<&'static Station>, bool) {
+        let stop = train_stops::Stop {
+            t_ns: t_s * S,
+            score: 1.0,
+            braking_since_ns: (t_s - 15) * S,
+        };
+        (stop, None, true)
+    }
+
+    /// Step-rhythm windows every 4 s over `from_s..to_s`, with steps over `steps_s`.
+    fn windows(from_s: i64, to_s: i64, steps_s: std::ops::Range<i64>) -> Vec<(i64, bool)> {
+        (from_s / 4..to_s / 4)
+            .map(|k| (k * 4 * S, steps_s.contains(&(k * 4))))
+            .collect()
+    }
+
+    fn cycle(open_s: i64, close_s: i64) -> DoorCycle {
+        DoorCycle {
+            open_ns: open_s * S,
+            close_ns: close_s * S,
+        }
+    }
+
+    #[test]
+    fn a_long_hold_ridden_through_is_one_dwell() {
+        // 86 St on the C (`20261021-135509`, 2:04 pm): 104 s standing, doors open 85 s, no walking.
+        let r = stop_records(
+            &[stop(100), stop(300)],
+            &[cycle(103, 188)],
+            &[204 * S],
+            &windows(0, 400, 0..0),
+        );
+        assert_eq!(r.len(), 2);
+        assert!(!r[0].on_platform && !r[0].rider_left());
+        assert_eq!(r[0].dwell_s(), Some(104.0));
+        assert_eq!(r[0].doors_open_s(), Some(85.0));
+    }
+
+    #[test]
+    fn walking_off_ends_the_record() {
+        // Off from 100 s (the first step window, 100 to 104 s) for 40 s of walking; the train leaves unseen,
+        // and a later surge is no departure of it.
+        let r = stop_records(
+            &[stop(100)],
+            &[cycle(103, 125)],
+            &[260 * S],
+            &windows(0, 300, 104..144),
+        );
+        assert!(r[0].rider_left());
+        assert_eq!(r[0].alighted_ns, Some(100 * S));
+        assert_eq!(r[0].dwell_s(), None);
+        // The closing, heard from the platform within a minute, is still the train's.
+        assert_eq!(r[0].doors_closed_ns, Some(125 * S));
+    }
+
+    #[test]
+    fn a_transfer_boards_the_next_train() {
+        // Off at 104 s, walking to 144 s, standing, boarding with steps ending at 200 s, away at 210 s.
+        let mut w = windows(0, 300, 104..144);
+        w.iter_mut()
+            .filter(|(t, _)| *t == 196 * S || *t == 200 * S)
+            .for_each(|(_, s)| *s = true);
+        let r = stop_records(&[stop(100)], &[], &[210 * S], &w);
+        assert_eq!(r[0].boarded_ns, Some(200 * S));
+        assert_eq!(r[0].departed_ns, Some(210 * S));
+        assert!(r[0].rider_left());
+        assert_eq!(r[0].dwell_s(), None);
+    }
+
+    #[test]
+    fn stepping_out_to_let_others_off_keeps_the_dwell() {
+        // Off and back on within 16 s (`20261020-184134`, 7:07 pm), the same train away at 130 s.
+        let r = stop_records(
+            &[stop(100)],
+            &[cycle(103, 125)],
+            &[130 * S],
+            &windows(0, 300, 104..120),
+        );
+        assert!(!r[0].rider_left());
+        assert!((r[0].dwell_s().unwrap() - 30.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn walking_on_the_platform_is_no_dwell() {
+        let r = stop_records(&[stop(100)], &[], &[130 * S], &windows(0, 300, 60..104));
+        assert!(r[0].on_platform);
+        assert_eq!(r[0].dwell_s(), None);
+    }
+
+    #[test]
+    fn a_departures_fading_pull_is_no_stop_but_its_departure() {
+        // Grand Central (`20261020-151449`, 3:44 pm): doors closed at 150 s, the pull from 151 s faded at 164 s,
+        // and no start surge was found.
+        let mut fade = stop(164);
+        fade.0.braking_since_ns = 151 * S;
+        let r = stop_records(
+            &[stop(100), fade, stop(250)],
+            &[cycle(103, 150)],
+            &[],
+            &windows(0, 300, 0..0),
+        );
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].departed_ns, Some(151 * S));
+        assert_eq!(r[0].dwell_s(), Some(51.0));
+    }
+
+    #[test]
+    fn a_false_closing_while_pulling_in_keeps_a_short_braking_stop() {
+        // `20261020-184134`, 7:00 pm: a closing heard 5 s before a stop whose braking lasted under 7 s.
+        let mut s = stop(100);
+        s.0.braking_since_ns = 95 * S;
+        assert!(!departure_fade(&s.0, &[cycle(60, 95)]));
     }
 }

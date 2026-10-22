@@ -10,7 +10,7 @@ use std::sync::Arc;
 use rustfft::num_complex::Complex64;
 use rustfft::{Fft, FftPlanner};
 
-const WINDOW_S: f64 = 4.0;
+pub const WINDOW_S: f64 = 4.0;
 const MIN_STD_MPS2: f64 = 1.0;
 /// Step rates (Hz), and the share of the power above [`MIN_HZ`] they must hold.
 const STEP_HZ: (f64, f64) = (1.4, 2.6);
