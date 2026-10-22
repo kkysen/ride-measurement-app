@@ -404,7 +404,10 @@ Open, roughly in order:
    - The home elevator stays offline: anywhere in a ride, 26 other 25 s height changes of 10 m or more barely
      shake (escalators, grades, tunnel pressure); only at a ride's end does it stand out.
    - Live map: redraws only what smoothing changed, pans only near the edge (`b5299a7`); tiles kept a month (`b2e2ac0`).
-   Not started: hunting, OMNY with the stairs, elevated lines on the map, express passes.
+   - Express passes, from the door cycles: none heard between the 59 St and 72 St taps on `214427`
+     (the 2 passed 59 St and 66 St; at 72 St two closings 15 s apart, the doors closing, reopening, closing),
+     and none between Jackson Hts and Queens Plaza on `184134`'s F.
+   Not started: hunting, OMNY with the stairs, elevated lines on the map.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
