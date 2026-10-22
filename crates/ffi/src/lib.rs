@@ -278,17 +278,23 @@ impl Fusion {
             lines: lines.clone(),
             at_station: s.at_station,
             // The chime's family, with the model when the station's lines all run one model of that family.
+            // A line whose model isn't known (the B's mix of R68s and R211s) could be the one ridden,
+            // so then only the family is named.
             cars: s.cars.map(|c| {
                 let family = match c {
                     ChimeCars::Ntt => "NTT",
                     ChimeCars::R62 => "R62",
                 };
-                let models: std::collections::BTreeSet<&str> = lines
+                let models: Option<std::collections::BTreeSet<&str>> = lines
                     .iter()
-                    .filter_map(|l| ride_fusion::stations::car_model(l))
+                    .map(|l| ride_fusion::stations::car_model(l))
+                    .collect();
+                let models: Vec<&str> = models
+                    .unwrap_or_default()
+                    .into_iter()
                     .filter(|m| (c == ChimeCars::R62) == m.starts_with("R62"))
                     .collect();
-                match models.iter().collect::<Vec<_>>()[..] {
+                match models[..] {
                     [m] if c == ChimeCars::Ntt => format!("NTT ({m})"),
                     [m] => m.to_string(),
                     _ => family.to_string(),
