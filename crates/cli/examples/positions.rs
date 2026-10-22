@@ -15,6 +15,7 @@ fn main() -> anyhow::Result<()> {
     // `SUBWAY=1`: the subway's top speed for the whole ride.
     let options = Options {
         max_speed_mps: std::env::var_os("SUBWAY").map(|_| SUBWAY_MAX_SPEED_MPS),
+        ..Options::default()
     };
     let r = replay_with(&s, &options)?;
     let ps = &r.positions;

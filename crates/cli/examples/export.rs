@@ -1,6 +1,6 @@
 // Scratch: fixes, manual events, and the replayed fusion as CSVs in `out`, for Python.
 use ride_fusion::live_speed::SUBWAY_MAX_SPEED_MPS;
-use ride_fusion::replay::{Options, replay_with};
+use ride_fusion::replay::{GnssOutages, Options, replay_with};
 use ride_session::proto::record::Payload;
 use ride_session::read::Session;
 use ride_session::track::gps_segments;
@@ -86,6 +86,15 @@ fn main() -> anyhow::Result<()> {
         &s,
         &Options {
             max_speed_mps: subway.then_some(SUBWAY_MAX_SPEED_MPS),
+            // `CUT_GNSS=<start ns>,<outage s>,<period s>`, to score dead reckoning (`python/experiments/score.py`).
+            gnss_outages: std::env::var("CUT_GNSS").ok().map(|v| {
+                let f: Vec<&str> = v.split(',').collect();
+                GnssOutages {
+                    start_ns: f[0].parse().unwrap(),
+                    outage_s: f[1].parse().unwrap(),
+                    period_s: f[2].parse().unwrap(),
+                }
+            }),
         },
     )?;
     let mut f = std::fs::File::create(out.join("fused.csv"))?;

@@ -51,6 +51,24 @@ pub fn replay(session: &Session) -> anyhow::Result<Replay> {
 pub struct Options {
     /// See [`Fusion::set_max_speed`].
     pub max_speed_mps: Option<f64>,
+    /// For testing only: GNSS (fixes and raw measurements) cut out as in a tunnel, see [`GnssOutages`].
+    pub gnss_outages: Option<GnssOutages>,
+}
+
+/// GNSS cut out for the last `outage_s` of every `period_s` from `start_ns`, to score dead reckoning on rides
+/// that had it throughout.
+#[derive(Clone, Copy, Debug)]
+pub struct GnssOutages {
+    pub start_ns: i64,
+    pub outage_s: f64,
+    pub period_s: f64,
+}
+
+impl GnssOutages {
+    fn covers(&self, t_ns: i64) -> bool {
+        let s = (t_ns - self.start_ns) as f64 * 1e-9;
+        s >= 0.0 && s.rem_euclid(self.period_s) >= self.period_s - self.outage_s
+    }
 }
 
 pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Replay> {
@@ -122,6 +140,11 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
     }
     // Stable, so at equal times sensors (pushed first) come before GNSS.
     events.sort_by_key(|(t, _)| *t);
+    if let Some(cut) = options.gnss_outages {
+        events.retain(|(t, e)| {
+            !(matches!(e, Event::Fix(_) | Event::Measurements(_)) && cut.covers(*t))
+        });
+    }
 
     let mut fusion = Fusion::whole_ride();
     fusion.set_max_speed(options.max_speed_mps);
