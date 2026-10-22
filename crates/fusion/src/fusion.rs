@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, VecDeque};
 use ride_gnss::solve::{Navigator, geodetic_to_ecef};
 use ride_session::proto::{GnssMeasurementsEvent, GnssNavigationMessage};
 
+use crate::doors::{DoorCycle, DoorDetector};
 use crate::live_speed::{Estimate, LiveSpeedEstimator, SUBWAY_MAX_SPEED_MPS};
 use crate::position::{PositionEstimate, PositionInput, smooth};
 use crate::subway::SubwayDetector;
@@ -54,7 +55,14 @@ enum Input {
     /// Entering or leaving the subway changed the speed's upper bound from this,
     /// which the backward pass goes back to.
     MaxSpeedBefore(Option<f64>),
+    /// At a door cycle's closing: the train stood still from this time to here (see [`DWELL_SURE_S`]).
+    StandingSince(i64),
 }
+
+/// How long before a door cycle's closing the train surely stood (s): the chime comes in the 8 s before it,
+/// and openings, found less surely, aren't used.
+const DWELL_SURE_S: f64 = 8.0;
+const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
 
 /// Inputs settle into the forward pass, in time order, once input this much newer has arrived: Android delivers
 /// sensor samples up to 1 s late (`SensorStreamRecorder.kt`'s batching), and GNSS a little after its epoch.
@@ -71,6 +79,15 @@ enum Pending {
     Measurements(Box<GnssMeasurementsEvent>),
     /// A Wi-Fi scan's SSIDs.
     WifiScan(Vec<String>),
+    /// Microphone samples from a stream frame, with the recorder's (frame, elapsed realtime ns) timestamps.
+    Audio(Box<AudioSamples>),
+}
+
+#[derive(Clone, Debug)]
+pub struct AudioSamples {
+    pub first_frame: i64,
+    pub samples: Vec<i16>,
+    pub timestamps: Vec<(i64, i64)>,
 }
 
 impl Pending {
@@ -82,6 +99,7 @@ impl Pending {
             Self::Fix(_) => 2,
             Self::Measurements(_) => 3,
             Self::WifiScan(_) => 4,
+            Self::Audio(_) => 5,
         }
     }
 }
@@ -141,7 +159,7 @@ fn step_estimator(
     own: Option<(f64, f64)>,
 ) -> Option<Input> {
     match input {
-        Pending::WifiScan(_) => None,
+        Pending::WifiScan(_) | Pending::Audio(_) => None,
         Pending::Accel(a) => {
             estimator.on_accel(t_ns, a[0], a[1], a[2]);
             Some(Input::Accel(*a))
@@ -277,6 +295,9 @@ pub struct Fusion {
     /// The turn about up (rad) since the last sample, and the last gyro sample's time.
     turn: f64,
     last_gyro_ns: Option<i64>,
+    /// Door cycles from the microphone, if it's fed; and those found so far.
+    doors: Option<DoorDetector>,
+    door_cycles: Vec<DoorCycle>,
 }
 
 impl Default for Fusion {
@@ -322,6 +343,8 @@ impl Fusion {
             position_inputs: Vec::new(),
             turn: 0.0,
             last_gyro_ns: None,
+            doors: None,
+            door_cycles: Vec::new(),
         }
     }
 
@@ -340,6 +363,18 @@ impl Fusion {
     /// A Wi-Fi scan's SSIDs, at the time it was recorded.
     pub fn on_wifi_scan(&mut self, t_ns: i64, ssids: Vec<String>) {
         self.arrive(t_ns, Pending::WifiScan(ssids));
+    }
+
+    /// Microphone samples (mono, `rate_hz`) as they're read, at `t_ns`, when they arrived;
+    /// door cycles in them hold the speed at zero (see [`crate::doors`]).
+    pub fn on_audio(&mut self, t_ns: i64, rate_hz: u32, audio: AudioSamples) {
+        self.doors.get_or_insert_with(|| DoorDetector::new(rate_hz));
+        self.arrive(t_ns, Pending::Audio(Box::new(audio)));
+    }
+
+    /// The door cycles found so far.
+    pub fn door_cycles(&self) -> &[DoorCycle] {
+        &self.door_cycles
     }
 
     pub fn navigator(&self) -> &Navigator {
@@ -421,6 +456,12 @@ impl Fusion {
 
     fn settle(&mut self, t_ns: i64, input: Pending) {
         self.settled_ns = Some(self.settled_ns.map_or(t_ns, |s| s.max(t_ns)));
+        if let (Pending::Audio(a), Some(doors)) = (&input, &mut self.doors) {
+            for cycle in doors.on_audio(a.first_frame, &a.samples, &a.timestamps) {
+                self.on_door_cycle(t_ns, cycle);
+            }
+            return;
+        }
         let solution = match &input {
             Pending::Measurements(event) => self.navigator.on_measurements(event).ok(),
             Pending::Fix(f) => {
@@ -490,6 +531,58 @@ impl Fusion {
         }
     }
 
+    /// A door cycle found at `t_ns`: the train stood from [`DWELL_SURE_S`] before its closing to the closing.
+    fn on_door_cycle(&mut self, t_ns: i64, cycle: DoorCycle) {
+        self.door_cycles.push(cycle);
+        // Since the speed was last measured, the IMU alone carried it, and its error there is mostly a constant
+        // leak (gravity through a small tilt, or bias), which grows linearly: take it out of the forward samples
+        // as a ramp from nothing then to all of it at the closing, and all of it after.
+        if let Some(anchor) = self
+            .estimator
+            .last_measured_ns()
+            .filter(|&a| a < cycle.close_ns)
+            && let Some(error) = self
+                .forward
+                .iter()
+                .rev()
+                .find(|(t, _)| *t <= cycle.close_ns)
+                .map(|(_, e)| e.speed_mps)
+        {
+            let ramp = |t: i64| {
+                if t <= anchor {
+                    0.0
+                } else if t >= cycle.close_ns {
+                    error
+                } else {
+                    error * (t - anchor) as f64 / (cycle.close_ns - anchor) as f64
+                }
+            };
+            for (t, e) in self.forward.iter_mut().rev() {
+                if *t <= anchor {
+                    break;
+                }
+                e.speed_mps = (e.speed_mps - ramp(*t)).max(0.0);
+            }
+            for (t, input) in self.position_inputs.iter_mut().rev() {
+                if *t <= anchor {
+                    break;
+                }
+                if let PositionInput::Speed(v, _) = input {
+                    *v = (*v - ramp(*t)).max(0.0);
+                }
+            }
+        }
+        self.estimator.on_stopped_at(cycle.close_ns, t_ns);
+        let from = cycle.close_ns - (DWELL_SURE_S * 1e9) as i64;
+        self.buffer(cycle.close_ns, Input::StandingSince(from));
+        let mut t = from;
+        while t <= cycle.close_ns {
+            self.position_inputs
+                .push((t, PositionInput::Speed(0.0, DOOR_STOP_SIGMA_MPS)));
+            t += SAMPLE_EVERY_NS;
+        }
+    }
+
     /// Keeps what the position filter needs of a settled input.
     fn position_input(
         &mut self,
@@ -540,7 +633,7 @@ impl Fusion {
                     ));
                 }
             }
-            Pending::Accel(_) | Pending::WifiScan(_) => {}
+            Pending::Accel(_) | Pending::WifiScan(_) | Pending::Audio(_) => {}
         }
     }
 
@@ -668,29 +761,65 @@ impl Fusion {
         let mut backward = self.estimator.reversed();
         // Forward samples from the latest back, each paired with the backward estimate once the pass reaches it.
         let mut pending = self.forward.iter().rev().peekable();
-        let mut out = Vec::with_capacity(self.forward.len());
+        let mut pairs: Vec<(i64, &Estimate, Estimate)> = Vec::with_capacity(self.forward.len());
+        // Going back through a door cycle's dwell: the time it began.
+        let mut standing_since: Option<i64> = None;
+        // The last (earliest so far) time a measurement set the backward speed, and the first pair after it.
+        let mut anchor: Option<(i64, usize)> = None;
         for &&(t, ref input) in inputs.iter().rev() {
             // Reversed time runs forward from the end; rotation changes sign, acceleration doesn't
             // (see `LiveSpeedEstimator::reversed`).
             let tr = end - t + 1;
             match *input {
-                Input::Accel(a) => backward.on_accel(tr, a[0], a[1], a[2]),
+                Input::Accel(a) => {
+                    backward.on_accel(tr, a[0], a[1], a[2]);
+                    match standing_since {
+                        Some(from) if t >= from => backward.on_known_stop(tr),
+                        Some(_) => {
+                            standing_since = None;
+                            anchor = Some((t, pairs.len()));
+                        }
+                        None => {}
+                    }
+                }
+                Input::StandingSince(from) => {
+                    // As in the forward pass (`on_door_cycle`): the drift since the last measurement, as a ramp.
+                    if let Some((ta, first)) = anchor
+                        && ta > t
+                    {
+                        let error = backward.estimate(tr).speed_mps;
+                        for (ts, _, b) in &mut pairs[first..] {
+                            let ramp = error * (ta - *ts) as f64 / (ta - t) as f64;
+                            b.speed_mps = (b.speed_mps - ramp.clamp(0.0, error)).max(0.0);
+                        }
+                    }
+                    anchor = None;
+                    standing_since = Some(from);
+                }
                 Input::Gyro(w) => backward.on_gyro(-w[0], -w[1], -w[2]),
-                Input::Speed(speed, sigma) => backward.on_gnss_speed(tr, speed, sigma),
+                Input::Speed(speed, sigma) => {
+                    backward.on_gnss_speed(tr, speed, sigma);
+                    anchor = Some((t, pairs.len()));
+                }
                 // Going back past a switch, the bound is the one before it.
                 Input::MaxSpeedBefore(before) => backward.set_max_speed(before),
                 Input::Fix(ref f) => {
-                    backward.on_gnss_fix(tr, f.lat, f.lon, f.accuracy, f.speed, f.speed_sigma)
+                    backward.on_gnss_fix(tr, f.lat, f.lon, f.accuracy, f.speed, f.speed_sigma);
+                    if f.speed.is_some() {
+                        anchor = Some((t, pairs.len()));
+                    }
                 }
             }
             while let Some(&&(ts, ref f)) = pending.peek() {
                 if ts < t {
                     break;
                 }
-                out.push(combine(ts, f, &backward.estimate(end - ts + 1)));
+                pairs.push((ts, f, backward.estimate(end - ts + 1)));
                 pending.next();
             }
         }
+        let mut out: Vec<SmoothedSpeed> =
+            pairs.iter().map(|(ts, f, b)| combine(*ts, f, b)).collect();
         out.reverse();
         out
     }

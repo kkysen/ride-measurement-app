@@ -6,7 +6,8 @@ use ride_session::proto::record::Payload;
 use ride_session::read::Session;
 use ride_session::track::GPS_PROVIDER;
 
-use crate::fusion::{Fix, Fusion, ImuSample, SmoothedSpeed, imu_sample};
+use crate::doors::DoorCycle;
+use crate::fusion::{AudioSamples, Fix, Fusion, ImuSample, SmoothedSpeed, imu_sample};
 
 /// What a replay produced.
 pub struct Replay {
@@ -16,6 +17,8 @@ pub struct Replay {
     pub gnss: Stats,
     /// Smoothed position at every sample (see [`crate::position`]).
     pub positions: Vec<crate::position::PositionEstimate>,
+    /// Door cycles heard, if the session has audio.
+    pub door_cycles: Vec<DoorCycle>,
 }
 
 impl Replay {
@@ -37,7 +40,11 @@ enum Event {
     Measurements(ride_session::proto::GnssMeasurementsEvent),
     Navigation(ride_session::proto::GnssNavigationMessage),
     WifiScan(Vec<String>),
+    Audio(u32, AudioSamples),
 }
+
+/// The app feeds audio to fusion as it reads it, this many frames at a time (`AudioStreamRecorder.kt`).
+const AUDIO_READ_FRAMES: usize = 1600;
 
 /// Uses the uncalibrated accelerometer and gyro if recorded, else the calibrated ones, like the app.
 /// Every input is merged by time; live, they arrive slightly out of order, so the replay can differ a little
@@ -53,6 +60,8 @@ pub struct Options {
     pub max_speed_mps: Option<f64>,
     /// For testing only: GNSS (fixes and raw measurements) cut out as in a tunnel, see [`GnssOutages`].
     pub gnss_outages: Option<GnssOutages>,
+    /// For comparison only: leave the audio out, as before door cycles were heard.
+    pub ignore_audio: bool,
 }
 
 /// GNSS cut out for the last `outage_s` of every `period_s` from `start_ns`, to score dead reckoning on rides
@@ -138,6 +147,52 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
             }
         }
     }
+    // Audio as the app reads it: each read arrives when its last frame was recorded.
+    let audio_rate = session
+        .info
+        .streams
+        .iter()
+        .find(|s| s.name == "audio")
+        .and_then(|s| s.audio.as_ref())
+        .map(|a| a.sample_rate_hz as u32);
+    if let Some(rate) = audio_rate.filter(|_| !options.ignore_audio)
+        && session.stream_path("audio").exists()
+    {
+        let mut clock: Option<(i64, i64)> = None;
+        for chunk in session.read_audio("audio")?.chunks {
+            let samples: Vec<i16> = chunk
+                .pcm_s16le
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&b| i16::from_le_bytes(b))
+                .collect();
+            let timestamps: Vec<(i64, i64)> = chunk
+                .timestamps
+                .iter()
+                .map(|t| (t.frame_position, t.boottime_ns))
+                .collect();
+            clock = timestamps.last().copied().or(clock);
+            let Some((f0, t0)) = clock else { continue };
+            for (i, read) in samples.chunks(AUDIO_READ_FRAMES).enumerate() {
+                let first = chunk.first_frame + (i * AUDIO_READ_FRAMES) as i64;
+                let last = first + read.len() as i64;
+                let arrived = t0 + ((last - f0) as f64 / f64::from(rate) * 1e9) as i64;
+                events.push((
+                    arrived,
+                    Event::Audio(
+                        rate,
+                        AudioSamples {
+                            first_frame: first,
+                            samples: read.to_vec(),
+                            // The app takes one timestamp per read.
+                            timestamps: timestamps.get(i).copied().into_iter().collect(),
+                        },
+                    ),
+                ));
+            }
+        }
+    }
     // Stable, so at equal times sensors (pushed first) come before GNSS.
     events.sort_by_key(|(t, _)| *t);
     if let Some(cut) = options.gnss_outages {
@@ -162,6 +217,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
             }
             Event::Navigation(m) => fusion.on_navigation_message(&m),
             Event::WifiScan(ssids) => fusion.on_wifi_scan(t, ssids),
+            Event::Audio(rate, audio) => fusion.on_audio(t, rate, audio),
         }
     }
     fusion.finish();
@@ -169,5 +225,6 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
         smoothed: fusion.smoothed(),
         gnss: fusion.navigator().stats.clone(),
         positions: fusion.positions(),
+        door_cycles: fusion.door_cycles().to_vec(),
     })
 }

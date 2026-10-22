@@ -22,6 +22,8 @@ pub enum Sensor {
     GnssDoppler,
     GnssPosition,
     Stop,
+    /// A door cycle heard in the sound (see [`crate::doors`]): the train stood still at its closing.
+    Doors,
     /// The mode's top speed, applied when the estimate goes over it (see [`LiveSpeedEstimator::set_max_speed`]).
     SpeedLimit,
 }
@@ -99,6 +101,11 @@ const BIAS_SIGMA0: f64 = 0.1;
 /// Time constant of the reported acceleration's low-pass, to steady it against vibration.
 const ACCEL_TAU_S: f64 = 1.0;
 const STOP_SIGMA_MPS: f64 = 0.05;
+/// A door cycle's closing: the train is standing, but the time is only good to a step's sharpest point.
+const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
+/// How often the speed is kept for a door cycle's closing to be compared with (s), and for how long.
+const HISTORY_EVERY_S: f64 = 0.1;
+const HISTORY_S: f64 = 30.0;
 const DEFAULT_DOPPLER_SIGMA_MPS: f64 = 0.5;
 const MIN_DOPPLER_SIGMA_MPS: f64 = 0.1;
 const POSITION_MAX_DT_S: f64 = 5.0;
@@ -163,6 +170,8 @@ pub struct LiveSpeedEstimator {
 
     // GNSS.
     last_gnss_ns: i64,
+    /// Recent (time, signed speed), every [`HISTORY_EVERY_S`], for measurements of a past moment.
+    history: std::collections::VecDeque<(i64, f64)>,
     /// How far the covariance has been propagated, by the IMU or [`Self::inflate_to`].
     predicted_ns: i64,
     /// The last GNSS speed: time, speed, and sigma.
@@ -215,6 +224,7 @@ impl Default for LiveSpeedEstimator {
             accel_initialized: false,
             accel_reset: false,
             last_gnss_ns: 0,
+            history: std::collections::VecDeque::new(),
             predicted_ns: 0,
             prev_doppler: None,
             along_since_gnss: 0.0,
@@ -413,6 +423,75 @@ impl LiveSpeedEstimator {
                 self.axis_sign_known = true;
             }
         }
+        if self
+            .history
+            .back()
+            .is_none_or(|&(t, _)| (t_ns - t) as f64 * 1e-9 >= HISTORY_EVERY_S)
+        {
+            self.history.push_back((t_ns, self.v));
+            while self
+                .history
+                .front()
+                .is_some_and(|&(t, _)| (t_ns - t) as f64 * 1e-9 > HISTORY_S)
+            {
+                self.history.pop_front();
+            }
+        }
+        self.track_accel(t_ns);
+    }
+
+    /// The train stood still at `stopped_ns`, a few seconds ago (a door cycle's closing, found once the
+    /// closing step is complete). The speed since then is the IMU's integral from there, so the zero applies
+    /// as a measurement that the speed now is its change since then.
+    /// Underground it isn't gated: after a minute without GNSS the speed's sigma is a couple of m/s, so the gate
+    /// would reject exactly the stops that end a runaway. With recent GNSS it's gated like any other.
+    pub fn on_stopped_at(&mut self, stopped_ns: i64, now_ns: i64) {
+        let Some(&(_, then)) = self.history.iter().rev().find(|&&(t, _)| t <= stopped_ns) else {
+            return;
+        };
+        self.inflate_to(now_ns);
+        let z = self.v - then;
+        let r = DOOR_STOP_SIGMA_MPS * DOOR_STOP_SIGMA_MPS;
+        let gnss_recent =
+            self.last_gnss_ns != 0 && (now_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+        let before = self.v;
+        if gnss_recent {
+            self.update(z, r, Sensor::Doors, now_ns);
+        } else {
+            self.update_ungated(z, r, Sensor::Doors, now_ns);
+        }
+        // The speeds kept since were the same integral, so they move with the correction.
+        let shift = self.v - before;
+        for (t, v) in self.history.iter_mut() {
+            if *t >= stopped_ns {
+                *v += shift;
+            }
+        }
+        self.track_accel(now_ns);
+    }
+
+    /// The last time a measurement (GNSS, a stop, or a door cycle) set the speed, not just the IMU.
+    pub fn last_measured_ns(&self) -> Option<i64> {
+        [
+            Sensor::GnssDoppler,
+            Sensor::GnssPosition,
+            Sensor::Stop,
+            Sensor::Doors,
+        ]
+        .iter()
+        .filter_map(|s| self.last_used_ns.get(s).copied())
+        .max()
+    }
+
+    /// The train is standing now (in the smoother's backward pass, across a door cycle), not gated.
+    pub fn on_known_stop(&mut self, t_ns: i64) {
+        self.inflate_to(t_ns);
+        self.update_ungated(
+            0.0,
+            DOOR_STOP_SIGMA_MPS * DOOR_STOP_SIGMA_MPS,
+            Sensor::Doors,
+            t_ns,
+        );
         self.track_accel(t_ns);
     }
 
@@ -639,11 +718,17 @@ impl LiveSpeedEstimator {
     /// Scalar speed measurement with gating; returns whether it was accepted.
     fn update(&mut self, z: f64, r: f64, sensor: Sensor, t_ns: i64) -> bool {
         let y = z - self.v;
-        let s = self.p00 + r;
-        if y * y > GATE_SIGMA * GATE_SIGMA * s {
+        if y * y > GATE_SIGMA * GATE_SIGMA * (self.p00 + r) {
             *self.rejected.entry(sensor).or_default() += 1;
             return false;
         }
+        self.update_ungated(z, r, sensor, t_ns);
+        true
+    }
+
+    fn update_ungated(&mut self, z: f64, r: f64, sensor: Sensor, t_ns: i64) {
+        let y = z - self.v;
+        let s = self.p00 + r;
         let k0 = self.p00 / s;
         let k1 = self.p01 / s;
         self.v += k0 * y;
@@ -656,7 +741,6 @@ impl LiveSpeedEstimator {
         self.p11 = n11;
         self.initialized = true;
         self.mark_used(sensor, t_ns);
-        true
     }
 
     /// Folds the change in fused speed since the last call into the low-passed acceleration.

@@ -95,8 +95,14 @@ fn main() -> anyhow::Result<()> {
                     period_s: f[2].parse().unwrap(),
                 }
             }),
+            ignore_audio: std::env::var_os("NO_AUDIO").is_some(),
         },
     )?;
+    let mut f = std::fs::File::create(out.join("door_cycles.csv"))?;
+    writeln!(f, "open_ns,close_ns")?;
+    for c in &r.door_cycles {
+        writeln!(f, "{},{}", c.open_ns, c.close_ns)?;
+    }
     let mut f = std::fs::File::create(out.join("fused.csv"))?;
     writeln!(f, "t_ns,speed,sigma,forward,backward,accel")?;
     for x in &r.smoothed {
