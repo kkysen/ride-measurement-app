@@ -10,3 +10,4 @@ publish.workspace = true
 anyhow.workspace = true
 ride-gnss.workspace = true
 ride-session.workspace = true
+rustfft.workspace = true

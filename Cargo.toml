@@ -16,5 +16,6 @@ protox = "0.10.0"
 ride-fusion = { path = "crates/fusion" }
 ride-gnss = { path = "crates/gnss" }
 ride-session = { path = "crates/session" }
+rustfft = "6.4.1"
 tempfile = "3"
 zstd = "0.14.3"
