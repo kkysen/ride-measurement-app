@@ -451,6 +451,7 @@ fn payload_name(payload: Option<&Payload>) -> &'static str {
         Some(Payload::Thermal(_)) => "thermal",
         Some(Payload::BleScan(_)) => "ble_scan",
         Some(Payload::RecorderError(_)) => "recorder_error",
+        Some(Payload::WalletNotification(_)) => "wallet_notification",
     }
 }
 

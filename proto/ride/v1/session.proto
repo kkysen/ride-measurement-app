@@ -124,7 +124,18 @@ message Record {
     ThermalStatus thermal = 15;
     BleScanResults ble_scan = 16;
     RecorderError recorder_error = 17;
+    WalletNotification wallet_notification = 18;
   }
+}
+
+// A Google Wallet notification, e.g. after an OMNY tap, from `NotificationListenerService` (the rider grants access).
+// It can come some seconds after the tap; the reader's beep in the audio times it.
+message WalletNotification {
+  string package_name = 1;
+  string title = 2;
+  string text = 3;
+  // `StatusBarNotification.getPostTime`, wall clock milliseconds.
+  int64 post_time_ms = 4;
 }
 
 message GnssMeasurementsEvent {

@@ -137,6 +137,7 @@ class RecorderService : Service() {
             }
         }
         if (radio != null) {
+            WalletListener.sink = radio
             radioRecorder = Health.guard("radio") { RadioRecorder(this, radio) }
             bleRecorder = Health.guard("ble") { BleRecorder(this, radio) }
         }
@@ -189,6 +190,7 @@ class RecorderService : Service() {
         eventsStream = null
         Health.guard("stop gnss") { gnssRecorder?.stop() }
         gnssRecorder = null
+        WalletListener.sink = null
         Health.guard("stop radio") { radioRecorder?.stop() }
         radioRecorder = null
         Health.guard("stop ble") { bleRecorder?.stop() }

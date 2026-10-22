@@ -1,5 +1,7 @@
 package dev.khyber.ride
 
+import androidx.compose.ui.platform.LocalContext
+
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -87,7 +89,7 @@ class MainActivity : ComponentActivity() {
             val status by LiveSpeed.status.collectAsStateWithLifecycle()
             status?.let { st ->
                 val where = st.station?.let { (if (st.atStation) " · at " else " · near ") + it + st.lines.joinToString("/", " (", ")").takeIf { st.lines.isNotEmpty() }.orEmpty() }.orEmpty()
-                Text(st.mode + where + (st.cars?.let { " · $it" } ?: ""), style = MaterialTheme.typography.titleMedium)
+                Text(st.mode + where + (st.cars?.let { " · $it cars" } ?: ""), style = MaterialTheme.typography.titleMedium)
             }
             val sensors = estimate.sensors.sortedBy { it.ordinal }.joinToString { it.name.lowercase().replace('_', ' ') }
             Text(if (estimate.stopped) "stopped · $sensors" else sensors)
@@ -159,6 +161,14 @@ class MainActivity : ComponentActivity() {
             OutlinedTextField(note, { note = it }, label = { Text("Station name or note (optional)") }, singleLine = true)
             HapticButton(onClick = { add(ManualEvent.Kind.KIND_NOTE, "note", note).also { note = "" } }) { Text("Add note") }
             Text("Anything else worth knowing later, e.g. \"screen on for beacons\" or \"phone in pocket\".", style = MaterialTheme.typography.bodySmall)
+            // Last on the page, so nothing moves when it goes away.
+            val context = LocalContext.current
+            if (!WalletListener.allowed(context)) {
+                HapticButton(onClick = {
+                    context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                }) { Text("Allow Google Wallet notifications") }
+                Text("To record OMNY taps: Ride Logger keeps only Google Wallet's notifications.", style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 
