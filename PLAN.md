@@ -384,12 +384,14 @@ Open, roughly in order:
 
 9. 2026-10-22, from the sensors alone (committed, not yet on the phone):
    - Door cycles in Rust (`crates/fusion/src/doors.rs`, `e9cb7d8`), fed live from each microphone read (`a390bac`):
-     closings match Python's exactly and never came while a train moved; openings aren't sure (several steps up
+     closings match Python's exactly; none GNSS could check came while a train moved, and all 39 aboard have the
+     stop's lurch before (36) or a start surge after (33), underground too; openings aren't sure (several steps up
      per closing; where GNSS could check, 4 of 4 earliest openings aboard were moving), so only closings are used.
      A closing holds the speed at zero (ungated underground), takes the drift since the last measurement out as a
-     ramp, forward and backward, and the 8 s before it are zero for the smoother and the position filter (`b1427ca`):
-     median forward speed at tapped stops 23 to 6, 32 to 3, 55 to 9, 49 to 15 mph; smoothed under 1 m/s at 18 of 58
-     stops, from 6; fix vs position max on `214427` 331 m to 61 m. Runaways between stations still reach 55 mph.
+     ramp, forward and backward, and the 8 s before it are zero for the smoother and the position filter (`b1427ca`).
+     With walking and the gravity fix too: median forward speed at tapped stops 23 to 11, 16 to 2, 32 to 3, 52 to 13,
+     55 to 20, 49 to 14 mph; smoothed under 1 m/s at 19 of 58 stops, from 6; fix vs position max on `214427`
+     331 m to 61 m. Runaways between stations still reach 55 mph. The app's 100 ms reads give the same closings.
    - Each ride's door-opening sound, learned from its own cycles (`door_self_template.py`): 28 of the 31 openings
      a candidate could find, against 7 for the earliest; not yet trusted for zero speed (one of two GNSS-checked
      picks was at 11 m/s). Next: port it once more rides check it.
