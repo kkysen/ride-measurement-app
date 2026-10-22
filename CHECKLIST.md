@@ -76,6 +76,12 @@ Details for each step are in `README.md` under "Your steps".
 
 ## Later, whenever
 
-- [ ] OneDrive: Azure app registration, add `ride.onedriveClientId` to `~/.gradle/gradle.properties`, reinstall, sign in in the app.
+- [ ] OneDrive: on portal.azure.com, "App registrations", "New registration": any name (e.g. RideLogger),
+      "Personal Microsoft accounts only", no redirect URI. Under "Authentication", turn on "Allow public client flows"
+      (the app signs in with a device code, so no Android platform, package name, or signature hash is needed).
+      Send me the "Application (client) ID"; it goes in `ride.onedriveClientId` in `~/.gradle/gradle.properties`,
+      then reinstall and sign in in the app.
+- [ ] OpenCelliD (Google's backup for stations): sign up at opencellid.org, confirm the email, copy the access token
+      (`pk.` followed by letters) from the account page, and send it to me.
 - [x] GitHub Actions: add the four `RIDE_SIGNING_*` repository secrets (README step 6), then ask me to push.
       They let CI sign APKs with your one key, so CI builds install over local ones; it means uploading the key to GitHub.
