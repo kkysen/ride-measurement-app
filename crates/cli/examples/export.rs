@@ -98,6 +98,11 @@ fn main() -> anyhow::Result<()> {
             ignore_audio: std::env::var_os("NO_AUDIO").is_some(),
         },
     )?;
+    let mut f = std::fs::File::create(out.join("subway.csv"))?;
+    writeln!(f, "t_ns,in_subway")?;
+    for (t, on) in &r.subway_changes {
+        writeln!(f, "{t},{on}")?;
+    }
     let mut f = std::fs::File::create(out.join("door_cycles.csv"))?;
     writeln!(f, "open_ns,close_ns")?;
     for c in &r.door_cycles {

@@ -84,6 +84,8 @@ enum Pending {
     WifiScan(Vec<String>),
     /// Microphone samples from a stream frame, with the recorder's (frame, elapsed realtime ns) timestamps.
     Audio(Box<AudioSamples>),
+    /// The magnetic field's magnitude (uT).
+    Mag(f64),
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +105,7 @@ impl Pending {
             Self::Measurements(_) => 3,
             Self::WifiScan(_) => 4,
             Self::Audio(_) => 5,
+            Self::Mag(_) => 6,
         }
     }
 }
@@ -138,7 +141,8 @@ fn step(
         Pending::WifiScan(ssids) => context
             .subway
             .on_wifi_scan(t_ns, ssids.iter().map(String::as_str)),
-        Pending::Fix(fix) => context.subway.on_fix(t_ns, fix.accuracy),
+        Pending::Fix(fix) => context.subway.on_fix(t_ns, fix.accuracy, fix.speed),
+        Pending::Mag(b) => context.subway.on_magnetometer(t_ns, *b),
         _ => {}
     }
     let in_subway = context.subway.in_subway(t_ns);
@@ -162,7 +166,7 @@ fn step_estimator(
     own: Option<(f64, f64)>,
 ) -> Option<Input> {
     match input {
-        Pending::WifiScan(_) | Pending::Audio(_) => None,
+        Pending::WifiScan(_) | Pending::Audio(_) | Pending::Mag(_) => None,
         Pending::Accel(a) => {
             estimator.on_accel(t_ns, a[0], a[1], a[2]);
             Some(Input::Accel(*a))
@@ -211,6 +215,8 @@ pub const MAX_UNMEASURED_NS: i64 = 3_600_000_000_000;
 
 /// `android.hardware.Sensor` types.
 pub const TYPE_ACCELEROMETER: i32 = 1;
+pub const TYPE_MAGNETIC_FIELD: i32 = 2;
+pub const TYPE_MAGNETIC_FIELD_UNCALIBRATED: i32 = 14;
 pub const TYPE_GYROSCOPE: i32 = 4;
 pub const TYPE_GYROSCOPE_UNCALIBRATED: i32 = 16;
 pub const TYPE_ACCELEROMETER_UNCALIBRATED: i32 = 35;
@@ -218,14 +224,17 @@ pub const TYPE_ACCELEROMETER_UNCALIBRATED: i32 = 35;
 pub enum ImuSample {
     Accel([f64; 3]),
     Gyro([f64; 3]),
+    Mag([f64; 3]),
 }
 
-/// An accelerometer or gyro sample from Android's values: uncalibrated sensors carry their bias estimate in
+/// An accelerometer, gyro, or magnetometer sample from Android's values: uncalibrated sensors carry their bias estimate in
 /// `values[3..6]`, which is subtracted (in `f32`, as Android computes the calibrated values).
 pub fn imu_sample(sensor_type: i32, v: &[f32]) -> Option<ImuSample> {
     let uncalibrated = matches!(
         sensor_type,
-        TYPE_ACCELEROMETER_UNCALIBRATED | TYPE_GYROSCOPE_UNCALIBRATED
+        TYPE_ACCELEROMETER_UNCALIBRATED
+            | TYPE_GYROSCOPE_UNCALIBRATED
+            | TYPE_MAGNETIC_FIELD_UNCALIBRATED
     );
     if v.len() < 3 || (uncalibrated && v.len() < 6) {
         return None;
@@ -234,6 +243,7 @@ pub fn imu_sample(sensor_type: i32, v: &[f32]) -> Option<ImuSample> {
     match sensor_type {
         TYPE_ACCELEROMETER | TYPE_ACCELEROMETER_UNCALIBRATED => Some(ImuSample::Accel(xyz)),
         TYPE_GYROSCOPE | TYPE_GYROSCOPE_UNCALIBRATED => Some(ImuSample::Gyro(xyz)),
+        TYPE_MAGNETIC_FIELD | TYPE_MAGNETIC_FIELD_UNCALIBRATED => Some(ImuSample::Mag(xyz)),
         _ => None,
     }
 }
@@ -302,6 +312,8 @@ pub struct Fusion {
     doors: Option<DoorDetector>,
     door_cycles: Vec<DoorCycle>,
     walking: WalkingDetector,
+    /// When the subway detector switched, and to what.
+    subway_changes: Vec<(i64, bool)>,
 }
 
 impl Default for Fusion {
@@ -350,6 +362,7 @@ impl Fusion {
             doors: None,
             door_cycles: Vec::new(),
             walking: WalkingDetector::default(),
+            subway_changes: Vec::new(),
         }
     }
 
@@ -377,6 +390,11 @@ impl Fusion {
         self.arrive(t_ns, Pending::Audio(Box::new(audio)));
     }
 
+    /// When the subway detector switched on (true) or off, in order.
+    pub fn subway_changes(&self) -> &[(i64, bool)] {
+        &self.subway_changes
+    }
+
     /// The door cycles found so far.
     pub fn door_cycles(&self) -> &[DoorCycle] {
         &self.door_cycles
@@ -395,8 +413,17 @@ impl Fusion {
         match imu_sample(sensor_type, values) {
             Some(ImuSample::Accel(a)) => self.on_accel(t_ns, a),
             Some(ImuSample::Gyro(w)) => self.on_gyro(t_ns, w),
+            Some(ImuSample::Mag(b)) => self.on_magnetometer(t_ns, b),
             None => {}
         }
+    }
+
+    /// A magnetometer sample (uT), for telling the subway's traction current.
+    pub fn on_magnetometer(&mut self, t_ns: i64, b: [f64; 3]) {
+        self.arrive(
+            t_ns,
+            Pending::Mag((b[0] * b[0] + b[1] * b[1] + b[2] * b[2]).sqrt()),
+        );
     }
 
     pub fn on_accel(&mut self, t_ns: i64, a: [f64; 3]) {
@@ -493,6 +520,7 @@ impl Fusion {
         );
         if let Some(before) = bound_before {
             self.buffer(t_ns, Input::MaxSpeedBefore(before));
+            self.subway_changes.push((t_ns, self.context.in_subway));
         }
         if let Pending::Accel(a) = &input
             && self
@@ -647,7 +675,7 @@ impl Fusion {
                     ));
                 }
             }
-            Pending::Accel(_) | Pending::WifiScan(_) | Pending::Audio(_) => {}
+            Pending::Accel(_) | Pending::WifiScan(_) | Pending::Audio(_) | Pending::Mag(_) => {}
         }
     }
 

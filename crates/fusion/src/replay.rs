@@ -19,6 +19,8 @@ pub struct Replay {
     pub positions: Vec<crate::position::PositionEstimate>,
     /// Door cycles heard, if the session has audio.
     pub door_cycles: Vec<DoorCycle>,
+    /// When the subway detector switched on (true) or off.
+    pub subway_changes: Vec<(i64, bool)>,
 }
 
 impl Replay {
@@ -36,6 +38,7 @@ impl Replay {
 enum Event {
     Accel([f64; 3]),
     Gyro([f64; 3]),
+    Mag([f64; 3]),
     Fix(Fix),
     Measurements(ride_session::proto::GnssMeasurementsEvent),
     Navigation(ride_session::proto::GnssNavigationMessage),
@@ -83,7 +86,11 @@ impl GnssOutages {
 pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Replay> {
     let mut events: Vec<(i64, Event)> = Vec::new();
     // The recorded streams the app feeds live, preferring uncalibrated (see `RecorderService.kt`).
-    for (name, fallback) in [("accel_uncal", "accel"), ("gyro_uncal", "gyro")] {
+    for (name, fallback) in [
+        ("accel_uncal", "accel"),
+        ("gyro_uncal", "gyro"),
+        ("mag_uncal", "mag"),
+    ] {
         let info = |n: &str| session.info.streams.iter().find(|s| s.name == n);
         let Some(stream) = info(name).or_else(|| info(fallback)) else {
             continue;
@@ -98,6 +105,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                 match imu_sample(sensor_type, &values[i * n..(i + 1) * n]) {
                     Some(ImuSample::Accel(a)) => events.push((t, Event::Accel(a))),
                     Some(ImuSample::Gyro(w)) => events.push((t, Event::Gyro(w))),
+                    Some(ImuSample::Mag(b)) => events.push((t, Event::Mag(b))),
                     None => {}
                 }
             }
@@ -211,6 +219,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
         match e {
             Event::Accel(a) => fusion.on_accel(t, a),
             Event::Gyro(w) => fusion.on_gyro(t, w),
+            Event::Mag(b) => fusion.on_magnetometer(t, b),
             Event::Fix(fix) => fusion.on_fix(fix),
             Event::Measurements(m) => {
                 fusion.on_gnss_measurements(t, &m);
@@ -226,5 +235,6 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
         gnss: fusion.navigator().stats.clone(),
         positions: fusion.positions(),
         door_cycles: fusion.door_cycles().to_vec(),
+        subway_changes: fusion.subway_changes().to_vec(),
     })
 }
