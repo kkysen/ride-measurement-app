@@ -599,10 +599,12 @@ Open, roughly in order:
      (not B) from 110 St; the F from Queens Plaza. Short legs, lines sharing stops and minutes, platform waits,
      and legs without a detected walk between trains are still unsure or wrong.
    - Mobile data is fine for now (the rider has unlimited data).
-   - Next: cross-platform transfers with little walking (e.g. 96 St, and `215922`'s 3 to 1 unsplit):
-     detect them by the car beacon set changing (the old train's cars fade, a new set appears), and on lines without
-     beacons by the chime family changing, an extra door cycle with no departure between, and the recorded GTFS-RT
-     feed showing which trains were at the station.
+   - Cross-platform transfers (2026-10-22): `215922`'s 3 to 1 at 96 St (10:37 pm) had no stop found at all;
+     a departure after 24 s or more of walking that began as a walk off, with a ride before it, now infers the stop
+     6 s before the walk (`ccc2a24`; within 11 s of the taps, no stop added on 7 other rides). With few steps,
+     `train_change` marks a stop whose cars heard before and after are all different (`7b646c6`): exactly R to M
+     and M to F on `184134`, nothing ridden through. Without beacons and steps: the chime family can tell the 1
+     (R62A) from the 2 (R142), not from the 3 (R62); the recorded GTFS-RT feed is the general answer.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
