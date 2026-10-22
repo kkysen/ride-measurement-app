@@ -737,6 +737,46 @@ mod tests {
     }
 
     #[test]
+    fn a_station_pin_takes_out_a_long_tunnel_drift() {
+        // Ten minutes underground with the speed 10% high: forward, 600 m off by the end.
+        // A stop at a known station halfway (a fix there, 90 m accurate) brings it back.
+        let run = |pin: bool| {
+            let (plane, mut inputs) = ride(700, 1e9, 30..660);
+            for (_, input) in &mut inputs {
+                if let PositionInput::Speed(v, _) = input {
+                    *v *= 1.1;
+                }
+            }
+            if pin {
+                let (lat, lon) = plane.geodetic(path(345.0, 1e9).0);
+                inputs.push((
+                    345 * S,
+                    PositionInput::Fix {
+                        lat,
+                        lon,
+                        accuracy_m: 90.0,
+                    },
+                ));
+                inputs.sort_by_key(|(t, _)| *t);
+            }
+            let es = forward(&inputs);
+            let at = |t: usize| error_m(&plane, &es[t], path(t as f64, 1e9).0);
+            (at(350), at(650))
+        };
+        let (without_350, without_650) = run(false);
+        let (with_350, with_650) = run(true);
+        assert!(without_350 > 200.0, "{without_350:.0} m");
+        assert!(
+            with_350 < 100.0,
+            "{with_350:.0} m (without {without_350:.0} m)"
+        );
+        assert!(
+            with_650 < without_650 / 1.5,
+            "{with_650:.0} m vs {without_650:.0} m"
+        );
+    }
+
+    #[test]
     fn skips_an_outlying_fix() {
         let (plane, mut inputs) = ride(60, 1e9, 0..0);
         // A fix 300 m off to the north at 30 s.

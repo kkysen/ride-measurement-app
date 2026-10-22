@@ -74,6 +74,9 @@ const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
 /// over the gap; beyond that they're scaled down to it. Indoors at Flushing (`20261020-154951`, 4:27 pm) the speed
 /// ran to 102 mph between fixes a few meters apart. A subway's track is rarely half again the straight line.
 const GAP_FIX_M: f64 = 50.0;
+/// A stop at an identified station pins the position to the station's point, this accurate (m, 68%):
+/// the rider is anywhere along a platform of up to 180 m (ten 60 ft cars), and the MTA's point is about its middle.
+const STATION_PIN_M: f64 = 90.0;
 const GAP_MIN_NS: i64 = 10_000_000_000;
 const GAP_PATH_RATIO: f64 = 2.0;
 /// Walking around (a store, a platform) between the fixes, which the straight distance doesn't see.
@@ -754,10 +757,22 @@ impl Fusion {
             .network_station
             .filter(|&(at, _)| (t_ns - at) as f64 * 1e-9 <= 30.0)
             .map(|(_, s)| s);
-        self.last_stop = Some((
-            t_ns,
-            network.or_else(|| self.cell.and_then(|(_, c)| stations::of_cell(c))),
-        ));
+        let station = network.or_else(|| self.cell.and_then(|(_, c)| stations::of_cell(c)));
+        self.last_stop = Some((t_ns, station));
+        // Stopped at a known station: underground, the only fix there is, and what keeps the heading fix
+        // (the position's direction of travel, `ce084a5`) from carrying a drift on to the next station.
+        if self.context.in_subway
+            && let Some(s) = station
+        {
+            self.position_inputs.push((
+                cycle.close_ns - (DWELL_SURE_S * 1e9) as i64 / 2,
+                PositionInput::Fix {
+                    lat: s.lat,
+                    lon: s.lon,
+                    accuracy_m: STATION_PIN_M,
+                },
+            ));
+        }
         // Since the speed was last measured, the IMU alone carried it, and its error there is mostly a constant
         // leak (gravity through a small tilt, or bias), which grows linearly: take it out of the forward samples
         // as a ramp from nothing then to all of it at the closing, and all of it after.
