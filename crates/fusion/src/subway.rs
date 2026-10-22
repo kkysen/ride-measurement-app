@@ -23,6 +23,50 @@ const SUBWAY_WIFI_HOLD_NS: i64 = 60_000_000_000;
 /// A fix this recent and this good means GNSS is working, so not underground.
 const FIX_HOLD_NS: i64 = 10_000_000_000;
 const GOOD_FIX_ACCURACY_M: f64 = 50.0;
+/// The subway's track above ground, from `python/experiments/open_track.py` (MTA GTFS shapes between stations that
+/// are elevated, on a viaduct or embankment, at grade, or in an open cut): little-endian i32 pairs, latitude and
+/// longitude in 1e-5 degrees, every 10 m. Underground track is left out: it runs under streets.
+const OPEN_TRACK: &[u8] = include_bytes!("../data/open_track.bin");
+/// A good fix this close to open track (m), moving at least [`ON_TRACK_MPS`], is a train on it;
+/// it counts for [`ON_TRACK_HOLD_NS`]. Elevated lines see street Wi-Fi and keep GNSS, so nothing else catches them.
+const ON_TRACK_M: f64 = 25.0;
+const ON_TRACK_MPS: f64 = 5.0;
+const ON_TRACK_HOLD_NS: i64 = 30_000_000_000;
+/// Open track points by grid cell (1e-3 degrees), for nearest-point lookups.
+fn open_track() -> &'static std::collections::HashMap<(i32, i32), Vec<(i32, i32)>> {
+    static GRID: std::sync::OnceLock<std::collections::HashMap<(i32, i32), Vec<(i32, i32)>>> =
+        std::sync::OnceLock::new();
+    GRID.get_or_init(|| {
+        let mut grid: std::collections::HashMap<(i32, i32), Vec<(i32, i32)>> = Default::default();
+        for p in OPEN_TRACK.as_chunks::<8>().0 {
+            let lat = i32::from_le_bytes([p[0], p[1], p[2], p[3]]);
+            let lon = i32::from_le_bytes([p[4], p[5], p[6], p[7]]);
+            grid.entry((lat.div_euclid(100), lon.div_euclid(100)))
+                .or_default()
+                .push((lat, lon));
+        }
+        grid
+    })
+}
+
+/// Distance (m) from a point to the nearest open track, if within about 100 m.
+pub fn open_track_m(lat: f64, lon: f64) -> Option<f64> {
+    let (la, lo) = ((lat * 1e5).round() as i32, (lon * 1e5).round() as i32);
+    let (ca, co) = (la.div_euclid(100), lo.div_euclid(100));
+    let m_lat = 1e-5_f64.to_radians() * 6_371_000.0;
+    let m_lon = m_lat * lat.to_radians().cos();
+    let mut best: Option<f64> = None;
+    for da in -1..=1 {
+        for dn in -1..=1 {
+            for &(pa, po) in open_track().get(&(ca + da, co + dn)).into_iter().flatten() {
+                let d = (f64::from(pa - la) * m_lat).hypot(f64::from(po - lo) * m_lon);
+                best = Some(best.map_or(d, |b: f64| b.min(d)));
+            }
+        }
+    }
+    best
+}
+
 /// A fix while moving at least this fast (m/s) is outdoors on the move, not on a platform.
 const MOVING_MPS: f64 = 3.0;
 /// The magnetometer: windows its spread is measured over, the spread that means a train's traction current,
@@ -50,8 +94,9 @@ pub struct SubwayDetector {
     last_good_fix_ns: Option<i64>,
     /// How many networks the latest scan saw, once there's been one.
     last_scan_networks: Option<usize>,
-    /// The latest good fix while moving.
+    /// The latest good fix while moving, and the latest on open track (see [`ON_TRACK_M`]).
     last_moving_fix_ns: Option<i64>,
+    last_on_track_ns: Option<i64>,
     /// The current magnetometer window: its start, and the count, sum, and sum of squares of |B| (uT).
     mag_window: Option<(i64, f64, f64, f64)>,
     last_mag_burst_ns: Option<i64>,
@@ -70,11 +115,24 @@ impl SubwayDetector {
         self.last_scan_networks = Some(n);
     }
 
-    pub fn on_fix(&mut self, t_ns: i64, accuracy_m: Option<f64>, speed_mps: Option<f64>) {
+    pub fn on_fix(
+        &mut self,
+        t_ns: i64,
+        lat: f64,
+        lon: f64,
+        accuracy_m: Option<f64>,
+        speed_mps: Option<f64>,
+    ) {
         if accuracy_m.is_some_and(|a| a < GOOD_FIX_ACCURACY_M) {
             self.last_good_fix_ns = Some(t_ns);
             if speed_mps.is_some_and(|v| v >= MOVING_MPS) {
                 self.last_moving_fix_ns = Some(t_ns);
+            }
+            if speed_mps.is_some_and(|v| v >= ON_TRACK_MPS)
+                && accuracy_m.is_some_and(|a| a <= ON_TRACK_M)
+                && open_track_m(lat, lon).is_some_and(|d| d <= ON_TRACK_M)
+            {
+                self.last_on_track_ns = Some(t_ns);
             }
         }
     }
@@ -109,9 +167,10 @@ impl SubwayDetector {
             && !self
                 .last_moving_fix_ns
                 .is_some_and(|m| self.last_subway_wifi_ns.is_some_and(|w| m > w));
-        wifi || (!recent(self.last_good_fix_ns, FIX_HOLD_NS)
-            && self.last_scan_networks.is_some_and(|n| n < FEW_NETWORKS)
-            && recent(self.last_mag_burst_ns, MAG_HOLD_NS))
+        wifi || recent(self.last_on_track_ns, ON_TRACK_HOLD_NS)
+            || (!recent(self.last_good_fix_ns, FIX_HOLD_NS)
+                && self.last_scan_networks.is_some_and(|n| n < FEW_NETWORKS)
+                && recent(self.last_mag_burst_ns, MAG_HOLD_NS))
     }
 }
 
@@ -136,7 +195,7 @@ mod tests {
     fn in_while_subway_wifi_is_recent() {
         let mut d = SubwayDetector::default();
         let street: Vec<String> = (0..40).map(|i| format!("Home-{i}")).collect();
-        d.on_fix(0, Some(5.0), None);
+        d.on_fix(0, 40.0, -74.5, Some(5.0), None);
         d.on_wifi_scan(0, street.iter().map(String::as_str));
         assert!(!d.in_subway(S));
         d.on_wifi_scan(
@@ -145,10 +204,10 @@ mod tests {
                 .into_iter()
                 .chain(street.iter().map(String::as_str)),
         );
-        d.on_fix(10 * S, Some(5.0), None);
+        d.on_fix(10 * S, 40.0, -74.5, Some(5.0), None);
         assert!(d.in_subway(10 * S));
         assert!(d.in_subway(70 * S));
-        d.on_fix(80 * S, Some(5.0), None);
+        d.on_fix(80 * S, 40.0, -74.5, Some(5.0), None);
         assert!(!d.in_subway(80 * S));
     }
 
@@ -163,11 +222,11 @@ mod tests {
         assert!(!d.in_subway(0));
         d.on_wifi_scan(0, ["A", "B"]);
         assert!(d.in_subway(S));
-        d.on_fix(2 * S, Some(8.0), None);
+        d.on_fix(2 * S, 40.0, -74.5, Some(8.0), None);
         assert!(!d.in_subway(3 * S));
         // A poor fix doesn't count.
         assert!(d.in_subway(13 * S));
-        d.on_fix(14 * S, Some(500.0), None);
+        d.on_fix(14 * S, 40.0, -74.5, Some(500.0), None);
         assert!(d.in_subway(14 * S));
     }
 
@@ -185,9 +244,22 @@ mod tests {
     fn a_moving_fix_ends_the_subway_wifi() {
         let mut d = SubwayDetector::default();
         d.on_wifi_scan(0, ["\"OFMTA1XWIFI\""]);
-        d.on_fix(5 * S, Some(30.0), Some(1.0));
+        d.on_fix(5 * S, 40.0, -74.5, Some(30.0), Some(1.0));
         assert!(d.in_subway(10 * S));
-        d.on_fix(20 * S, Some(5.0), Some(8.0));
+        d.on_fix(20 * S, 40.0, -74.5, Some(5.0), Some(8.0));
         assert!(!d.in_subway(20 * S));
+    }
+
+    #[test]
+    fn a_fix_moving_on_elevated_track() {
+        // The 7 over Roosevelt Av at 74 St, and a block south of it.
+        assert!(open_track_m(40.74685, -73.89135).is_some_and(|d| d < 25.0));
+        assert!(open_track_m(40.7455, -73.8913).is_none_or(|d| d > 50.0));
+        // Under Broadway in Manhattan, the 1 is underground.
+        assert!(open_track_m(40.7990, -73.9682).is_none());
+        let mut d = SubwayDetector::default();
+        d.on_fix(0, 40.74685, -73.89135, Some(5.0), Some(12.0));
+        assert!(d.in_subway(S));
+        assert!(!d.in_subway(40 * S));
     }
 }

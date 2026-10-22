@@ -141,7 +141,9 @@ fn step(
         Pending::WifiScan(ssids) => context
             .subway
             .on_wifi_scan(t_ns, ssids.iter().map(String::as_str)),
-        Pending::Fix(fix) => context.subway.on_fix(t_ns, fix.accuracy, fix.speed),
+        Pending::Fix(fix) => context
+            .subway
+            .on_fix(t_ns, fix.lat, fix.lon, fix.accuracy, fix.speed),
         Pending::Mag(b) => context.subway.on_magnetometer(t_ns, *b),
         _ => {}
     }
