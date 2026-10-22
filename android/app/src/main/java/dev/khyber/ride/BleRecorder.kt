@@ -93,6 +93,7 @@ class BleRecorder(private val context: Context, private val radio: RecordStreamR
         scanner.startScan(BEACON_FILTERS, settings, filteredCallback)
         scanner.startScan(null, settings, unfilteredCallback)
         scanning = true
+        Health.clear("ble")
     }
 
     @SuppressLint("MissingPermission")

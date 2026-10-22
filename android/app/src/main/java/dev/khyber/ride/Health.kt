@@ -30,6 +30,12 @@ object Health {
         _problems.value = emptyMap()
     }
 
+    /** Takes [source]'s problem off the screen once it's fixed, e.g. Bluetooth turned back on; the session keeps the record. */
+    fun clear(source: String) {
+        counts.remove(source)
+        synchronized(this) { _problems.value = _problems.value - source }
+    }
+
     /** Runs [block]; if it throws, reports it under [source] and returns null. */
     inline fun <T> guard(source: String, block: () -> T): T? = try {
         block()
