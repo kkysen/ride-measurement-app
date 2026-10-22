@@ -60,6 +60,8 @@ pub fn car_model(line: &str) -> Option<&'static str> {
         "F" | "M" | "R" => "R160",
         // Mostly R211s, with a few R179s.
         "C" => "R211",
+        // A mix of R68s and R211s, but only the R211s are NTTs, which is all a model is named for.
+        "B" => "R211",
         _ => return None,
     })
 }
