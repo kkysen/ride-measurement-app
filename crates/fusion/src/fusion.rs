@@ -20,7 +20,7 @@
 //!   the fixes, the gyro's turns about up, and the forward speed at each sample; its inputs are light,
 //!   so they're kept for the whole ride and smoothed when asked.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use ride_gnss::solve::{Navigator, geodetic_to_ecef};
 use ride_session::proto::{GnssMeasurementsEvent, GnssNavigationMessage};
@@ -122,6 +122,10 @@ pub struct StopRecord {
     /// When the rider boarded (the end of the steps) after walking on the platform, and before
     /// [`StopRecord::departed_ns`], which is then the boarded train's.
     pub boarded_ns: Option<i64>,
+    /// The car the rider was in (the strongest car beacon) in the [`CAR_SPAN_S`] before stepping off,
+    /// and after boarding: different around a step out is a change of car on the same train.
+    pub car_before: Option<u16>,
+    pub car_after: Option<u16>,
 }
 
 /// A closing heard after the rider walked off is still their train's if this soon after the stop (s).
@@ -149,6 +153,16 @@ impl StopRecord {
         self.alighted_ns
             .zip(self.boarded_ns)
             .is_some_and(|(a, b)| ((b - a) as f64 * 1e-9) < STEP_OUT_S)
+    }
+
+    /// Whether the rider stepped out and back into another car of the same train
+    /// (82 St, `20261020-184134`, 7:07 pm).
+    pub fn car_change(&self) -> bool {
+        self.stepped_out()
+            && self
+                .car_before
+                .zip(self.car_after)
+                .is_some_and(|(a, b)| a != b)
     }
 
     /// How long the doors stood open (s).
@@ -483,6 +497,8 @@ pub struct Fusion {
     /// Door cycles from the microphone, if it's fed; and those found so far.
     doors: Option<DoorDetector>,
     door_cycles: Vec<DoorCycle>,
+    /// Every car beacon reading (time, car, RSSI dBm): for when the rider steps into a car.
+    car_readings: Vec<(i64, u16, i32)>,
     /// Each confirmed door chime: its time and pitch family.
     chimes: Vec<(i64, ChimeCars)>,
     /// The train's stops from its motion (see [`crate::stops`]), with the station named when each was found,
@@ -555,6 +571,7 @@ impl Fusion {
             last_gyro_ns: None,
             doors: None,
             door_cycles: Vec::new(),
+            car_readings: Vec::new(),
             chimes: Vec::new(),
             stop_detector: StopDetector::new(),
             train_stops: Vec::new(),
@@ -808,6 +825,7 @@ impl Fusion {
         }
         if let Pending::Car(r) = input {
             self.cars.on_reading(t_ns, &r);
+            self.car_readings.push((t_ns, r.car, r.rssi));
             if self.cars.steady(t_ns, r.car) {
                 self.estimator.on_car_accel(t_ns, r.car, r.accel);
                 self.buffer(t_ns, Input::Car(r.car, r.accel));
@@ -964,12 +982,23 @@ impl Fusion {
 
     /// Each stop of the train found so far, with its doors and departure (see [`StopRecord`]).
     pub fn stop_records(&self) -> Vec<StopRecord> {
-        stop_records(
+        let mut records = stop_records(
             &self.train_stops,
             &self.door_cycles,
             &self.departures,
             &self.step_windows,
-        )
+        );
+        let span = (CAR_SPAN_S * 1e9) as i64;
+        for r in &mut records {
+            if let (Some(b), Some(d), false) = (r.boarded_ns, r.departed_ns, r.stepped_out()) {
+                r.boarded_ns = Some(stepped_in(&self.car_readings, b, d).unwrap_or(b));
+            }
+            if let (Some(a), Some(b)) = (r.alighted_ns, r.boarded_ns) {
+                r.car_before = strongest_car(&self.car_readings, a - span, a);
+                r.car_after = strongest_car(&self.car_readings, b, b + span);
+            }
+        }
+        records
     }
 
     /// Whether a found stop is the departure's pull fading (see [`FADE_AFTER_CLOSE_S`]).
@@ -1600,9 +1629,57 @@ fn stop_records(
             on_platform,
             alighted_ns: alighted,
             boarded_ns: boarded,
+            car_before: None,
+            car_after: None,
         });
     }
     out
+}
+
+/// The rider's car is the strongest car beacon over this long (s) before stepping off or after boarding.
+const CAR_SPAN_S: f64 = 20.0;
+
+/// The car beacon with the highest mean RSSI between `from` and `until`, heard at least 3 times.
+fn strongest_car(readings: &[(i64, u16, i32)], from: i64, until: i64) -> Option<u16> {
+    let mut sums: HashMap<u16, (f64, usize)> = HashMap::new();
+    for &(_, car, rssi) in readings.iter().filter(|&&(t, ..)| t >= from && t <= until) {
+        let e = sums.entry(car).or_default();
+        e.0 += f64::from(rssi);
+        e.1 += 1;
+    }
+    sums.into_iter()
+        .filter(|(_, (_, n))| *n >= 3)
+        .max_by(|a, b| (a.1.0 / a.1.1 as f64).total_cmp(&(b.1.0 / b.1.1 as f64)))
+        .map(|(car, _)| car)
+}
+
+/// A car's beacon rises this much (dB) over its first readings once the rider is inside the car.
+const STEPPED_IN_DB: f64 = 8.0;
+const STEPPED_IN_BASE: usize = 3;
+
+/// When the rider stepped into a car, if a car beacon first heard after `from` (the last walking found)
+/// rises [`STEPPED_IN_DB`] over its first readings before `until` (the departure).
+/// A step onto a train is often too short for a step-rhythm window, so the last window can be the walk
+/// along the platform: Times Sq, 3 to 7 (`20261020-151449`), 3:38:57 pm, and the 7's car `a14e`
+/// rose from -86 to -74 dBm as the rider stepped in, 3:40:34 against the tap at 3:40:30
+/// (`python/experiments/boarding.py`; no change at the other 4 tapped boardings).
+fn stepped_in(readings: &[(i64, u16, i32)], from: i64, until: i64) -> Option<i64> {
+    let mut first: HashMap<u16, (i64, Vec<i32>)> = HashMap::new();
+    readings
+        .iter()
+        .filter(|&&(t, ..)| t > from - 60_000_000_000 && t <= until)
+        .find_map(|&(t, car, rssi)| {
+            let (t0, base) = first.entry(car).or_insert((t, Vec::new()));
+            if *t0 < from {
+                return None;
+            }
+            if base.len() < STEPPED_IN_BASE {
+                base.push(rssi);
+                return None;
+            }
+            let mean = base.iter().map(|&r| f64::from(r)).sum::<f64>() / base.len() as f64;
+            (f64::from(rssi) >= mean + STEPPED_IN_DB).then_some(t)
+        })
 }
 
 /// Whether a found stop is the departure's pull fading (see [`FADE_AFTER_CLOSE_S`]).
@@ -1674,6 +1751,19 @@ mod tests {
         assert_eq!(r[0].dwell_s(), None);
         // The closing, heard from the platform within a minute, is still the train's.
         assert_eq!(r[0].doors_closed_ns, Some(125 * S));
+    }
+
+    #[test]
+    fn stepping_into_a_car_is_when_its_beacon_rises() {
+        // Walked to 100 s; a new car first heard at 150 s around -86 dBm, then -74 from 180 s; away at 200 s.
+        let mut readings = vec![(40 * S, 7, -80)];
+        readings.extend((150..180).step_by(3).map(|t| (t * S, 9, -86)));
+        readings.extend((180..200).step_by(3).map(|t| (t * S, 9, -74)));
+        assert_eq!(stepped_in(&readings, 100 * S, 200 * S), Some(180 * S));
+        // A car heard since before the walk ended doesn't count.
+        let mut early = vec![(90 * S, 9, -86)];
+        early.extend(readings.iter().copied());
+        assert_eq!(stepped_in(&early, 100 * S, 200 * S), None);
     }
 
     #[test]
