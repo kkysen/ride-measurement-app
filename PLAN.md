@@ -332,6 +332,10 @@ aren't reported as problems; the average speed wraps; subway detection holds the
 cell polled every 1 s, Wi-Fi scans requested every 4 s always, BLE low latency, under a "Radio scanning" level
 (Frequent, Normal, Battery saver); `is_80211mc_responder` recorded per access point.
 
+0.1.4 (on the phone, installed 2026-10-21 from `af669b8`): post-ride recompression stores audio as FLAC,
+bit-exact (`53aa61a`), 23% smaller; the 17 sessions pulled to the PC were re-encoded with `ride recompress`
+(575 MB to 443 MB of audio, every WAV export unchanged). The phone's older copies and OneDrive's are as they were.
+
 Gotchas learned:
 - Android records SSIDs quoted (`"BoldynWiFi"`); `BoldynPasspoint` is a street network, `PasspointBoldyn` the subway's.
 - `ride summary` gives tap times from the first tap, not the session start; give clock times instead.
