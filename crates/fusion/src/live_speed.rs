@@ -775,11 +775,15 @@ impl LiveSpeedEstimator {
         let r = sigma * sigma;
         let gnss_recent =
             self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+        // A walking pace says little about the accelerometer's bias (the phone swings with each step), so it keeps it.
+        let (b, p11) = (self.b, self.p11);
         if gnss_recent {
             self.update(z, r, Sensor::Walking, t_ns);
         } else {
             self.update_ungated(z, r, Sensor::Walking, t_ns);
         }
+        self.b = b;
+        self.p11 = p11;
         self.track_accel(t_ns);
     }
 
