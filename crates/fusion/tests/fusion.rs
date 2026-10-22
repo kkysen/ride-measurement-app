@@ -310,3 +310,57 @@ fn average_speed_covers_the_whole_ride() {
     let average = fusion.average_speed_mps().unwrap();
     assert!((average - 5.0).abs() < 0.5, "average {average} m/s");
 }
+
+#[test]
+fn speeds_across_a_gap_cover_no_more_than_the_fixes_allow() {
+    // Standing indoors for 200 s between two good fixes at the same spot, with an accelerometer bias
+    // the IMU alone would integrate into a runaway.
+    let mut fusion = Fusion::whole_ride();
+    let tilt = 30f64.to_radians();
+    let mut state = 1u64;
+    // Shaking, as in a hand, so it isn't taken for a stop.
+    let mut noise = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        0.3 * ((state >> 11) as f64 / (1u64 << 52) as f64 - 1.0)
+    };
+    for i in 0..(260.0 * RATE) as usize {
+        let t = i as f64 / RATE;
+        let t_ns = (t * 1e9) as i64 + 1;
+        let bias = if (30.0..230.0).contains(&t) { 1.0 } else { 0.0 };
+        fusion.on_gyro(t_ns, [0.0; 3]);
+        fusion.on_accel(
+            t_ns,
+            [
+                bias + noise(),
+                G * tilt.sin() + noise(),
+                G * tilt.cos() + noise(),
+            ],
+        );
+        if i % RATE as usize == 0 && !(30.0..230.0).contains(&t) {
+            fusion.on_fix(Fix {
+                elapsed_realtime_ns: t_ns,
+                lat: 40.0,
+                lon: -74.0,
+                accuracy: Some(10.0),
+                speed: Some(0.0),
+                speed_sigma: Some(0.2),
+                ..Default::default()
+            });
+        }
+    }
+    fusion.finish();
+    let smoothed = fusion.smoothed();
+    let mut meters = 0.0;
+    for w in smoothed.windows(2) {
+        let t = w[0].elapsed_realtime_ns as f64 * 1e-9;
+        if (29.0..231.0).contains(&t) {
+            meters += (w[0].speed_mps + w[1].speed_mps) / 2.0
+                * (w[1].elapsed_realtime_ns - w[0].elapsed_realtime_ns) as f64
+                * 1e-9;
+        }
+    }
+    // 2 x 0 m + both accuracies + 1.5 m/s over the gap.
+    assert!(meters <= 20.0 + 1.5 * 201.0 + 1.0, "covered {meters:.0} m");
+}

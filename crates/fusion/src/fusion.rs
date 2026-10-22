@@ -69,6 +69,16 @@ enum Input {
 const DWELL_SURE_S: f64 = 8.0;
 const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
 
+/// Across a gap between two fixes at least this good (m, 68%), the smoothed speeds may cover at most
+/// [`GAP_PATH_RATIO`] times the straight distance between them, plus both accuracies and [`GAP_WANDER_MPS`]
+/// over the gap; beyond that they're scaled down to it. Indoors at Flushing (`20261020-154951`, 4:27 pm) the speed
+/// ran to 102 mph between fixes a few meters apart. A subway's track is rarely half again the straight line.
+const GAP_FIX_M: f64 = 50.0;
+const GAP_MIN_NS: i64 = 10_000_000_000;
+const GAP_PATH_RATIO: f64 = 2.0;
+/// Walking around (a store, a platform) between the fixes, which the straight distance doesn't see.
+const GAP_WANDER_MPS: f64 = 1.5;
+
 /// Inputs settle into the forward pass, in time order, once input this much newer has arrived: Android delivers
 /// sensor samples up to 1 s late (`SensorStreamRecorder.kt`'s batching), and GNSS a little after its epoch.
 /// Live and offline feed the same buffer, so both see exactly the same order; until then, the live display
@@ -1044,7 +1054,48 @@ impl Fusion {
         let mut out: Vec<SmoothedSpeed> =
             pairs.iter().map(|(ts, f, b)| combine(*ts, f, b)).collect();
         out.reverse();
+        let fixes: Vec<&Fix> = inputs
+            .iter()
+            .filter_map(|(_, input)| match input {
+                Input::Fix(f) if f.accuracy.is_some_and(|a| a <= GAP_FIX_M) => Some(&**f),
+                _ => None,
+            })
+            .collect();
+        bound_gaps(&mut out, &fixes);
         out
+    }
+}
+
+/// Scales down the smoothed speeds across each gap between good fixes to the distance the fixes allow
+/// (see [`GAP_FIX_M`]). Only a bound: a path longer than the straight line is fine up to it.
+fn bound_gaps(out: &mut [SmoothedSpeed], fixes: &[&Fix]) {
+    for pair in fixes.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let (ta, tb) = (a.elapsed_realtime_ns, b.elapsed_realtime_ns);
+        if tb - ta < GAP_MIN_NS {
+            continue;
+        }
+        let gap_s = (tb - ta) as f64 * 1e-9;
+        let allowed = GAP_PATH_RATIO * stations::meters((a.lat, a.lon), (b.lat, b.lon))
+            + a.accuracy.unwrap_or(0.0)
+            + b.accuracy.unwrap_or(0.0)
+            + GAP_WANDER_MPS * gap_s;
+        let from = out.partition_point(|s| s.elapsed_realtime_ns <= ta);
+        let to = out.partition_point(|s| s.elapsed_realtime_ns < tb);
+        if to <= from {
+            continue;
+        }
+        let mut distance = Distance::default();
+        out[from.saturating_sub(1)..(to + 1).min(out.len())]
+            .iter()
+            .for_each(|s| distance.add(s));
+        if distance.meters > allowed {
+            let k = allowed / distance.meters;
+            for s in &mut out[from..to] {
+                s.speed_mps *= k;
+                s.accel_mps2 *= k;
+            }
+        }
     }
 }
 
