@@ -1,9 +1,12 @@
-"""The rider's own OMNY tap: a beep (`chime_omny.py`, 2.8 to 3.05 kHz, 0.15 to 0.5 s) with stairs near it, since
-the fare gates sit between the street and the platform. Stairs: a height change of at least 2.5 m (barometer, about
+"""The rider's own OMNY tap: a loud beep (`chime_omny.py`, 2.8 to 3.05 kHz, 0.15 to 0.5 s), since their phone is
+right at the reader. (First tried: stairs near the beep, since the fare gates sit between the street and the platform;
+but not every station has stairs to its gates, so loudness is the rule.) Stairs: a height change of at least 2.5 m (barometer, about
 8.3 m per hPa) over 20 s with steps in the accelerometer (|a| std over 2 m/s^2). A beep counts when stairs come within
 `NEAR_S` before or after it. Scored on the known taps (Google Wallet, `chime_omny.OMNY_TAPS`), which only score.
 
 On seven phone-mic rides: 38 beeps, 21 with stairs within 45 s (18 within 30 s), keeping all 4 known taps.
+Loudness does better, as the rider suggested (their phone is right at the reader): 4 known taps at 38 to 47 dB,
+every other beep on those rides at 33 dB or less.
 The rest of the paired beeps may be the rider's own untracked taps (only four tap times are known) or others' at
 the same gates; more known tap times would tell."""
 
@@ -23,6 +26,22 @@ SESSIONS = {"184134": "20261020-184134", "214427": "20261020-214427", "135509": 
             "154951": "20261020-154951", "155919": "20261021-155919", "182135": "20261021-182135",
             "215922": "20261021-215922"}
 NEAR_S = 45.0
+# The rider's own phone is centimeters from the reader: their known taps peaked at 38 to 47 dB in the beep's band,
+# every other beep on those rides at 33 dB or less.
+LOUD_DB = 36.0
+
+
+def loudness(name, times):
+    """Each beep's peak level (dB, Welch over 0.3 s) in 2.8 to 3.05 kHz."""
+    from scipy import signal
+
+    sr, pcm, ts = C.load(name)
+    out = []
+    for x in times:
+        f0 = int(np.interp(x, ts[:, 1], ts[:, 0]))
+        f, p = signal.welch(pcm[f0 : f0 + int(0.3 * sr)], sr, nperseg=1024)
+        out.append(10 * np.log10(p[(f >= 2800) & (f <= 3050)].max() + 1e-9))
+    return np.array(out)
 
 
 def beeps(name):
@@ -78,7 +97,7 @@ def known(name):
 
 
 def main():
-    tot = np.zeros(4, int)
+    tot = np.zeros(6, int)
     for name, sess in SESSIONS.items():
         try:
             b = beeps(name)
@@ -86,13 +105,15 @@ def main():
             continue
         st = stairs(ROOT / "data/sessions" / sess)
         paired = np.array([x for x in b if len(st) and np.min(np.abs(st + 10e9 - x)) < NEAR_S * 1e9])
+        loud = b[loudness(name, b) >= LOUD_DB] if len(b) else b
         k = known(name)
         hit_all = sum(1 for x in k if len(b) and np.min(np.abs(b - x)) < 2e9)
         hit_paired = sum(1 for x in k if len(paired) and np.min(np.abs(paired - x)) < 2e9)
-        tot += [len(b), len(paired), hit_all, hit_paired]
-        print(f"{name}: {len(b)} beeps, {len(paired)} with stairs within {NEAR_S:.0f} s; "
-              f"known taps {len(k)}: found {hit_all} among beeps, {hit_paired} among paired")
-    print(f"all: {tot[0]} beeps, {tot[1]} paired; known taps found {tot[2]} and {tot[3]}")
+        hit_loud = sum(1 for x in k if len(loud) and np.min(np.abs(loud - x)) < 2e9)
+        tot += [len(b), len(paired), hit_all, hit_paired, len(loud), hit_loud]
+        print(f"{name}: {len(b)} beeps, {len(paired)} with stairs within {NEAR_S:.0f} s, {len(loud)} loud; "
+              f"known taps {len(k)}: found {hit_all} among beeps, {hit_paired} paired, {hit_loud} loud")
+    print(f"all: {tot[0]} beeps, {tot[1]} paired, {tot[4]} loud; known taps found {tot[2]}, {tot[3]}, {tot[5]}")
 
 
 if __name__ == "__main__":
