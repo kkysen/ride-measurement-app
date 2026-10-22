@@ -337,7 +337,7 @@ bit-exact (`53aa61a`), 23% smaller; the 17 sessions pulled to the PC were re-enc
 (575 MB to 443 MB of audio, every WAV export unchanged). The phone's copies were then replaced, each checked first
 (same audio decoded, and the copy's SHA-256 on the phone).
 OneDrive's 6 (2026-10-22): re-encoded in a copy, each WAV export identical, then swapped in by renaming;
-the originals are in `Documents/RideLogger/sessions-original-wav` until the rider deletes them (267 MB to 211 MB).
+the originals deleted at the rider's request (267 MB to 211 MB).
 
 Gotchas learned:
 - Android records SSIDs quoted (`"BoldynWiFi"`); `BoldynPasspoint` is a street network, `PasspointBoldyn` the subway's.
@@ -444,7 +444,16 @@ Open, roughly in order:
    - Train beacons (`02FD`, see Ideas): ride with each train on CBTC lines, unused so far; next: per train or
      per car (how many steady at once), decode the varying bytes, then boarding and alighting from them.
    - OpenCelliD as Google's backup once the rider has a key; automatic OneDrive upload once they register an app
-     (client ID; package `dev.khyber.ride`).
+     (client ID; device code sign-in, so no package name or signature hash; steps in `CHECKLIST.md`).
+   - Missed from earlier sessions, now listed:
+     - Train and line identification (asked 2026-10-21): line from route geometry, stations, and car type;
+       the trainset from the beacons; the trip from GTFS realtime (SubwayNow) by station times.
+     - Speed from fixed radios: a station's Wi-Fi or cell signal rising and falling as an express passes,
+       and Wi-Fi ranging (`is_80211mc_responder`) if any subway AP supports it.
+     - Updating the app away from the computer (asked 2026-10-21): CI-signed APKs, installed from GitHub Releases
+       (e.g. Obtainium), since wireless debugging needs the same network.
+     - The tunnels with cell service are per carrier (the rider has AT&T, may switch to T-Mobile): keep the carrier
+       with each cell, and don't read a tunnel's coverage on one carrier as true of another.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
