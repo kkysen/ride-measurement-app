@@ -368,7 +368,11 @@ Open, roughly in order:
    takes the first outage's end from 226 m/s to 45 m/s), and no stop ever registers in the car.
    A bias learner is on the local branch `gyro-bias-learner` (`3bacc5c`): better on `154951` and `184134`,
    worse on `214427`; the user decides. `CUT_GNSS` on `export.rs` scores such changes on real rides.
-7. Stations from pass times and distances on express runs; station BLE beacons if any.
+7. Stations from the registered cell (`python/experiments/station_cell.py`): a station keeps its cell ID across rides
+   (110 St `29646293`, Chambers St `28852869` both ways); Wi-Fi radios recur too weakly to use alone.
+   Next: cell ID to station names (label by stop order along a known line), then a lurch or door cycle there
+   means a stop at that station, and its position pins the path (with the stop heading fix, `ce084a5`).
+   Also: stations from pass times and distances on express runs; station BLE beacons if any.
    Express passes to check: the 2 past 59 St and 66 St (`214427`), and the F express in Queens on `184134`,
    which passed 65 St very fast and 36 St more slowly (per the rider).
 
