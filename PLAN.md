@@ -551,6 +551,21 @@ Open, roughly in order:
      2.5 mph (median 0); GNSS-cut scores unchanged. Left: 2 stops the lurch detector misses
      (`182135` 6:27 pm, `215922` 10:37 pm).
    - The gated gyro bias learner (branch `gyro-bias-retest`) waits for the rider's next outdoor ride to tune on.
+16. Lines, transfers, and every car's accelerometer (2026-10-22, after 15):
+   - Which train (`python/experiments/train_line.py`): the stations seen in order against every GTFS stopping
+     pattern (with the stations each skips), split at the stop records' transfers, then the scheduled trip.
+     44 of the rider's 62 line-naming tags right (49 among near-equal lines). Left: 2 against 3 (same stops;
+     the chime would settle it, but the replayed status's chime family is R62 on a third of the 7's R188 rows),
+     C against B on Central Park West (a C's R211 beacon, if the R68s have none), and tags on a transfer's
+     platform naming the next train. Scheduled trips fit within 2 minutes. Not live until it's in Rust and better.
+   - Transfers (`python/experiments/transfers.py`): `transfers.csv` (sensors) and `transfers_tapped.csv` (taps and
+     tags) per ride: station, lines, chime family, car beacon, alight and board times, walking and standing,
+     height change, passage or same platform. Times Sq 7 to 3 (`155919`, 4:08 to 4:09 pm, +9 m), Jackson Hts M to F
+     (`184134`, 7:20 to 7:24 pm, same platform), Grand Av, and 7 Av D to E (`135509`) found by the sensors;
+     59 St C to D only by taps; Times Sq 3 to 7 (`151449`) boarded 93 s early (walking onto the platform).
+   - Every steady car's accelerometer, averaged (`crates/fusion/src/live_speed.rs`): two cars agree with each other
+     0.86, with GNSS 0.81 and 0.82, so their noise is their own; outage rms (at end) `154951` 3.41 (6.54) to
+     3.25 (6.22) km/h, `184134` 6.84 (10.97) to 6.39 (9.82), `214427` unchanged. Gain against GNSS 0.6 to 0.75.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
