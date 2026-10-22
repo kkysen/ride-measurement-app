@@ -21,7 +21,11 @@ pub struct Replay {
     pub door_cycles: Vec<DoorCycle>,
     /// When the subway detector switched on (true) or off.
     pub subway_changes: Vec<(i64, bool)>,
+    /// What the app would have shown, every [`STATUS_EVERY_NS`].
+    pub statuses: Vec<(i64, crate::fusion::Status)>,
 }
+
+pub const STATUS_EVERY_NS: i64 = 10_000_000_000;
 
 impl Replay {
     /// The smoothed speed at a fix's time, if the replay has one.
@@ -43,6 +47,7 @@ enum Event {
     Measurements(ride_session::proto::GnssMeasurementsEvent),
     Navigation(ride_session::proto::GnssNavigationMessage),
     WifiScan(Vec<String>),
+    Cell(Option<i64>),
     Audio(u32, AudioSamples),
 }
 
@@ -151,6 +156,16 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                     received,
                     Event::WifiScan(w.results.into_iter().map(|r| r.ssid).collect()),
                 )),
+                // The registered LTE cell, as the app passes it on.
+                Some(Payload::CellInfo(c)) => events.push((
+                    received,
+                    Event::Cell(
+                        c.cells
+                            .iter()
+                            .find(|x| x.registered && x.kind == "lte")
+                            .and_then(|x| x.cell_id),
+                    ),
+                )),
                 _ => {}
             }
         }
@@ -215,7 +230,13 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
     for eph in ride_gnss::orbits::read_session_orbits(&session.dir)? {
         fusion.navigator_mut().add_ephemeris(eph);
     }
+    let mut statuses = Vec::new();
+    let mut next_status = events.first().map_or(0, |e| e.0);
     for (t, e) in events {
+        if t >= next_status {
+            statuses.push((t, fusion.status()));
+            next_status = t + STATUS_EVERY_NS;
+        }
         match e {
             Event::Accel(a) => fusion.on_accel(t, a),
             Event::Gyro(w) => fusion.on_gyro(t, w),
@@ -226,6 +247,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
             }
             Event::Navigation(m) => fusion.on_navigation_message(&m),
             Event::WifiScan(ssids) => fusion.on_wifi_scan(t, ssids),
+            Event::Cell(c) => fusion.on_cell(t, c),
             Event::Audio(rate, audio) => fusion.on_audio(t, rate, audio),
         }
     }
@@ -236,5 +258,6 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
         positions: fusion.positions(),
         door_cycles: fusion.door_cycles().to_vec(),
         subway_changes: fusion.subway_changes().to_vec(),
+        statuses,
     })
 }

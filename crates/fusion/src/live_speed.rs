@@ -116,6 +116,9 @@ const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
 /// Walking speed and its spread (m/s): people walk at 1 to 2 m/s, slower in crowds and on stairs.
 const WALKING_MPS: f64 = 1.4;
 const WALKING_SIGMA_MPS: f64 = 0.6;
+/// Running: 2 to 4 m/s for most people, jogging for a train included.
+const RUNNING_MPS: f64 = 3.0;
+const RUNNING_SIGMA_MPS: f64 = 1.0;
 /// How often the speed is kept for a door cycle's closing to be compared with (s), and for how long.
 const HISTORY_EVERY_S: f64 = 0.1;
 const HISTORY_S: f64 = 30.0;
@@ -504,16 +507,17 @@ impl LiveSpeedEstimator {
         .max()
     }
 
-    /// The rider is walking (see [`crate::walking`]), so moving at walking speed, whichever way.
+    /// The rider is walking or running (see [`crate::walking`]), so moving at that pace, whichever way.
     /// Like a door cycle, it isn't gated without recent GNSS, which is when the IMU alone runs away.
-    pub fn on_walking(&mut self, t_ns: i64) {
+    pub fn on_walking(&mut self, t_ns: i64, running: bool) {
         self.inflate_to(t_ns);
-        let z = if self.v < 0.0 {
-            -WALKING_MPS
+        let (pace, sigma) = if running {
+            (RUNNING_MPS, RUNNING_SIGMA_MPS)
         } else {
-            WALKING_MPS
+            (WALKING_MPS, WALKING_SIGMA_MPS)
         };
-        let r = WALKING_SIGMA_MPS * WALKING_SIGMA_MPS;
+        let z = if self.v < 0.0 { -pace } else { pace };
+        let r = sigma * sigma;
         let gnss_recent =
             self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
         if gnss_recent {

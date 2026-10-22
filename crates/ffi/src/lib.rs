@@ -53,6 +53,20 @@ pub struct SensorCount {
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
+pub struct RideStatus {
+    pub mode: String,
+    /// The station the registered cell names, if it's one the rider has tagged; with the lines tagged there.
+    pub station: Option<String>,
+    pub lines: Vec<String>,
+    /// Stopped there: a door cycle was just heard.
+    pub at_station: bool,
+    /// The car type, from the latest door chime.
+    pub cars: Option<String>,
+    /// How long (s) the rider has stayed within 100 m, out of the subway.
+    pub staying_s: f64,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
 pub struct Estimate {
     pub speed_mps: f64,
     pub sigma_mps: f64,
@@ -211,6 +225,41 @@ impl Fusion {
             .map_err(anyhow::Error::from)?;
         self.lock().on_navigation_message(&msg);
         Ok(())
+    }
+
+    /// The registered LTE cell's ID, if any, at the time it was recorded: names the station.
+    pub fn on_cell(&self, t_ns: i64, cell_id: Option<i64>) {
+        self.lock().on_cell(t_ns, cell_id);
+    }
+
+    /// What the rider is on and where, for the main screen, and how long they've stayed put.
+    pub fn status(&self) -> RideStatus {
+        use ride_fusion::doors::ChimeCars;
+        use ride_fusion::fusion::Mode;
+        let s = self.lock().status();
+        RideStatus {
+            mode: match s.mode {
+                Mode::Unknown => "unknown",
+                Mode::Still => "still",
+                Mode::Walking => "walking",
+                Mode::Running => "running",
+                Mode::Subway { underground: true } => "subway, underground",
+                Mode::Subway { underground: false } => "subway, above ground",
+                Mode::Vehicle => "bus, car, or other train",
+            }
+            .to_string(),
+            station: s.station.as_ref().map(|st| st.name.clone()),
+            lines: s.station.map(|st| st.lines).unwrap_or_default(),
+            at_station: s.at_station,
+            cars: s.cars.map(|c| {
+                match c {
+                    ChimeCars::Newer => "newer cars (R142, R160, R188 chime)",
+                    ChimeCars::R62 => "R62 or R62A cars",
+                }
+                .to_string()
+            }),
+            staying_s: s.staying_s,
+        }
     }
 
     pub fn estimate(&self, now_ns: i64) -> Estimate {

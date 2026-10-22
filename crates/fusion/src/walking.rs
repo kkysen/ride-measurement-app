@@ -18,6 +18,16 @@ const MIN_HZ: f64 = 0.3;
 const STEP_SHARE: f64 = 0.35;
 const MIN_SAMPLES: usize = 100;
 pub const IN_A_ROW: u32 = 6;
+/// Running: a faster rhythm (Hz) and harder impacts (|a| std, m/s^2) than walking.
+const RUN_HZ: (f64, f64) = (2.6, 3.8);
+const RUN_MIN_STD_MPS2: f64 = 3.0;
+
+/// What the last window's rhythm was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gait {
+    Walking,
+    Running,
+}
 
 #[derive(Default)]
 pub struct WalkingDetector {
@@ -25,6 +35,8 @@ pub struct WalkingDetector {
     mags: Vec<f64>,
     in_a_row: u32,
     planner: Option<(usize, Arc<dyn Fft<f64>>)>,
+    /// The last window's end and its gait, if it had one.
+    last: Option<(i64, Option<Gait>)>,
 }
 
 impl WalkingDetector {
@@ -36,7 +48,9 @@ impl WalkingDetector {
             self.mags.push(magnitude);
             return None;
         }
-        let steps = self.steps();
+        let gait = self.gait();
+        self.last = Some((t_ns, gait));
+        let steps = gait.is_some();
         self.in_a_row = if steps { self.in_a_row + 1 } else { 0 };
         // Windows stay on a fixed grid from the first sample, as in Python.
         let windows = ((t_ns - start) as f64 / (WINDOW_S * 1e9)).floor() as i64;
@@ -46,15 +60,21 @@ impl WalkingDetector {
         Some(self.in_a_row >= IN_A_ROW)
     }
 
-    fn steps(&mut self) -> bool {
+    /// The last window's end and the gait in it, if any.
+    pub fn last_gait(&self) -> Option<(i64, Option<Gait>)> {
+        self.last
+    }
+
+    fn gait(&mut self) -> Option<Gait> {
         let n = self.mags.len();
         if n < MIN_SAMPLES {
-            return false;
+            return None;
         }
         let mean = self.mags.iter().sum::<f64>() / n as f64;
         let var = self.mags.iter().map(|m| (m - mean).powi(2)).sum::<f64>() / n as f64;
-        if var.sqrt() <= MIN_STD_MPS2 {
-            return false;
+        let std = var.sqrt();
+        if std <= MIN_STD_MPS2 {
+            return None;
         }
         let fft = match &self.planner {
             Some((size, fft)) if *size == n => fft.clone(),
@@ -71,7 +91,7 @@ impl WalkingDetector {
             .collect();
         fft.process(&mut buf);
         let df = 1.0 / WINDOW_S;
-        let (mut step, mut total) = (0.0, 0.0);
+        let (mut step, mut run, mut total) = (0.0, 0.0, 0.0);
         for (k, c) in buf.iter().take(n / 2 + 1).enumerate() {
             let f = k as f64 * df;
             let p = c.norm_sqr();
@@ -81,8 +101,19 @@ impl WalkingDetector {
             if f > STEP_HZ.0 && f < STEP_HZ.1 {
                 step += p;
             }
+            if f >= RUN_HZ.0 && f < RUN_HZ.1 {
+                run += p;
+            }
         }
-        total > 0.0 && step > STEP_SHARE * total
+        if total <= 0.0 {
+            None
+        } else if std > RUN_MIN_STD_MPS2 && run > STEP_SHARE * total && run > step {
+            Some(Gait::Running)
+        } else if step > STEP_SHARE * total {
+            Some(Gait::Walking)
+        } else {
+            None
+        }
     }
 }
 

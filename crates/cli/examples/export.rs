@@ -103,6 +103,19 @@ fn main() -> anyhow::Result<()> {
     for (t, on) in &r.subway_changes {
         writeln!(f, "{t},{on}")?;
     }
+    let mut f = std::fs::File::create(out.join("status.csv"))?;
+    writeln!(f, "t_ns,mode,station,at_station,cars,staying_s")?;
+    for (t, st) in &r.statuses {
+        writeln!(
+            f,
+            "{t},{:?},{},{},{},{:.0}",
+            st.mode,
+            st.station.as_ref().map_or("", |s| s.name.as_str()),
+            st.at_station,
+            st.cars.map_or(String::new(), |c| format!("{c:?}")),
+            st.staying_s
+        )?;
+    }
     let mut f = std::fs::File::create(out.join("door_cycles.csv"))?;
     writeln!(f, "open_ns,close_ns")?;
     for c in &r.door_cycles {

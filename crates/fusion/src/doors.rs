@@ -31,6 +31,22 @@ const CHIME_HZ: [(f64, f64); 4] = [
     (512.0, 526.0),
     (630.0, 650.0),
 ];
+/// Which car type's chime each of [`CHIME_HZ`] is.
+const CHIME_CARS: [ChimeCars; 4] = [
+    ChimeCars::Newer,
+    ChimeCars::Newer,
+    ChimeCars::R62,
+    ChimeCars::R62,
+];
+
+/// The door chime's pitches tell the car type (`python/experiments/chime_omny.py`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChimeCars {
+    /// 441 and 555 Hz, heard on the 7, 2, F, R, and M: the R142, R160, and R188 and their kin.
+    Newer,
+    /// 516 and 645 Hz, heard on the 1: the R62 and R62A.
+    R62,
+}
 const CHIME_WINDOW: usize = 2048;
 const CHIME_HOP: usize = 512;
 const CHIME_PROMINENT_DB: f64 = 15.0;
@@ -132,7 +148,7 @@ pub struct DoorDetector {
     level_bins: (usize, usize),
     chime: Spectrum,
     /// For each chime pitch bin, the bins its neighborhood median is over.
-    chime_bins: Vec<(usize, usize, usize)>,
+    chime_bins: Vec<(usize, usize, usize, ChimeCars)>,
     chime_range: (usize, usize),
     /// Recent levels (time, dB), enough for a step either side of a point.
     levels: VecDeque<(i64, f64)>,
@@ -143,6 +159,9 @@ pub struct DoorDetector {
     /// The current chime-like tone's start (time, frames), and recent chimes' start times.
     tone: Option<(i64, usize)>,
     chimes: VecDeque<i64>,
+    /// The current tone's pitch family, and the latest chime's time and car type.
+    tone_cars: Option<ChimeCars>,
+    last_chime: Option<(i64, ChimeCars)>,
 }
 
 impl DoorDetector {
@@ -156,8 +175,8 @@ impl DoorDetector {
         let mut chime_bins = Vec::new();
         for i in 0..CHIME_WINDOW / 2 {
             let f = i as f64 * chime_df;
-            if CHIME_HZ.iter().any(|&(a, b)| f >= a && f <= b) {
-                chime_bins.push((i, i.saturating_sub(k), i + k + 1));
+            if let Some(c) = CHIME_HZ.iter().position(|&(a, b)| f >= a && f <= b) {
+                chime_bins.push((i, i.saturating_sub(k), i + k + 1, CHIME_CARS[c]));
             }
         }
         let chime_range = (
@@ -186,7 +205,14 @@ impl DoorDetector {
             open_steps: VecDeque::new(),
             tone: None,
             chimes: VecDeque::new(),
+            tone_cars: None,
+            last_chime: None,
         }
+    }
+
+    /// The latest door chime: its time, and the car type its pitches tell.
+    pub fn last_chime(&self) -> Option<(i64, ChimeCars)> {
+        self.last_chime
     }
 
     /// Where `frame` falls on the elapsed realtime clock.
@@ -316,11 +342,15 @@ impl DoorDetector {
             .iter()
             .map(|&p| 10.0 * (f64::from(p) + 1e-9).log10())
             .collect();
-        let tone = self.chime_bins.iter().any(|&(i, a, b)| {
+        let prominent = self.chime_bins.iter().find(|&&(i, a, b, _)| {
             let mut near: Vec<f64> = db[a - lo..b - lo].to_vec();
             near.sort_by(f64::total_cmp);
             db[i - lo] - near[near.len() / 2] > CHIME_PROMINENT_DB
         });
+        let tone = prominent.is_some();
+        if let Some(&(_, _, _, cars)) = prominent {
+            self.tone_cars = Some(cars);
+        }
         let min_frames = (CHIME_MIN_S * self.rate_hz / CHIME_HOP as f64).ceil() as usize;
         match (&mut self.tone, tone) {
             (Some((_, n)), true) => *n += 1,
@@ -328,7 +358,9 @@ impl DoorDetector {
             (Some((start, n)), false) => {
                 if *n >= min_frames {
                     self.chimes.push_back(*start);
+                    self.last_chime = self.tone_cars.map(|c| (*start, c));
                 }
+                self.tone_cars = None;
                 self.tone = None;
             }
             (None, false) => {}

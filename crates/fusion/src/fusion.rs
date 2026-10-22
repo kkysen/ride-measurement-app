@@ -25,11 +25,13 @@ use std::collections::{BTreeMap, VecDeque};
 use ride_gnss::solve::{Navigator, geodetic_to_ecef};
 use ride_session::proto::{GnssMeasurementsEvent, GnssNavigationMessage};
 
+use crate::doors::ChimeCars;
 use crate::doors::{DoorCycle, DoorDetector};
 use crate::live_speed::{Estimate, LiveSpeedEstimator, SUBWAY_MAX_SPEED_MPS};
 use crate::position::{PositionEstimate, PositionInput, smooth};
+use crate::stations::{self, Station};
 use crate::subway::SubwayDetector;
-use crate::walking::WalkingDetector;
+use crate::walking::{Gait, WalkingDetector};
 
 /// Whether our own GNSS position and velocity solutions update the position filter.
 /// Not yet: on the first rides (2026-10-20) they made it much worse even when cross-checked,
@@ -58,8 +60,8 @@ enum Input {
     MaxSpeedBefore(Option<f64>),
     /// At a door cycle's closing: the train stood still from this time to here (see [`DWELL_SURE_S`]).
     StandingSince(i64),
-    /// The rider has been walking (see [`crate::walking`]).
-    Walking,
+    /// The rider has been walking, or running if true (see [`crate::walking`]).
+    Walking(bool),
 }
 
 /// How long before a door cycle's closing the train surely stood (s): the chime comes in the 8 s before it,
@@ -86,6 +88,8 @@ enum Pending {
     Audio(Box<AudioSamples>),
     /// The magnetic field's magnitude (uT).
     Mag(f64),
+    /// The registered LTE cell's ID, if any.
+    Cell(Option<i64>),
 }
 
 #[derive(Clone, Debug)]
@@ -106,6 +110,7 @@ impl Pending {
             Self::WifiScan(_) => 4,
             Self::Audio(_) => 5,
             Self::Mag(_) => 6,
+            Self::Cell(_) => 7,
         }
     }
 }
@@ -168,7 +173,7 @@ fn step_estimator(
     own: Option<(f64, f64)>,
 ) -> Option<Input> {
     match input {
-        Pending::WifiScan(_) | Pending::Audio(_) | Pending::Mag(_) => None,
+        Pending::WifiScan(_) | Pending::Audio(_) | Pending::Mag(_) | Pending::Cell(_) => None,
         Pending::Accel(a) => {
             estimator.on_accel(t_ns, a[0], a[1], a[2]);
             Some(Input::Accel(*a))
@@ -199,6 +204,40 @@ fn step_estimator(
             Some(Input::Speed(speed, sigma))
         }
     }
+}
+
+/// Faster than this (m/s), not walking and not in the subway, is some other vehicle.
+const VEHICLE_MPS: f64 = 4.0;
+/// Staying put: fixes this good (m), all within this of the first (m), and none moving this fast (m/s).
+const STAY_FIX_M: f64 = 50.0;
+const STAY_RADIUS_M: f64 = 100.0;
+const STAY_MOVING_MPS: f64 = 3.0;
+
+/// What the rider is on, as well as the sensors tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Unknown,
+    Still,
+    Walking,
+    Running,
+    /// The subway, under or above ground; on a train or in a station.
+    Subway {
+        underground: bool,
+    },
+    /// Moving faster than a run, not in the subway: a bus, car, or other train.
+    Vehicle,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Status {
+    pub mode: Mode,
+    /// The station the registered cell names, in the subway; at it, if a door cycle there was just heard.
+    pub station: Option<Station>,
+    pub at_station: bool,
+    /// The car type from the latest door chime, within 15 minutes.
+    pub cars: Option<ChimeCars>,
+    /// How long (s) the rider has stayed within 100 m, out of the subway; the app reminds them to stop recording.
+    pub staying_s: f64,
 }
 
 /// Forward estimates are kept at every fix and at least this often, so smoothing covers gaps without fixes.
@@ -316,6 +355,14 @@ pub struct Fusion {
     walking: WalkingDetector,
     /// When the subway detector switched, and to what.
     subway_changes: Vec<(i64, bool)>,
+    /// The registered LTE cell and when it was last reported.
+    cell: Option<(i64, i64)>,
+    /// The latest door cycle's closing and the station its cell names, if one.
+    last_stop: Option<(i64, Option<&'static Station>)>,
+    /// Staying put: where the rider has been since when (a good fix's position, or none indoors).
+    stay: Option<(i64, Option<(f64, f64)>)>,
+    /// The newest settled input's time.
+    now_ns: i64,
 }
 
 impl Default for Fusion {
@@ -365,6 +412,10 @@ impl Fusion {
             door_cycles: Vec::new(),
             walking: WalkingDetector::default(),
             subway_changes: Vec::new(),
+            cell: None,
+            last_stop: None,
+            stay: None,
+            now_ns: 0,
         }
     }
 
@@ -395,6 +446,76 @@ impl Fusion {
     /// When the subway detector switched on (true) or off, in order.
     pub fn subway_changes(&self) -> &[(i64, bool)] {
         &self.subway_changes
+    }
+
+    /// The registered LTE cell (its ID, if any), at the time it was recorded.
+    pub fn on_cell(&mut self, t_ns: i64, cell_id: Option<i64>) {
+        self.arrive(t_ns, Pending::Cell(cell_id));
+    }
+
+    /// What the rider is doing and where, as of the settled input, for the app to show.
+    pub fn status(&self) -> Status {
+        let t = self.now_ns;
+        let recent = |last: i64, s: f64| (t - last) as f64 * 1e-9 <= s;
+        let gait = self
+            .walking
+            .last_gait()
+            .filter(|&(at, _)| recent(at, 6.0))
+            .and_then(|(_, g)| g);
+        let estimate = self.estimator.estimate(t);
+        let underground = estimate.since_gnss_s.is_none_or(|s| s > 10.0);
+        let mode = match gait {
+            Some(Gait::Running) => Mode::Running,
+            Some(Gait::Walking) => Mode::Walking,
+            None if self.context.in_subway => Mode::Subway { underground },
+            None if estimate.initialized && estimate.speed_mps > VEHICLE_MPS => Mode::Vehicle,
+            None if estimate.stopped => Mode::Still,
+            None => Mode::Unknown,
+        };
+        let cell_station = self
+            .cell
+            .filter(|&(at, _)| recent(at, 30.0))
+            .and_then(|(_, c)| stations::of_cell(c));
+        let stopped_at = self
+            .last_stop
+            .filter(|&(at, _)| recent(at, 60.0))
+            .and_then(|(_, s)| s);
+        Status {
+            mode,
+            station: stopped_at
+                .or(cell_station.filter(|_| self.context.in_subway))
+                .cloned(),
+            at_station: stopped_at.is_some(),
+            cars: self
+                .doors
+                .as_ref()
+                .and_then(DoorDetector::last_chime)
+                .filter(|&(at, _)| recent(at, 900.0))
+                .map(|(_, c)| c),
+            staying_s: self
+                .stay
+                .map_or(0.0, |(since, _)| (t - since) as f64 * 1e-9),
+        }
+    }
+
+    /// Keeps track of how long the rider has stayed in one place out of the subway (see [`Status::staying_s`]).
+    fn track_stay(&mut self, t_ns: i64, input: &Pending) {
+        if self.context.in_subway {
+            self.stay = Some((t_ns, None));
+            return;
+        }
+        let (since, at) = *self.stay.get_or_insert((t_ns, None));
+        if let Pending::Fix(f) = input
+            && f.accuracy.is_some_and(|a| a <= STAY_FIX_M)
+        {
+            let moved = at.is_none_or(|p| stations::meters(p, (f.lat, f.lon)) > STAY_RADIUS_M);
+            let moving = f.speed.is_some_and(|v| v >= STAY_MOVING_MPS);
+            if moving || moved {
+                self.stay = Some((t_ns, Some((f.lat, f.lon))));
+            } else {
+                self.stay = Some((since, at.or(Some((f.lat, f.lon)))));
+            }
+        }
     }
 
     /// The door cycles found so far.
@@ -490,6 +611,11 @@ impl Fusion {
 
     fn settle(&mut self, t_ns: i64, input: Pending) {
         self.settled_ns = Some(self.settled_ns.map_or(t_ns, |s| s.max(t_ns)));
+        self.now_ns = self.now_ns.max(t_ns);
+        if let Pending::Cell(c) = input {
+            self.cell = c.map(|c| (t_ns, c));
+            return;
+        }
         if let (Pending::Audio(a), Some(doors)) = (&input, &mut self.doors) {
             for cycle in doors.on_audio(a.first_frame, &a.samples, &a.timestamps) {
                 self.on_door_cycle(t_ns, cycle);
@@ -524,14 +650,16 @@ impl Fusion {
             self.buffer(t_ns, Input::MaxSpeedBefore(before));
             self.subway_changes.push((t_ns, self.context.in_subway));
         }
+        self.track_stay(t_ns, &input);
         if let Pending::Accel(a) = &input
             && self
                 .walking
                 .on_accel(t_ns, (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt())
                 == Some(true)
         {
-            self.estimator.on_walking(t_ns);
-            self.buffer(t_ns, Input::Walking);
+            let running = matches!(self.walking.last_gait(), Some((_, Some(Gait::Running))));
+            self.estimator.on_walking(t_ns, running);
+            self.buffer(t_ns, Input::Walking(running));
         }
         let Some(kept) = kept else {
             return;
@@ -578,6 +706,7 @@ impl Fusion {
     /// A door cycle found at `t_ns`: the train stood from [`DWELL_SURE_S`] before its closing to the closing.
     fn on_door_cycle(&mut self, t_ns: i64, cycle: DoorCycle) {
         self.door_cycles.push(cycle);
+        self.last_stop = Some((t_ns, self.cell.and_then(|(_, c)| stations::of_cell(c))));
         // Since the speed was last measured, the IMU alone carried it, and its error there is mostly a constant
         // leak (gravity through a small tilt, or bias), which grows linearly: take it out of the forward samples
         // as a ramp from nothing then to all of it at the closing, and all of it after.
@@ -677,7 +806,11 @@ impl Fusion {
                     ));
                 }
             }
-            Pending::Accel(_) | Pending::WifiScan(_) | Pending::Audio(_) | Pending::Mag(_) => {}
+            Pending::Accel(_)
+            | Pending::WifiScan(_)
+            | Pending::Audio(_)
+            | Pending::Mag(_)
+            | Pending::Cell(_) => {}
         }
     }
 
@@ -826,8 +959,8 @@ impl Fusion {
                         None => {}
                     }
                 }
-                Input::Walking => {
-                    backward.on_walking(tr);
+                Input::Walking(running) => {
+                    backward.on_walking(tr, running);
                     anchor = Some((t, pairs.len()));
                 }
                 Input::StandingSince(from) => {
