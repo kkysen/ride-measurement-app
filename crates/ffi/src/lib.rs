@@ -260,7 +260,6 @@ impl Fusion {
 
     /// What the rider is on and where, for the main screen, and how long they've stayed put.
     pub fn status(&self) -> RideStatus {
-        use ride_fusion::doors::ChimeCars;
         use ride_fusion::fusion::Mode;
         let s = self.lock().status();
         let lines = s
@@ -280,30 +279,15 @@ impl Fusion {
             }
             .to_string(),
             station: s.station.as_ref().map(|st| st.name.clone()),
-            lines: lines.clone(),
+            lines,
             at_station: s.at_station,
-            // The chime's family, with the model when the station's lines all run one model of that family.
-            // A line whose model isn't known (the B's mix of R68s and R211s) could be the one ridden,
-            // so then only the family is named.
-            cars: s.cars.map(|c| {
-                let family = match c {
-                    ChimeCars::Ntt => "NTT",
-                    ChimeCars::R62 => "R62",
-                };
-                let models: Option<std::collections::BTreeSet<&str>> = lines
-                    .iter()
-                    .map(|l| ride_fusion::stations::car_model(l))
-                    .collect();
-                let models: Vec<&str> = models
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|m| (c == ChimeCars::R62) == m.starts_with("R62"))
-                    .collect();
-                match models[..] {
-                    [m] if c == ChimeCars::Ntt => format!("NTT ({m})"),
-                    [m] => m.to_string(),
-                    _ => family.to_string(),
-                }
+            // The chime's family, or the model when what's heard and the lines leave one.
+            cars: s.car_type.and_then(|c| match (c.ntt, c.model) {
+                (Some(true), Some(m)) => Some(format!("NTT ({m})")),
+                (_, Some(m)) => Some(m.to_string()),
+                (Some(true), None) => Some("NTT".to_string()),
+                (Some(false), None) => Some("R62".to_string()),
+                (None, None) => None,
             }),
             staying_s: s.staying_s,
             car: s.car.map(|c| format!("{c:04x}")),

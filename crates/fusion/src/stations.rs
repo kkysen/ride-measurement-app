@@ -50,19 +50,85 @@ pub fn meters(a: (f64, f64), b: (f64, f64)) -> f64 {
     dn.hypot(de)
 }
 
-/// The car model a line runs, as the rider knows them (the chime only tells R62 from NTT).
-pub fn car_model(line: &str) -> Option<&'static str> {
+/// A car model: whether its door chime is the NTT one (else the R62 family's), and whether its cars have the
+/// Bluetooth beacons of [`crate::car_beacons`] (CBTC-equipped or ready cars); none when not known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CarModel {
+    pub name: &'static str,
+    pub ntt: Option<bool>,
+    pub beacons: Option<bool>,
+}
+
+const fn model(name: &'static str, ntt: Option<bool>, beacons: Option<bool>) -> CarModel {
+    CarModel { name, ntt, beacons }
+}
+
+const R62: CarModel = model("R62", Some(false), Some(false));
+const R62A: CarModel = model("R62A", Some(false), Some(false));
+const R142: CarModel = model("R142", Some(true), Some(false));
+const R188: CarModel = model("R188", Some(true), Some(true));
+const R160: CarModel = model("R160", Some(true), Some(true));
+const R211: CarModel = model("R211", Some(true), Some(true));
+/// Not NTT-chimed; whether they have beacons isn't known.
+const R68: CarModel = model("R68", Some(false), None);
+
+/// The car models a line runs, as the rider knows them; none for a line whose fleet isn't known.
+pub fn car_models(line: &str) -> Option<&'static [CarModel]> {
     Some(match line {
-        "1" => "R62A",
-        "3" => "R62",
-        "2" => "R142",
-        "7" => "R188",
-        "F" | "M" | "R" => "R160",
+        "1" => &[R62A],
+        "3" => &[R62],
+        "2" => &[R142],
+        "7" => &[R188],
+        "F" | "M" | "R" => &[R160],
         // Mostly R211s, with a few R179s.
-        "C" => "R211",
-        // A mix of R68s and R211s, but only the R211s are NTTs, which is all a model is named for.
-        "B" => "R211",
+        "C" => &[R211],
+        "B" => &[R68, R211],
         _ => return None,
+    })
+}
+
+/// What the cars are, as far as known: NTT-chimed or not, and the model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CarType {
+    pub ntt: Option<bool>,
+    pub model: Option<&'static str>,
+}
+
+/// The car type from what the phone detects, the door chime's family (`ntt`) and whether car beacons are
+/// heard, narrowed by the lines the train could be (its route, else the station's).
+/// A line whose fleet isn't known could be the one ridden, so then no model is named.
+/// Beacons not heard say nothing: the phone may not be scanning.
+pub fn car_type(ntt: Option<bool>, beacons: bool, lines: &[String]) -> Option<CarType> {
+    if ntt.is_none() && !beacons {
+        return None;
+    }
+    let fits = |m: &CarModel| {
+        ntt.is_none_or(|n| m.ntt != Some(!n)) && (!beacons || m.beacons != Some(false))
+    };
+    let known: Option<Vec<&[CarModel]>> = lines.iter().map(|l| car_models(l)).collect();
+    let mut models: Vec<&CarModel> = known
+        .filter(|_| !lines.is_empty())
+        .unwrap_or_default()
+        .into_iter()
+        .flatten()
+        .filter(|m| fits(m))
+        .collect();
+    models.sort_by_key(|m| m.name);
+    models.dedup();
+    let agreed = |f: fn(&CarModel) -> Option<bool>| {
+        let first = f(models.first()?);
+        models
+            .iter()
+            .all(|m| f(m) == first)
+            .then_some(first)
+            .flatten()
+    };
+    Some(CarType {
+        ntt: ntt.or_else(|| agreed(|m| m.ntt)),
+        model: match models[..] {
+            [m] => Some(m.name),
+            _ => None,
+        },
     })
 }
 
@@ -119,5 +185,47 @@ mod tests {
         let (s, d) = nearest(40.7556, -73.9870).unwrap();
         assert!(s.name.starts_with("Times Sq"), "{s:?}");
         assert!(d < 100.0);
+    }
+
+    #[test]
+    fn car_type_from_chime_beacons_and_lines() {
+        let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let ct = |ntt, model| Some(CarType { ntt, model });
+        // 96 St on the 1, 2, 3: the chime tells the 2 from the 1 and 3, not the 1 from the 3.
+        let s96 = lines(&["1", "2", "3"]);
+        assert_eq!(
+            car_type(Some(true), false, &s96),
+            ct(Some(true), Some("R142"))
+        );
+        assert_eq!(car_type(Some(false), false, &s96), ct(Some(false), None));
+        // The route decides.
+        assert_eq!(
+            car_type(Some(false), false, &lines(&["1"])),
+            ct(Some(false), Some("R62A"))
+        );
+        // Beacons rule out the R142s: on the 2 and 7, the 7's R188s, NTT.
+        assert_eq!(
+            car_type(None, true, &lines(&["2", "7"])),
+            ct(Some(true), Some("R188"))
+        );
+        // On the B: NTT means R211; the R62 family's chime, the R68s.
+        let b = lines(&["B"]);
+        assert_eq!(
+            car_type(Some(true), false, &b),
+            ct(Some(true), Some("R211"))
+        );
+        assert_eq!(
+            car_type(Some(false), false, &b),
+            ct(Some(false), Some("R68"))
+        );
+        // Beacons alone on the B: the R68s' aren't known, so either.
+        assert_eq!(car_type(None, true, &b), ct(None, None));
+        // A line whose fleet isn't known: no model.
+        assert_eq!(
+            car_type(Some(true), false, &lines(&["2", "Q"])),
+            ct(Some(true), None)
+        );
+        assert_eq!(car_type(Some(true), false, &[]), ct(Some(true), None));
+        assert_eq!(car_type(None, false, &s96), None);
     }
 }

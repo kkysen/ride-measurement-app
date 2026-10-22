@@ -30,7 +30,7 @@ use crate::doors::ChimeCars;
 use crate::doors::{DoorCycle, DoorDetector};
 use crate::live_speed::{Estimate, LiveSpeedEstimator, SUBWAY_MAX_SPEED_MPS};
 use crate::position::{PositionEstimate, PositionInput, smooth};
-use crate::stations::{self, Station};
+use crate::stations::{self, CarType, Station};
 use crate::stops::{self as train_stops, StopDetector};
 use crate::subway::SubwayDetector;
 use crate::walking::{Gait, WINDOW_S as WALK_WINDOW_S, WalkingDetector};
@@ -395,6 +395,9 @@ pub struct Status {
     pub at_station: bool,
     /// The car type from the latest door chime, within 15 minutes.
     pub cars: Option<ChimeCars>,
+    /// The car type from what's heard (the chime, the cars' beacons), narrowed by the station's lines
+    /// (see [`stations::car_type`]).
+    pub car_type: Option<CarType>,
     /// How long (s) the rider has stayed within 100 m, out of the subway; the app reminds them to stop recording.
     pub staying_s: f64,
     /// The rider's car: its beacon's ID (see [`crate::car_beacons`]).
@@ -694,24 +697,37 @@ impl Fusion {
             .last_stop
             .filter(|&(at, _)| recent(at, 60.0))
             .and_then(|(_, s)| s);
+        let station = stopped_at
+            .or(cell_station.filter(|_| self.context.in_subway))
+            .cloned();
+        let aboard = matches!(mode, Mode::Subway { .. });
+        let cars = self
+            .doors
+            .as_ref()
+            .and_then(DoorDetector::last_chime)
+            .filter(|&(at, _)| recent(at, 900.0))
+            // Only aboard: once walking off, the last train's chime no longer says what the rider is on.
+            .filter(|_| aboard)
+            .map(|(_, c)| c);
+        let car = self.cars.current_at(t);
+        let lines = station
+            .as_ref()
+            .map(|s| s.lines.clone())
+            .unwrap_or_default();
         Status {
             mode,
-            station: stopped_at
-                .or(cell_station.filter(|_| self.context.in_subway))
-                .cloned(),
+            car_type: stations::car_type(
+                cars.map(|c| c == ChimeCars::Ntt),
+                aboard && car.is_some(),
+                &lines,
+            ),
+            station,
             at_station: stopped_at.is_some(),
-            cars: self
-                .doors
-                .as_ref()
-                .and_then(DoorDetector::last_chime)
-                .filter(|&(at, _)| recent(at, 900.0))
-                // Only aboard: once walking off, the last train's chime no longer says what the rider is on.
-                .filter(|_| matches!(mode, Mode::Subway { .. }))
-                .map(|(_, c)| c),
+            cars,
             staying_s: self
                 .stay
                 .map_or(0.0, |(since, _)| (t - since) as f64 * 1e-9),
-            car: self.cars.current_at(t),
+            car,
             dwell: self.dwell(t),
         }
     }
