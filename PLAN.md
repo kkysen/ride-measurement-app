@@ -344,9 +344,11 @@ Open, roughly in order:
 1. Wi-Fi scan throttling is on (`wifi_scan_throttle_enabled` unset, so the default): the user should turn off
    Developer options > Wi-Fi scan throttling, or the 4 s requests are mostly refused.
 2. Next ride: whether any subway access point answers ranging; how often cell readings really refresh at 1 s.
-3. One stop detector from lurch, door cycle (sound step plus chime), and start surge; magnetometer in the world frame
-   for starts; then port to Rust and give the speed estimator zero-velocity updates underground (it registers
-   only 3 of 9 stops on `20261021-135509`).
+3. Stops (`python/experiments/stops.py`, `8a1159b`): door cycles up to 60 s (sound step up, chime, step down)
+   find 27 of 39 stops on four rides with none at speed aboard; the lurch alone finds 37 of 39 but 42 at speed,
+   so it only times a confirmed stop; start surges find 8 of 9 starts on `135509` within 1 s.
+   Next: port door cycles (with the lurch for timing) to Rust and give the speed estimator zero-velocity updates
+   from doors open to doors closed (it registers only 3 of 9 stops on `20261021-135509`); magnetometer for starts.
 4. Subway detection in Rust: add the magnetometer, train beacon, and fix-on-track signals (scored in
    `subway_signals.py`), and walking detection for runaways off the train; position on the subway map for elevated lines.
 5. Hunting, as lateral sway told from walking's vertical bounce; OMNY tap detection paired with the stair pattern.
