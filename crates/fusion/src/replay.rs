@@ -50,6 +50,7 @@ enum Event {
     Cell(Option<i64>),
     NetworkFix(f64, f64, Option<f64>),
     Audio(u32, AudioSamples),
+    Ble(Vec<u8>, i32),
 }
 
 /// The app feeds audio to fusion as it reads it, this many frames at a time (`AudioStreamRecorder.kt`).
@@ -166,6 +167,15 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                     received,
                     Event::WifiScan(w.results.into_iter().map(|r| r.ssid).collect()),
                 )),
+                // Bluetooth advertisements, at each result's own time; the subway cars' beacons are used.
+                Some(Payload::BleScan(b)) => {
+                    for r in b.results {
+                        events.push((
+                            r.timestamp_elapsed_realtime_ns,
+                            Event::Ble(r.advertising_data, r.rssi),
+                        ));
+                    }
+                }
                 // The registered LTE cell, as the app passes it on.
                 Some(Payload::CellInfo(c)) => events.push((
                     received,
@@ -260,6 +270,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
             Event::Cell(c) => fusion.on_cell(t, c),
             Event::NetworkFix(lat, lon, acc) => fusion.on_network_fix(t, lat, lon, acc),
             Event::Audio(rate, audio) => fusion.on_audio(t, rate, audio),
+            Event::Ble(data, rssi) => fusion.on_ble(t, &data, rssi),
         }
     }
     fusion.finish();

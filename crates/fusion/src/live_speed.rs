@@ -28,6 +28,8 @@ pub enum Sensor {
     Walking,
     /// The mode's top speed, applied when the estimate goes over it (see [`LiveSpeedEstimator::set_max_speed`]).
     SpeedLimit,
+    /// The car's own accelerometer, from its beacon (see [`crate::car_beacons`]): the phone's bias along the axis.
+    Car,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -138,6 +140,71 @@ pub const MAX_ACCEL_MPS2: f64 = 9.80665;
 /// After this many implausible GNSS speeds in a row that agree with each other,
 /// the earlier reference was the wrong one (e.g. a glitched first fix): start over from them.
 const IMPLAUSIBLE_RESET: u32 = 5;
+/// The car's accelerometer: how long its means and its correlation with the phone's average over (s),
+/// the readings and correlation it takes to trust an axis and its sign, how long the phone's and the car's
+/// accelerations are averaged to compare (s; the beacon's reading lags by up to a second), and the comparison's
+/// sigma (m/s^2): a count is 0.15, and grades (to 4.6%, 0.45) tilt the car's reading but not the phone's.
+const CAR_MEAN_TAU_S: f64 = 60.0;
+const CAR_CORR_TAU_S: f64 = 300.0;
+const CAR_MIN_READINGS: u32 = 60;
+const CAR_MIN_CORR: f64 = 0.5;
+const CAR_WINDOW_S: f64 = 4.0;
+const CAR_SIGMA_MPS2: f64 = 0.6;
+/// Whether the car's accelerometer corrects the phone's bias. Not yet: on 2026-10-22 it changed little.
+/// It follows GNSS's acceleration (correlation 0.7, no lag), but 0.46 m/s^2 of it is noise against a 0.61 signal.
+/// With GNSS cut 30 s of every 90 s, outage rms 3.33 to 3.41 km/h on `154951` and 6.84 on `184134` either way
+/// (always on, at 0.3: 4.57 and 6.75); at underground stop taps, the 90th percentile forward speed fell from
+/// 46 to 38 mph on `184134` and was unchanged elsewhere, still at the subway's 55 mph cap.
+const USE_CAR_ACCEL: bool = false;
+/// While stopped, the car's level reading (its mounting and the station's grade) is learned over this (s).
+const CAR_LEVEL_TAU_S: f64 = 3.0;
+
+/// One car's accelerometer, as it relates to the phone's travel axis.
+#[derive(Clone, Debug, Default)]
+struct CarAxis {
+    car: u16,
+    readings: u32,
+    last_ns: i64,
+    /// Means of the car's axes and the phone's along-axis acceleration, and their covariances and variances.
+    mean: [f64; 3],
+    along_mean: f64,
+    cross: [f64; 3],
+    var: [f64; 3],
+    along_var: f64,
+    /// The car's reading at rest, per axis, once a stop has given it; until then, its mean over
+    /// [`CAR_CORR_TAU_S`], since a train speeds up about as much as it slows down.
+    level: Option<[f64; 3]>,
+    slow_mean: [f64; 3],
+    /// The current comparison window: since when, the phone's along-axis acceleration integrated,
+    /// and the car's forward readings summed.
+    window_ns: i64,
+    along_sum: f64,
+    along_dt: f64,
+    car_sum: f64,
+    car_n: u32,
+}
+
+impl CarAxis {
+    /// The car's forward axis and its sign along the phone's travel axis, once they correlate well enough.
+    fn forward(&self) -> Option<(usize, f64)> {
+        if self.readings < CAR_MIN_READINGS {
+            return None;
+        }
+        // The vertical axis carries gravity; the forward one is the horizontal axis that follows the phone's.
+        let vertical = (0..3).max_by(|&a, &b| self.mean[a].abs().total_cmp(&self.mean[b].abs()))?;
+        (0..3)
+            .filter(|&k| k != vertical)
+            .map(|k| {
+                (
+                    k,
+                    self.cross[k] / (self.var[k] * self.along_var).sqrt().max(1e-9),
+                )
+            })
+            .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+            .filter(|&(_, c)| c.abs() >= CAR_MIN_CORR)
+            .map(|(k, c)| (k, c.signum()))
+    }
+}
 pub const GATE_SIGMA: f64 = 3.0;
 pub const GNSS_REINIT_REJECTS: u32 = 5;
 pub const RECENT_S: f64 = 3.0;
@@ -207,6 +274,10 @@ pub struct LiveSpeedEstimator {
     speed_refs: BTreeMap<Sensor, SpeedRef>,
     /// The fastest the vehicle can go, if the mode is known to have a limit.
     max_speed_mps: Option<f64>,
+    /// The rider's car's accelerometer, and the phone's along-axis acceleration since its last reading.
+    car: Option<CarAxis>,
+    car_along_sum: f64,
+    car_along_dt: f64,
 }
 
 impl Default for LiveSpeedEstimator {
@@ -255,6 +326,9 @@ impl Default for LiveSpeedEstimator {
             rejected: BTreeMap::new(),
             speed_refs: BTreeMap::new(),
             max_speed_mps: None,
+            car: None,
+            car_along_sum: 0.0,
+            car_along_dt: 0.0,
         }
     }
 }
@@ -287,6 +361,18 @@ impl LiveSpeedEstimator {
             b: -self.b,
             p11: self.p11,
             max_speed_mps: self.max_speed_mps,
+            // The phone's along-axis acceleration flips with the axis, so the car's correlation with it does too.
+            car: self.car.as_ref().map(|c| CarAxis {
+                cross: c.cross.map(|x| -x),
+                along_mean: -c.along_mean,
+                last_ns: 0,
+                window_ns: 0,
+                along_sum: 0.0,
+                along_dt: 0.0,
+                car_sum: 0.0,
+                car_n: 0,
+                ..c.clone()
+            }),
             ..Self::default()
         }
     }
@@ -423,6 +509,8 @@ impl LiveSpeedEstimator {
             self.mark_used(Sensor::SpeedLimit, t_ns);
         }
         self.along_since_gnss += along * dt;
+        self.car_along_sum += along * dt;
+        self.car_along_dt += dt;
 
         let was_stopped = self.stopped;
         self.stopped =
@@ -461,6 +549,109 @@ impl LiveSpeedEstimator {
             }
         }
         self.track_accel(t_ns);
+    }
+
+    /// A reading of the rider's car's own accelerometer (m/s^2, the beacon's frame, gravity included), at `t_ns`.
+    /// The car's forward axis and its sign are learned from how it follows the phone's along-axis acceleration;
+    /// then, over each [`CAR_WINDOW_S`], the phone's mean along-axis acceleration minus the car's forward one
+    /// (from its level at the last stop) measures the phone's bias, which no tilt of the phone's gravity can fool.
+    /// In reversed time, feed it the same readings: the learned sign flips with the axis.
+    pub fn on_car_accel(&mut self, t_ns: i64, car: u16, a: [f64; 3]) {
+        let along = if self.car_along_dt > 0.0 {
+            Some(self.car_along_sum / self.car_along_dt)
+        } else {
+            None
+        };
+        let along_dt = self.car_along_dt;
+        self.car_along_sum = 0.0;
+        self.car_along_dt = 0.0;
+        if self.car.as_ref().is_none_or(|c| c.car != car) {
+            self.car = Some(CarAxis {
+                car,
+                mean: a,
+                slow_mean: a,
+                ..CarAxis::default()
+            });
+        }
+        let stopped = self.stopped;
+        let c = self.car.as_mut().expect("set above");
+        let dt = if c.last_ns == 0 {
+            0.0
+        } else {
+            (t_ns - c.last_ns).unsigned_abs() as f64 * 1e-9
+        };
+        c.last_ns = t_ns;
+        let Some(along) = along.filter(|_| dt > 0.0 && dt < 2.0) else {
+            return;
+        };
+        let km = 1.0 - (-dt / CAR_MEAN_TAU_S).exp();
+        let kc = 1.0 - (-dt / CAR_CORR_TAU_S).exp();
+        for (m, x) in c.mean.iter_mut().zip(a) {
+            *m += km * (x - *m);
+        }
+        c.along_mean += km * (along - c.along_mean);
+        let da = along - c.along_mean;
+        for (k, &x) in a.iter().enumerate() {
+            let dk = x - c.mean[k];
+            c.cross[k] += kc * (dk * da - c.cross[k]);
+            c.var[k] += kc * (dk * dk - c.var[k]);
+            c.slow_mean[k] += kc * (x - c.slow_mean[k]);
+        }
+        c.along_var += kc * (da * da - c.along_var);
+        c.readings += 1;
+        if stopped {
+            let kl = 1.0 - (-dt / CAR_LEVEL_TAU_S).exp();
+            let level = c.level.get_or_insert(a);
+            for (l, x) in level.iter_mut().zip(a) {
+                *l += kl * (x - *l);
+            }
+        }
+        let level = c.level.unwrap_or(c.slow_mean);
+        let Some((axis, sign)) = c.forward() else {
+            return;
+        };
+        if c.window_ns == 0 {
+            c.window_ns = t_ns;
+        }
+        c.along_sum += along * along_dt;
+        c.along_dt += along_dt;
+        c.car_sum += sign * (a[axis] - level[axis]);
+        c.car_n += 1;
+        if ((t_ns - c.window_ns).unsigned_abs() as f64) * 1e-9 < CAR_WINDOW_S || c.along_dt <= 0.0 {
+            return;
+        }
+        let z = c.along_sum / c.along_dt - c.car_sum / f64::from(c.car_n);
+        c.window_ns = 0;
+        c.along_sum = 0.0;
+        c.along_dt = 0.0;
+        c.car_sum = 0.0;
+        c.car_n = 0;
+        let gnss_recent =
+            self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+        if USE_CAR_ACCEL && !stopped && !gnss_recent {
+            self.update_bias(z, CAR_SIGMA_MPS2 * CAR_SIGMA_MPS2, Sensor::Car, t_ns);
+        }
+    }
+
+    /// A gated measurement of the along-axis accelerometer bias.
+    fn update_bias(&mut self, z: f64, r: f64, sensor: Sensor, t_ns: i64) {
+        let y = z - self.b;
+        let s = self.p11 + r;
+        if y * y > GATE_SIGMA * GATE_SIGMA * s {
+            *self.rejected.entry(sensor).or_default() += 1;
+            return;
+        }
+        let k0 = self.p01 / s;
+        let k1 = self.p11 / s;
+        self.v += k0 * y;
+        self.b += k1 * y;
+        let n00 = self.p00 - k0 * self.p01;
+        let n01 = (1.0 - k1) * self.p01;
+        let n11 = (1.0 - k1) * self.p11;
+        self.p00 = n00;
+        self.p01 = n01;
+        self.p11 = n11;
+        self.mark_used(sensor, t_ns);
     }
 
     /// The train stood still at `stopped_ns`, a few seconds ago (a door cycle's closing, found once the

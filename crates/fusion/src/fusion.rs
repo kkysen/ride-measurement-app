@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, VecDeque};
 use ride_gnss::solve::{Navigator, geodetic_to_ecef};
 use ride_session::proto::{GnssMeasurementsEvent, GnssNavigationMessage};
 
+use crate::car_beacons::{self, CarReading, CarTracker};
 use crate::doors::ChimeCars;
 use crate::doors::{DoorCycle, DoorDetector};
 use crate::live_speed::{Estimate, LiveSpeedEstimator, SUBWAY_MAX_SPEED_MPS};
@@ -62,6 +63,8 @@ enum Input {
     StandingSince(i64),
     /// The rider has been walking, or running if true (see [`crate::walking`]).
     Walking(bool),
+    /// The rider's car's accelerometer reading (see [`LiveSpeedEstimator::on_car_accel`]).
+    Car(u16, [f64; 3]),
 }
 
 /// How long before a door cycle's closing the train surely stood (s): the chime comes in the 8 s before it,
@@ -105,6 +108,8 @@ enum Pending {
     Cell(Option<i64>),
     /// Android's own location (fused, from Google's cell and Wi-Fi database underground): lat, lon, accuracy (m).
     NetworkFix(f64, f64, f64),
+    /// A subway car's beacon (see [`crate::car_beacons`]).
+    Car(CarReading),
 }
 
 #[derive(Clone, Debug)]
@@ -127,6 +132,7 @@ impl Pending {
             Self::Mag(_) => 6,
             Self::Cell(_) => 7,
             Self::NetworkFix(..) => 8,
+            Self::Car(_) => 9,
         }
     }
 }
@@ -193,7 +199,8 @@ fn step_estimator(
         | Pending::Audio(_)
         | Pending::Mag(_)
         | Pending::Cell(_)
-        | Pending::NetworkFix(..) => None,
+        | Pending::NetworkFix(..)
+        | Pending::Car(_) => None,
         Pending::Accel(a) => {
             estimator.on_accel(t_ns, a[0], a[1], a[2]);
             Some(Input::Accel(*a))
@@ -376,6 +383,7 @@ pub struct Fusion {
     doors: Option<DoorDetector>,
     door_cycles: Vec<DoorCycle>,
     walking: WalkingDetector,
+    cars: CarTracker,
     /// When the subway detector switched, and to what.
     subway_changes: Vec<(i64, bool)>,
     /// The registered LTE cell and when it was last reported.
@@ -436,6 +444,7 @@ impl Fusion {
             doors: None,
             door_cycles: Vec::new(),
             walking: WalkingDetector::default(),
+            cars: CarTracker::default(),
             subway_changes: Vec::new(),
             cell: None,
             network_station: None,
@@ -582,6 +591,19 @@ impl Fusion {
         }
     }
 
+    /// A Bluetooth advertisement (`ScanResult`'s data and signal strength), at the time it was received;
+    /// a subway car's beacon gives the car's own acceleration.
+    pub fn on_ble(&mut self, t_ns: i64, data: &[u8], rssi: i32) {
+        if let Some(r) = car_beacons::decode(data, rssi) {
+            self.arrive(t_ns, Pending::Car(r));
+        }
+    }
+
+    /// The rider's car (its beacon's ID), if a steady one is heard.
+    pub fn car(&self) -> Option<u16> {
+        self.cars.current()
+    }
+
     /// A magnetometer sample (uT), for telling the subway's traction current.
     pub fn on_magnetometer(&mut self, t_ns: i64, b: [f64; 3]) {
         self.arrive(
@@ -661,6 +683,13 @@ impl Fusion {
             self.network_station = stations::nearest(lat, lon)
                 .filter(|&(_, d)| accuracy <= NETWORK_FIX_M && d <= NETWORK_STATION_M.max(accuracy))
                 .map(|(s, _)| (t_ns, s));
+            return;
+        }
+        if let Pending::Car(r) = input {
+            if self.cars.on_reading(t_ns, &r) {
+                self.estimator.on_car_accel(t_ns, r.car, r.accel);
+                self.buffer(t_ns, Input::Car(r.car, r.accel));
+            }
             return;
         }
         if let (Pending::Audio(a), Some(doors)) = (&input, &mut self.doors) {
@@ -877,7 +906,8 @@ impl Fusion {
             | Pending::Audio(_)
             | Pending::Mag(_)
             | Pending::Cell(_)
-            | Pending::NetworkFix(..) => {}
+            | Pending::NetworkFix(..)
+            | Pending::Car(_) => {}
         }
     }
 
@@ -1045,6 +1075,7 @@ impl Fusion {
                     standing_since = Some(from);
                 }
                 Input::Gyro(w) => backward.on_gyro(-w[0], -w[1], -w[2]),
+                Input::Car(car, a) => backward.on_car_accel(tr, car, a),
                 Input::Speed(speed, sigma) => {
                     backward.on_gnss_speed(tr, speed, sigma);
                     anchor = Some((t, pairs.len()));
