@@ -64,6 +64,12 @@ enum Command {
         #[arg(long)]
         accel: bool,
     },
+    /// Post-ride recompression, as the app does it: each stream rewritten at a high zstd level, and audio as FLAC.
+    /// A stream is replaced only once its new file decodes to exactly what the original held.
+    Recompress {
+        #[arg(required = true)]
+        sessions: Vec<PathBuf>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -89,6 +95,19 @@ fn main() -> anyhow::Result<()> {
         } => {
             let output = output.unwrap_or_else(|| session.join("map.html"));
             map::map(&Session::open(session)?, &output, scale, accel)
+        }
+        Command::Recompress { sessions } => {
+            for dir in sessions {
+                println!("{}", dir.display());
+                let results = ride_session::recompress::recompress_session(
+                    &dir,
+                    ride_session::recompress::LEVEL,
+                )?;
+                for (name, outcome) in results {
+                    println!("  {name}: {outcome}");
+                }
+            }
+            Ok(())
         }
     }
 }
