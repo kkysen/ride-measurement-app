@@ -328,38 +328,48 @@ def tags(ride):
     return out
 
 
+def identify(ride, patterns, pos):
+    """The ride's train segments: [{t0, t1, route, dir, routes (near-equal), trip, first, last, passed}]."""
+    clock = clock_of(ride)
+    obs = observations(ride)
+    path, svc = viterbi(obs, patterns, pos, clock)
+    out = []
+    for s in segments(obs, path, patterns):
+        alts = alternatives(s, patterns, pos, clock, svc, ride) or [(0.0, s["pi"], s["ks"])]
+        routes = []
+        for _, qi, _ in alts:
+            if patterns[qi]["route"] not in routes:
+                routes.append(patterns[qi]["route"])
+        # Among near-equal patterns, the one whose schedule fits the stop times best.
+        fits = []
+        for c, qi, ks in alts:
+            trip = best_trip({"obs": s["obs"], "ks": ks}, patterns[qi], clock, svc)
+            fits.append(((trip[2] if trip else 1e9), c, qi, ks, trip))
+        _, _, qi, ks, trip = min(fits, key=lambda x: (x[0], x[1]))
+        p = patterns[qi]
+        out.append({"t0": s["obs"][0]["t0"], "t1": s["obs"][-1]["t1"], "route": p["route"], "dir": p["dir"],
+                    "routes": routes, "trip": trip, "first": s["obs"][0]["name"], "last": s["obs"][-1]["name"],
+                    "n": len(s["obs"]), "passed": [o["name"] for o, k in zip(s["obs"], ks) if p["track"][k] not in p["served"]]})
+    return out
+
+
 def main(rides):
     patterns, pos, names = load_gtfs()
     print(f"{len(patterns)} stopping patterns", file=sys.stderr)
     total = right = in_set = 0
     for ride in rides:
         clock = clock_of(ride)
-        obs = observations(ride)
-        path, svc = viterbi(obs, patterns, pos, clock)
-        segs = segments(obs, path, patterns)
         print(f"== {ride}")
         spans = []
-        for s in segs:
-            alts = alternatives(s, patterns, pos, clock, svc, ride) or [(0.0, s["pi"], s["ks"])]
-            routes = []
-            for _, qi, _ in alts:
-                if patterns[qi]["route"] not in routes:
-                    routes.append(patterns[qi]["route"])
-            # Among near-equal patterns, the one whose schedule fits the stop times best.
-            fits = []
-            for c, qi, ks in alts:
-                trip = best_trip({"obs": s["obs"], "ks": ks}, patterns[qi], clock, svc)
-                fits.append(((trip[2] if trip else 1e9), c, qi, ks, trip))
-            _, _, qi, ks, trip = min(fits, key=lambda x: (x[0], x[1]))
-            p = patterns[qi]
-            passed = [o["name"] for o, k in zip(s["obs"], ks) if p["track"][k] not in p["served"]]
-            first, last = s["obs"][0], s["obs"][-1]
-            spans.append((first["t0"], last["t1"], p["route"], set(routes)))
+        for g in identify(ride, patterns, pos):
+            trip = g["trip"]
+            spans.append((g["t0"], g["t1"], g["route"], set(g["routes"])))
             tr = f", trip {trip[4]} to {trip[5]}, {trip[1] / 60:+.1f} min late (spread {trip[2] / 60:.1f}, {trip[3]} stops)" if trip else ""
-            alt = f" (or {'/'.join(r for r in routes if r != p['route'])})" if len(routes) > 1 else ""
-            print(f"  {clock(first['t0']):%-I:%M %p}-{clock(last['t1']):%-I:%M %p} {p['route']}{alt} dir {p['dir']}: "
-                  f"{first['name']} to {last['name']}, {len(s['obs'])} stations"
-                  f"{', passed ' + ', '.join(passed) if passed else ''}{tr}".replace("AM", "am").replace("PM", "pm"))
+            others = [r for r in g["routes"] if r != g["route"]]
+            alt = f" (or {'/'.join(others)})" if others else ""
+            print(f"  {clock(g['t0']):%-I:%M %p}-{clock(g['t1']):%-I:%M %p} {g['route']}{alt} dir {g['dir']}: "
+                  f"{g['first']} to {g['last']}, {g['n']} stations"
+                  f"{', passed ' + ', '.join(g['passed']) if g['passed'] else ''}{tr}".replace("AM", "am").replace("PM", "pm"))
         for t, txt, line in tags(ride):
             hit = [(r, rs) for a, b, r, rs in spans if a - 30e9 <= t <= b + 30e9]
             cands = {r for r, _ in hit} | {r + "X" for r, _ in hit}
