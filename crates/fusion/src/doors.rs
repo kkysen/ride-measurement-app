@@ -33,8 +33,8 @@ const CHIME_HZ: [(f64, f64); 4] = [
 ];
 /// Which car type's chime each of [`CHIME_HZ`] is.
 const CHIME_CARS: [ChimeCars; 4] = [
-    ChimeCars::Newer,
-    ChimeCars::Newer,
+    ChimeCars::Ntt,
+    ChimeCars::Ntt,
     ChimeCars::R62,
     ChimeCars::R62,
 ];
@@ -42,9 +42,9 @@ const CHIME_CARS: [ChimeCars; 4] = [
 /// The door chime's pitches tell the car type (`python/experiments/chime_omny.py`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChimeCars {
-    /// 441 and 555 Hz, heard on the 7, 2, F, R, and M: the R142, R160, and R188 and their kin.
-    Newer,
-    /// 516 and 645 Hz, heard on the 1: the R62 and R62A.
+    /// 441 and 555 Hz, heard on the 7, 2, F, M, and R: the New Technology Trains (R142, R160, R188, and kin).
+    Ntt,
+    /// 516 and 645 Hz, heard on the 1 (R62A) and the 3 (R62), which sound the same.
     R62,
 }
 const CHIME_WINDOW: usize = 2048;

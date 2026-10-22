@@ -48,6 +48,7 @@ enum Event {
     Navigation(ride_session::proto::GnssNavigationMessage),
     WifiScan(Vec<String>),
     Cell(Option<i64>),
+    NetworkFix(f64, f64, Option<f64>),
     Audio(u32, AudioSamples),
 }
 
@@ -140,6 +141,15 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                     };
                     events.push((fix.elapsed_realtime_ns, Event::Fix(fix)));
                 }
+                // Android's own location, as the app passes it on.
+                Some(Payload::Location(l)) if l.provider == "fused" && !l.is_mock => events.push((
+                    l.elapsed_realtime_nanos,
+                    Event::NetworkFix(
+                        l.latitude_degrees,
+                        l.longitude_degrees,
+                        l.horizontal_accuracy_meters.map(f64::from),
+                    ),
+                )),
                 Some(Payload::GnssMeasurements(m)) => {
                     let t = m
                         .clock
@@ -248,6 +258,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
             Event::Navigation(m) => fusion.on_navigation_message(&m),
             Event::WifiScan(ssids) => fusion.on_wifi_scan(t, ssids),
             Event::Cell(c) => fusion.on_cell(t, c),
+            Event::NetworkFix(lat, lon, acc) => fusion.on_network_fix(t, lat, lon, acc),
             Event::Audio(rate, audio) => fusion.on_audio(t, rate, audio),
         }
     }

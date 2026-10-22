@@ -88,7 +88,10 @@ class GnssRecorder(
         return b.build()
     }
 
-    private val fusedListener = LocationListener { location -> locations.add { this.location = location.toProto() } }
+    private val fusedListener = LocationListener { location ->
+        locations.add { this.location = location.toProto() }
+        LiveSpeed.onNetworkFix(location)
+    }
 
     @SuppressLint("MissingPermission")
     fun start() {

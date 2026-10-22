@@ -141,6 +141,16 @@ object LiveSpeed {
         h.post { safely { fusion?.onWifiScan(tNs, ssids) } }
     }
 
+    /** Android's own (fused) location: Rust names the station from it underground. */
+    fun onNetworkFix(location: Location) {
+        val h = handler ?: return
+        val t = location.elapsedRealtimeNanos
+        val lat = location.latitude
+        val lon = location.longitude
+        val accuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else null
+        h.post { safely { fusion?.onNetworkFix(t, lat, lon, accuracy) } }
+    }
+
     /** The registered LTE cell, at its recorded time: Rust names the station from it. */
     fun onCell(tNs: Long, cellId: Long?) {
         val h = handler ?: return

@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 const TABLE: &str = include_str!("../data/station_cells.csv");
+/// Every station platform the MTA lists (`data/mta/stations.csv` from data.ny.gov): name, daytime routes, position.
+const ALL: &str = include_str!("../data/stations.csv");
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Station {
@@ -48,9 +50,51 @@ pub fn meters(a: (f64, f64), b: (f64, f64)) -> f64 {
     dn.hypot(de)
 }
 
-/// The station a registered LTE cell serves, if it's one the rider has tagged.
+/// The car model a line runs, as the rider knows them (the chime only tells R62 from NTT).
+pub fn car_model(line: &str) -> Option<&'static str> {
+    Some(match line {
+        "1" => "R62A",
+        "3" => "R62",
+        "2" => "R142",
+        "7" => "R188",
+        "F" | "M" | "R" => "R160",
+        _ => return None,
+    })
+}
+
+fn all() -> &'static [Station] {
+    static ALL_STATIONS: OnceLock<Vec<Station>> = OnceLock::new();
+    ALL_STATIONS.get_or_init(|| {
+        ALL.lines()
+            .skip(1)
+            .filter_map(|line| {
+                let f: Vec<&str> = line.split(',').collect();
+                let [name, lines, lat, lon] = f[..] else {
+                    return None;
+                };
+                Some(Station {
+                    name: name.to_string(),
+                    lines: lines.split_whitespace().map(str::to_string).collect(),
+                    lat: lat.parse().ok()?,
+                    lon: lon.parse().ok()?,
+                })
+            })
+            .collect()
+    })
+}
+
+/// The station nearest a point, and how far it is (m).
+pub fn nearest(lat: f64, lon: f64) -> Option<(&'static Station, f64)> {
+    all()
+        .iter()
+        .map(|s| (s, meters((lat, lon), (s.lat, s.lon))))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// The station a registered LTE cell serves, if it's one the rider has tagged, by the MTA's name for it.
 pub fn of_cell(cell_id: i64) -> Option<&'static Station> {
-    table().get(&cell_id)
+    let tagged = table().get(&cell_id)?;
+    Some(nearest(tagged.lat, tagged.lon).map_or(tagged, |(s, _)| s))
 }
 
 #[cfg(test)]
@@ -60,9 +104,16 @@ mod tests {
     #[test]
     fn known_cells_name_their_stations() {
         let s = of_cell(29646219).expect("110 St on the 1");
-        assert_eq!(s.name, "110 St");
+        assert_eq!(s.name, "Cathedral Pkwy (110 St)");
         assert_eq!(s.lines, ["1"]);
         assert!((s.lat - 40.804).abs() < 0.001 && (s.lon + 73.967).abs() < 0.001);
         assert!(of_cell(1).is_none());
+    }
+
+    #[test]
+    fn nearest_station_to_a_point() {
+        let (s, d) = nearest(40.7556, -73.9870).unwrap();
+        assert!(s.name.starts_with("Times Sq"), "{s:?}");
+        assert!(d < 100.0);
     }
 }

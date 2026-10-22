@@ -227,6 +227,18 @@ impl Fusion {
         Ok(())
     }
 
+    /// Android's own (fused) location: underground, it names the station from Google's database.
+    pub fn on_network_fix(
+        &self,
+        t_ns: i64,
+        lat_deg: f64,
+        lon_deg: f64,
+        horizontal_accuracy_m: Option<f64>,
+    ) {
+        self.lock()
+            .on_network_fix(t_ns, lat_deg, lon_deg, horizontal_accuracy_m);
+    }
+
     /// The registered LTE cell's ID, if any, at the time it was recorded: names the station.
     pub fn on_cell(&self, t_ns: i64, cell_id: Option<i64>) {
         self.lock().on_cell(t_ns, cell_id);
@@ -237,6 +249,11 @@ impl Fusion {
         use ride_fusion::doors::ChimeCars;
         use ride_fusion::fusion::Mode;
         let s = self.lock().status();
+        let lines = s
+            .station
+            .as_ref()
+            .map(|st| st.lines.clone())
+            .unwrap_or_default();
         RideStatus {
             mode: match s.mode {
                 Mode::Unknown => "unknown",
@@ -249,14 +266,24 @@ impl Fusion {
             }
             .to_string(),
             station: s.station.as_ref().map(|st| st.name.clone()),
-            lines: s.station.map(|st| st.lines).unwrap_or_default(),
+            lines: lines.clone(),
             at_station: s.at_station,
+            // The chime's family, with the model when the station's lines all run one model of that family.
             cars: s.cars.map(|c| {
-                match c {
-                    ChimeCars::Newer => "newer cars (R142, R160, R188 chime)",
-                    ChimeCars::R62 => "R62 or R62A cars",
+                let family = match c {
+                    ChimeCars::Ntt => "NTT",
+                    ChimeCars::R62 => "R62",
+                };
+                let models: std::collections::BTreeSet<&str> = lines
+                    .iter()
+                    .filter_map(|l| ride_fusion::stations::car_model(l))
+                    .filter(|m| (c == ChimeCars::R62) == m.starts_with("R62"))
+                    .collect();
+                match models.iter().collect::<Vec<_>>()[..] {
+                    [m] if c == ChimeCars::Ntt => format!("NTT ({m})"),
+                    [m] => m.to_string(),
+                    _ => family.to_string(),
                 }
-                .to_string()
             }),
             staying_s: s.staying_s,
         }

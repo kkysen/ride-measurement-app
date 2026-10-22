@@ -90,6 +90,8 @@ enum Pending {
     Mag(f64),
     /// The registered LTE cell's ID, if any.
     Cell(Option<i64>),
+    /// Android's own location (fused, from Google's cell and Wi-Fi database underground): lat, lon, accuracy (m).
+    NetworkFix(f64, f64, f64),
 }
 
 #[derive(Clone, Debug)]
@@ -111,6 +113,7 @@ impl Pending {
             Self::Audio(_) => 5,
             Self::Mag(_) => 6,
             Self::Cell(_) => 7,
+            Self::NetworkFix(..) => 8,
         }
     }
 }
@@ -173,7 +176,11 @@ fn step_estimator(
     own: Option<(f64, f64)>,
 ) -> Option<Input> {
     match input {
-        Pending::WifiScan(_) | Pending::Audio(_) | Pending::Mag(_) | Pending::Cell(_) => None,
+        Pending::WifiScan(_)
+        | Pending::Audio(_)
+        | Pending::Mag(_)
+        | Pending::Cell(_)
+        | Pending::NetworkFix(..) => None,
         Pending::Accel(a) => {
             estimator.on_accel(t_ns, a[0], a[1], a[2]);
             Some(Input::Accel(*a))
@@ -206,6 +213,9 @@ fn step_estimator(
     }
 }
 
+/// Android's location names a station when it's this sure (m) and the station is within this (m), or its accuracy.
+const NETWORK_FIX_M: f64 = 150.0;
+const NETWORK_STATION_M: f64 = 100.0;
 /// Faster than this (m/s), not walking and not in the subway, is some other vehicle.
 const VEHICLE_MPS: f64 = 4.0;
 /// Staying put: fixes this good (m), all within this of the first (m), and none moving this fast (m/s).
@@ -357,6 +367,8 @@ pub struct Fusion {
     subway_changes: Vec<(i64, bool)>,
     /// The registered LTE cell and when it was last reported.
     cell: Option<(i64, i64)>,
+    /// The station nearest Android's own latest location, if close and sure enough, and when.
+    network_station: Option<(i64, &'static Station)>,
     /// The latest door cycle's closing and the station its cell names, if one.
     last_stop: Option<(i64, Option<&'static Station>)>,
     /// Staying put: where the rider has been since when (a good fix's position, or none indoors).
@@ -413,6 +425,7 @@ impl Fusion {
             walking: WalkingDetector::default(),
             subway_changes: Vec::new(),
             cell: None,
+            network_station: None,
             last_stop: None,
             stay: None,
             now_ns: 0,
@@ -448,6 +461,15 @@ impl Fusion {
         &self.subway_changes
     }
 
+    /// Android's own location (the fused provider's, as recorded): underground, Google's database places the cell and
+    /// Wi-Fi at station level (on `182135`, 110 St to 14 St station by station, mostly within 50 m).
+    pub fn on_network_fix(&mut self, t_ns: i64, lat: f64, lon: f64, accuracy_m: Option<f64>) {
+        self.arrive(
+            t_ns,
+            Pending::NetworkFix(lat, lon, accuracy_m.unwrap_or(f64::INFINITY)),
+        );
+    }
+
     /// The registered LTE cell (its ID, if any), at the time it was recorded.
     pub fn on_cell(&mut self, t_ns: i64, cell_id: Option<i64>) {
         self.arrive(t_ns, Pending::Cell(cell_id));
@@ -472,10 +494,16 @@ impl Fusion {
             None if estimate.stopped => Mode::Still,
             None => Mode::Unknown,
         };
+        // Android's own location first (Google's database), then the rider's tagged cells.
         let cell_station = self
-            .cell
+            .network_station
             .filter(|&(at, _)| recent(at, 30.0))
-            .and_then(|(_, c)| stations::of_cell(c));
+            .map(|(_, s)| s)
+            .or_else(|| {
+                self.cell
+                    .filter(|&(at, _)| recent(at, 30.0))
+                    .and_then(|(_, c)| stations::of_cell(c))
+            });
         let stopped_at = self
             .last_stop
             .filter(|&(at, _)| recent(at, 60.0))
@@ -616,6 +644,12 @@ impl Fusion {
             self.cell = c.map(|c| (t_ns, c));
             return;
         }
+        if let Pending::NetworkFix(lat, lon, accuracy) = input {
+            self.network_station = stations::nearest(lat, lon)
+                .filter(|&(_, d)| accuracy <= NETWORK_FIX_M && d <= NETWORK_STATION_M.max(accuracy))
+                .map(|(s, _)| (t_ns, s));
+            return;
+        }
         if let (Pending::Audio(a), Some(doors)) = (&input, &mut self.doors) {
             for cycle in doors.on_audio(a.first_frame, &a.samples, &a.timestamps) {
                 self.on_door_cycle(t_ns, cycle);
@@ -706,7 +740,14 @@ impl Fusion {
     /// A door cycle found at `t_ns`: the train stood from [`DWELL_SURE_S`] before its closing to the closing.
     fn on_door_cycle(&mut self, t_ns: i64, cycle: DoorCycle) {
         self.door_cycles.push(cycle);
-        self.last_stop = Some((t_ns, self.cell.and_then(|(_, c)| stations::of_cell(c))));
+        let network = self
+            .network_station
+            .filter(|&(at, _)| (t_ns - at) as f64 * 1e-9 <= 30.0)
+            .map(|(_, s)| s);
+        self.last_stop = Some((
+            t_ns,
+            network.or_else(|| self.cell.and_then(|(_, c)| stations::of_cell(c))),
+        ));
         // Since the speed was last measured, the IMU alone carried it, and its error there is mostly a constant
         // leak (gravity through a small tilt, or bias), which grows linearly: take it out of the forward samples
         // as a ramp from nothing then to all of it at the closing, and all of it after.
@@ -810,7 +851,8 @@ impl Fusion {
             | Pending::WifiScan(_)
             | Pending::Audio(_)
             | Pending::Mag(_)
-            | Pending::Cell(_) => {}
+            | Pending::Cell(_)
+            | Pending::NetworkFix(..) => {}
         }
     }
 
