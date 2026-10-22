@@ -212,12 +212,12 @@ def lurch():
 
 
 
-def world_horizontal_50hz(tau_s=60.0):
+def world_horizontal_50hz(tau_s=60.0, session=SESSION):
     """Horizontal acceleration in a fixed frame at 50 Hz: orientation from the gyro, pulled toward the accelerometer's
     gravity with a `tau_s` time constant, so tilting the phone in hand doesn't leak gravity into it. (t_ns, (n, 2))."""
     rate = 50.0
-    a = ride.read_stream(SESSION, "accel_uncal")
-    g = ride.read_stream(SESSION, "gyro_uncal")
+    a = ride.read_stream(session, "accel_uncal")
+    g = ride.read_stream(session, "gyro_uncal")
     t = np.arange(max(a.timestamps_ns[0], g.timestamps_ns[0]), min(a.timestamps_ns[-1], g.timestamps_ns[-1]), int(1e9 / rate))
 
     def binned(s):
