@@ -347,7 +347,8 @@ Open, roughly in order:
    responder (only 15 home routers of 2638 to 3331 seen), so ranging is out. Cell is polled every 1 s,
    but the modem re-measures the registered cell every 2.0 s.
 3. Stops (`python/experiments/stops.py`, `8a1159b`): door cycles up to 60 s (sound step up, chime, step down)
-   find 27 of 39 stops on four rides with none at speed aboard; the lurch alone finds 37 of 39 but 42 at speed,
+   find 27 of 39 stops on four rides with none at speed aboard;
+   with the 2026-10-21 evening rides, 38 of 57 tapped stops on seven, still none at speed (`e779e91`); the lurch alone finds 37 of 39 but 42 at speed,
    so it only times a confirmed stop; start surges find 8 of 9 starts on `135509` within 1 s.
    Next: port door cycles (with the lurch for timing) to Rust and give the speed estimator zero-velocity updates
    from doors open to doors closed (it registers only 3 of 9 stops on `20261021-135509`); magnetometer for starts.
