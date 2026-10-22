@@ -26,7 +26,8 @@ pub enum Sensor {
     Doors,
     /// Steps in the accelerometer (see [`crate::walking`]): the rider is on foot.
     Walking,
-    /// The mode's top speed, applied when the estimate goes over it (see [`LiveSpeedEstimator::set_max_speed`]).
+    /// The mode's top speed, applied when the estimate goes over it (see [`LiveSpeedEstimator::set_max_speed`]),
+    /// and on the subway, how fast a train can speed up or slow down (see [`subway_accel_limits`]).
     SpeedLimit,
     /// The car's own accelerometer, from its beacon (see [`crate::car_beacons`]): the phone's bias along the axis.
     Car,
@@ -134,6 +135,22 @@ pub const MAX_SPEED_MPS: f64 = 343.0;
 /// NYC subway trains cruise at 40 to 45 mph and may reach 50, where power cuts off; they never exceed 55 mph.
 /// Other rail (LIRR, Metro-North) is faster, so this is only for subway rides.
 pub const SUBWAY_MAX_SPEED_MPS: f64 = 55.0 * 0.44704;
+/// How fast a subway train can speed up and slow down (m/s^2) at a speed (m/s), as (motoring, braking):
+/// motoring is constant force at low speed, then constant power, falling as 1/v.
+/// Learned above ground with GNSS (`python/experiments/accel_curves.py`, the 7's R188s on `154951` and `184134`):
+/// the 99th percentile motoring is 1.2 to 1.3 up to 13 mph, 0.85 to 0.95 at 18 to 27 mph, 0.5 at 31 to 36,
+/// and 0.4 at 40 to 45 (a * v about 7.5 to 9.5 m^2/s^3); braking is at most about 1.0.
+/// These are those with a quarter's margin, for all subway cars until other models are measured
+/// (NYC cars are rated about 2.5 mph/s motoring, 3 mph/s service braking, 3.2 emergency).
+/// With GNSS cut 30 s of every 90 s, outage rms (at outage end) on `184134` went from 6.39 (9.82) to 6.34 (9.71) km/h;
+/// `154951` and `214427` were unchanged. Those are the rides it was learned from, so this isn't a held-out check.
+pub fn subway_accel_limits(speed_mps: f64) -> (f64, f64) {
+    ((11.0 / speed_mps.max(1e-3)).min(1.6), 1.5)
+}
+/// The window (s) [`subway_accel_limits`] bounds the speed's change over, so vibration within it averages out,
+/// and the slack (m/s) for the phone's noise over it.
+const ACCEL_LIMIT_WINDOW_S: f64 = 2.0;
+const ACCEL_LIMIT_SLACK_MPS: f64 = 0.3;
 /// Trains, buses, and planes in normal operation stay well under 1 g along the track,
 /// so a GNSS speed that would take more than this to reach from the previous plausible one is wrong.
 pub const MAX_ACCEL_MPS2: f64 = 9.80665;
@@ -284,6 +301,10 @@ pub struct LiveSpeedEstimator {
     speed_refs: BTreeMap<Sensor, SpeedRef>,
     /// The fastest the vehicle can go, if the mode is known to have a limit.
     max_speed_mps: Option<f64>,
+    /// Whether time runs backward (the smoother's backward pass), where speeding up is braking.
+    backward: bool,
+    /// The speed and its time at the start of the current window for [`subway_accel_limits`]; reset by measurements.
+    accel_ref: Option<(i64, f64)>,
     /// The steady cars' accelerometers, and the current comparison window: since when,
     /// and the phone's along-axis acceleration integrated over it.
     cars: Vec<CarAxis>,
@@ -338,6 +359,8 @@ impl Default for LiveSpeedEstimator {
             rejected: BTreeMap::new(),
             speed_refs: BTreeMap::new(),
             max_speed_mps: None,
+            backward: false,
+            accel_ref: None,
             cars: Vec::new(),
             window_ns: 0,
             window_along_sum: 0.0,
@@ -374,6 +397,7 @@ impl LiveSpeedEstimator {
             b: -self.b,
             p11: self.p11,
             max_speed_mps: self.max_speed_mps,
+            backward: !self.backward,
             // The phone's along-axis acceleration flips with the axis, so the car's correlation with it does too.
             cars: self
                 .cars
@@ -524,6 +548,7 @@ impl LiveSpeedEstimator {
             self.v += y;
             self.mark_used(Sensor::SpeedLimit, t_ns);
         }
+        self.limit_accel(t_ns);
         self.along_since_gnss += along * dt;
         for c in &mut self.cars {
             c.pending_sum += along * dt;
@@ -960,6 +985,39 @@ impl LiveSpeedEstimator {
         false
     }
 
+    /// On the subway (its top speed is the bound), keeps the speed's rise since the window's start
+    /// within what a train can do, projecting back like [`Self::set_max_speed`]'s bound
+    /// (in the backward pass, rising is braking).
+    /// Bounding the fall as well held an estimate that had run up to the top speed there,
+    /// the backward pass's at 55 mph on `154951` with GNSS cut, unable to come back down.
+    fn limit_accel(&mut self, t_ns: i64) {
+        if self.max_speed_mps != Some(SUBWAY_MAX_SPEED_MPS) || !self.initialized {
+            self.accel_ref = None;
+            return;
+        }
+        let speed = self.v.abs();
+        let Some((t0, v0)) = self.accel_ref else {
+            self.accel_ref = Some((t_ns, speed));
+            return;
+        };
+        let dt = (t_ns - t0) as f64 * 1e-9;
+        let (motoring, braking) = subway_accel_limits(v0);
+        // Only rising is bounded: an estimate that has run too high must stay free to come back down.
+        let up = if self.backward { braking } else { motoring };
+        let bounded = speed.min(v0 + up * dt + ACCEL_LIMIT_SLACK_MPS);
+        if bounded != speed {
+            let y = self.v.signum() * bounded - self.v;
+            if self.p00 > 0.0 {
+                self.b += self.p01 / self.p00 * y;
+            }
+            self.v += y;
+            self.mark_used(Sensor::SpeedLimit, t_ns);
+        }
+        if dt >= ACCEL_LIMIT_WINDOW_S {
+            self.accel_ref = Some((t_ns, self.v.abs()));
+        }
+    }
+
     fn predict(&mut self, along: f64, dt: f64) {
         // Nothing this records sustains more than 1 g along the track; more is the phone being knocked or shaken.
         let along = along.clamp(-MAX_ACCEL_MPS2, MAX_ACCEL_MPS2);
@@ -1043,6 +1101,11 @@ impl LiveSpeedEstimator {
 
     fn mark_used(&mut self, sensor: Sensor, t_ns: i64) {
         self.last_used_ns.insert(sensor, t_ns);
+        // A measurement says where the speed is (a GNSS restart sets it outright),
+        // so the train's limits start again from there.
+        if !matches!(sensor, Sensor::Imu | Sensor::Car | Sensor::SpeedLimit) {
+            self.accel_ref = None;
+        }
     }
 
     fn flip_axis(&mut self) {
