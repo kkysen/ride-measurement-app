@@ -29,6 +29,7 @@ use crate::doors::{DoorCycle, DoorDetector};
 use crate::live_speed::{Estimate, LiveSpeedEstimator, SUBWAY_MAX_SPEED_MPS};
 use crate::position::{PositionEstimate, PositionInput, smooth};
 use crate::subway::SubwayDetector;
+use crate::walking::WalkingDetector;
 
 /// Whether our own GNSS position and velocity solutions update the position filter.
 /// Not yet: on the first rides (2026-10-20) they made it much worse even when cross-checked,
@@ -57,6 +58,8 @@ enum Input {
     MaxSpeedBefore(Option<f64>),
     /// At a door cycle's closing: the train stood still from this time to here (see [`DWELL_SURE_S`]).
     StandingSince(i64),
+    /// The rider has been walking (see [`crate::walking`]).
+    Walking,
 }
 
 /// How long before a door cycle's closing the train surely stood (s): the chime comes in the 8 s before it,
@@ -298,6 +301,7 @@ pub struct Fusion {
     /// Door cycles from the microphone, if it's fed; and those found so far.
     doors: Option<DoorDetector>,
     door_cycles: Vec<DoorCycle>,
+    walking: WalkingDetector,
 }
 
 impl Default for Fusion {
@@ -345,6 +349,7 @@ impl Fusion {
             last_gyro_ns: None,
             doors: None,
             door_cycles: Vec::new(),
+            walking: WalkingDetector::default(),
         }
     }
 
@@ -488,6 +493,15 @@ impl Fusion {
         );
         if let Some(before) = bound_before {
             self.buffer(t_ns, Input::MaxSpeedBefore(before));
+        }
+        if let Pending::Accel(a) = &input
+            && self
+                .walking
+                .on_accel(t_ns, (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt())
+                == Some(true)
+        {
+            self.estimator.on_walking(t_ns);
+            self.buffer(t_ns, Input::Walking);
         }
         let Some(kept) = kept else {
             return;
@@ -781,6 +795,10 @@ impl Fusion {
                         }
                         None => {}
                     }
+                }
+                Input::Walking => {
+                    backward.on_walking(tr);
+                    anchor = Some((t, pairs.len()));
                 }
                 Input::StandingSince(from) => {
                     // As in the forward pass (`on_door_cycle`): the drift since the last measurement, as a ramp.

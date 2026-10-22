@@ -28,6 +28,7 @@ pub enum Sensor {
     GnssPosition,
     Stop,
     Doors,
+    Walking,
     SpeedLimit,
 }
 
@@ -39,6 +40,7 @@ impl From<live_speed::Sensor> for Sensor {
             live_speed::Sensor::GnssPosition => Sensor::GnssPosition,
             live_speed::Sensor::Stop => Sensor::Stop,
             live_speed::Sensor::Doors => Sensor::Doors,
+            live_speed::Sensor::Walking => Sensor::Walking,
             live_speed::Sensor::SpeedLimit => Sensor::SpeedLimit,
         }
     }

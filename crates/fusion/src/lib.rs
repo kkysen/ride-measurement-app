@@ -7,3 +7,4 @@ pub mod position;
 pub mod replay;
 pub mod speed_colors;
 pub mod subway;
+pub mod walking;

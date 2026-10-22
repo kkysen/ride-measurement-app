@@ -24,6 +24,8 @@ pub enum Sensor {
     Stop,
     /// A door cycle heard in the sound (see [`crate::doors`]): the train stood still at its closing.
     Doors,
+    /// Steps in the accelerometer (see [`crate::walking`]): the rider is on foot.
+    Walking,
     /// The mode's top speed, applied when the estimate goes over it (see [`LiveSpeedEstimator::set_max_speed`]).
     SpeedLimit,
 }
@@ -111,6 +113,9 @@ const ACCEL_TAU_S: f64 = 1.0;
 const STOP_SIGMA_MPS: f64 = 0.05;
 /// A door cycle's closing: the train is standing, but the time is only good to a step's sharpest point.
 const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
+/// Walking speed and its spread (m/s): people walk at 1 to 2 m/s, slower in crowds and on stairs.
+const WALKING_MPS: f64 = 1.4;
+const WALKING_SIGMA_MPS: f64 = 0.6;
 /// How often the speed is kept for a door cycle's closing to be compared with (s), and for how long.
 const HISTORY_EVERY_S: f64 = 0.1;
 const HISTORY_S: f64 = 30.0;
@@ -492,10 +497,31 @@ impl LiveSpeedEstimator {
             Sensor::GnssPosition,
             Sensor::Stop,
             Sensor::Doors,
+            Sensor::Walking,
         ]
         .iter()
         .filter_map(|s| self.last_used_ns.get(s).copied())
         .max()
+    }
+
+    /// The rider is walking (see [`crate::walking`]), so moving at walking speed, whichever way.
+    /// Like a door cycle, it isn't gated without recent GNSS, which is when the IMU alone runs away.
+    pub fn on_walking(&mut self, t_ns: i64) {
+        self.inflate_to(t_ns);
+        let z = if self.v < 0.0 {
+            -WALKING_MPS
+        } else {
+            WALKING_MPS
+        };
+        let r = WALKING_SIGMA_MPS * WALKING_SIGMA_MPS;
+        let gnss_recent =
+            self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+        if gnss_recent {
+            self.update(z, r, Sensor::Walking, t_ns);
+        } else {
+            self.update_ungated(z, r, Sensor::Walking, t_ns);
+        }
+        self.track_accel(t_ns);
     }
 
     /// The train is standing now (in the smoother's backward pass, across a door cycle), not gated.
