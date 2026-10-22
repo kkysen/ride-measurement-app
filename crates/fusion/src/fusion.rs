@@ -33,6 +33,7 @@ use crate::position::{PositionEstimate, PositionInput, smooth};
 use crate::stations::{self, CarType, Station};
 use crate::stops::{self as train_stops, StopDetector};
 use crate::subway::SubwayDetector;
+use crate::trips;
 use crate::walking::{Gait, WINDOW_S as WALK_WINDOW_S, WalkingDetector};
 
 /// Whether our own GNSS position and velocity solutions update the position filter.
@@ -239,6 +240,8 @@ enum Pending {
     NetworkFix(f64, f64, f64),
     /// A subway car's beacon (see [`crate::car_beacons`]).
     Car(CarReading),
+    /// A GTFS-realtime poll's trip stops, and when it was requested (unix ms).
+    Transit(Box<Vec<trips::TripStop>>, i64),
 }
 
 #[derive(Clone, Debug)]
@@ -262,6 +265,7 @@ impl Pending {
             Self::Cell(_) => 7,
             Self::NetworkFix(..) => 8,
             Self::Car(_) => 9,
+            Self::Transit(..) => 10,
         }
     }
 }
@@ -329,7 +333,8 @@ fn step_estimator(
         | Pending::Mag(_)
         | Pending::Cell(_)
         | Pending::NetworkFix(..)
-        | Pending::Car(_) => None,
+        | Pending::Car(_)
+        | Pending::Transit(..) => None,
         Pending::Accel(a) => {
             estimator.on_accel(t_ns, a[0], a[1], a[2]);
             Some(Input::Accel(*a))
@@ -395,8 +400,10 @@ pub struct Status {
     pub at_station: bool,
     /// The car type from the latest door chime, within 15 minutes.
     pub cars: Option<ChimeCars>,
-    /// The car type from what's heard (the chime, the cars' beacons), narrowed by the station's lines
-    /// (see [`stations::car_type`]).
+    /// The train's route, from its recent stops and the GTFS-realtime feeds (see [`crate::trips`]).
+    pub route: Option<String>,
+    /// The car type from what's heard (the chime, the cars' beacons), narrowed by the route,
+    /// else the station's lines (see [`stations::car_type`]).
     pub car_type: Option<CarType>,
     /// How long (s) the rider has stayed within 100 m, out of the subway; the app reminds them to stop recording.
     pub staying_s: f64,
@@ -416,6 +423,12 @@ pub struct Dwell {
     /// How long they were open (s), once their closing is heard.
     pub doors_were_open_s: Option<f64>,
 }
+
+/// The train's route is matched from its stops in the subway within this (s), at most this many,
+/// the newest within [`ROUTE_STOP_S`] (the chime's 15 minutes).
+const ROUTE_STOPS_S: f64 = 1_800.0;
+const ROUTE_STOPS: usize = 4;
+const ROUTE_STOP_S: f64 = 900.0;
 
 /// Forward estimates are kept at every fix and at least this often, so smoothing covers gaps without fixes.
 const SAMPLE_EVERY_NS: i64 = 1_000_000_000;
@@ -544,6 +557,8 @@ pub struct Fusion {
     /// Each step-rhythm window's end, and whether it had steps: for when the rider leaves or boards a train.
     step_windows: Vec<(i64, bool)>,
     cars: CarTracker,
+    /// Every trip the GTFS-realtime feeds have listed.
+    trips: trips::Trips,
     /// When the subway detector switched, and to what.
     subway_changes: Vec<(i64, bool)>,
     /// The registered LTE cell and when it was last reported.
@@ -612,6 +627,7 @@ impl Fusion {
             walking: WalkingDetector::default(),
             step_windows: Vec::new(),
             cars: CarTracker::default(),
+            trips: trips::Trips::default(),
             subway_changes: Vec::new(),
             cell: None,
             network_station: None,
@@ -664,6 +680,38 @@ impl Fusion {
         self.arrive(t_ns, Pending::Cell(cell_id));
     }
 
+    /// A GTFS-realtime feed's response body (see [`crate::gtfs_rt`]), received at `t_ns` for a request at
+    /// `request_unix_ms`; only each trip's stops are kept.
+    pub fn on_transit(&mut self, t_ns: i64, request_unix_ms: i64, body: &[u8]) {
+        if let Some(feed) = ride_session::transit::decode(body) {
+            let stops = trips::trip_stops(&feed);
+            self.arrive(t_ns, Pending::Transit(Box::new(stops), request_unix_ms));
+        }
+    }
+
+    /// The train's route: its last few named stops in the subway, the newest within [`ROUTE_STOP_S`],
+    /// matched to the feeds' trips.
+    fn route(&self, t: i64) -> Option<String> {
+        let ago = |at: i64| (t - at) as f64 * 1e-9;
+        let stops: Vec<trips::RiderStop> = self
+            .train_stops
+            .iter()
+            .filter(|(stop, _, in_subway)| *in_subway && ago(stop.t_ns) <= ROUTE_STOPS_S)
+            .filter_map(|(stop, station, _)| {
+                Some(trips::RiderStop {
+                    stopped_ns: stop.t_ns,
+                    departed_ns: self.departures.iter().copied().find(|&d| d > stop.t_ns),
+                    station: (*station)?,
+                })
+            })
+            .collect();
+        let recent = &stops[stops.len().saturating_sub(ROUTE_STOPS)..];
+        if ago(recent.last()?.stopped_ns) > ROUTE_STOP_S {
+            return None;
+        }
+        self.trips.route(recent, t)
+    }
+
     /// What the rider is doing and where, as of the settled input, for the app to show.
     pub fn status(&self) -> Status {
         let t = self.now_ns;
@@ -710,12 +758,17 @@ impl Fusion {
             .filter(|_| aboard)
             .map(|(_, c)| c);
         let car = self.cars.current_at(t);
-        let lines = station
-            .as_ref()
-            .map(|s| s.lines.clone())
-            .unwrap_or_default();
+        let route = self.route(t).filter(|_| aboard);
+        let lines = match &route {
+            Some(r) => vec![r.clone()],
+            None => station
+                .as_ref()
+                .map(|s| s.lines.clone())
+                .unwrap_or_default(),
+        };
         Status {
             mode,
+            route,
             car_type: stations::car_type(
                 cars.map(|c| c == ChimeCars::Ntt),
                 aboard && car.is_some(),
@@ -887,6 +940,10 @@ impl Fusion {
     fn settle(&mut self, t_ns: i64, input: Pending) {
         self.settled_ns = Some(self.settled_ns.map_or(t_ns, |s| s.max(t_ns)));
         self.now_ns = self.now_ns.max(t_ns);
+        if let Pending::Transit(stops, request_unix_ms) = input {
+            self.trips.on_poll(t_ns, request_unix_ms, *stops);
+            return;
+        }
         if let Pending::Cell(c) = input {
             self.cell = c.map(|c| (t_ns, c));
             return;
@@ -1277,7 +1334,8 @@ impl Fusion {
             | Pending::Mag(_)
             | Pending::Cell(_)
             | Pending::NetworkFix(..)
-            | Pending::Car(_) => {}
+            | Pending::Car(_)
+            | Pending::Transit(..) => {}
         }
     }
 
@@ -1854,6 +1912,70 @@ fn departure_fade(stop: &train_stops::Stop, door_cycles: &[DoorCycle]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn route_from_the_feeds() {
+        use prost::Message;
+        use ride_session::transit_realtime::{
+            FeedEntity, FeedHeader, FeedMessage, TripDescriptor, TripUpdate,
+            trip_update::{StopTimeEvent, StopTimeUpdate},
+        };
+        let unix = 1_793_000_000i64;
+        let t0 = 5_000_000_000_000i64;
+        let update = |trip: &str, route: &str, at: i64| FeedEntity {
+            id: trip.into(),
+            trip_update: Some(TripUpdate {
+                trip: TripDescriptor {
+                    trip_id: Some(trip.into()),
+                    route_id: Some(route.into()),
+                    ..Default::default()
+                },
+                stop_time_update: vec![StopTimeUpdate {
+                    stop_id: Some("120S".into()),
+                    arrival: Some(StopTimeEvent {
+                        time: Some(at),
+                        ..Default::default()
+                    }),
+                    departure: Some(StopTimeEvent {
+                        time: Some(at + 30),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            vehicle: None,
+        };
+        let body = FeedMessage {
+            header: FeedHeader {
+                gtfs_realtime_version: "1.0".into(),
+                timestamp: Some(unix as u64),
+            },
+            entity: vec![update("a", "2", unix + 10), update("b", "3", unix + 300)],
+        }
+        .encode_to_vec();
+        let s96 = stations::all()
+            .iter()
+            .find(|s| s.name == "96 St" && s.lines.iter().any(|l| l == "2"))
+            .unwrap();
+        let mut f = Fusion::whole_ride();
+        f.context.in_subway = true;
+        let stop = train_stops::Stop {
+            t_ns: t0 + 12_000_000_000,
+            score: 1.0,
+            braking_since_ns: t0,
+        };
+        f.train_stops.push((stop, Some(s96), true));
+        assert_eq!(f.status().route, None);
+        f.on_transit(t0, unix * 1000, &body);
+        f.on_cell(t0 + 30_000_000_000, None);
+        let s = f.status();
+        assert_eq!(s.route.as_deref(), Some("2"));
+        // No chime or beacons heard: no car type.
+        assert_eq!(s.car_type, None);
+        // Undecodable bodies are dropped.
+        f.on_transit(t0 + 31_000_000_000, unix * 1000 + 31_000, b"not a feed");
+    }
 
     const S: i64 = 1_000_000_000;
 

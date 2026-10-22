@@ -62,7 +62,9 @@ pub struct RideStatus {
     pub lines: Vec<String>,
     /// Stopped there: a door cycle was just heard.
     pub at_station: bool,
-    /// The car type, from the latest door chime.
+    /// The train's route, from its stops and the GTFS-realtime feeds.
+    pub route: Option<String>,
+    /// The car type, from the latest door chime and the cars' beacons, narrowed by the route or the lines.
     pub cars: Option<String>,
     /// How long (s) the rider has stayed within 100 m, out of the subway.
     pub staying_s: f64,
@@ -253,6 +255,12 @@ impl Fusion {
         self.lock().on_ble(t_ns, &data, rssi);
     }
 
+    /// A GTFS-realtime feed's response body (HTTP 200 only), when it arrived, for a request at `request_unix_ms`:
+    /// gives the train's route.
+    pub fn on_transit(&self, t_ns: i64, request_unix_ms: i64, body: Vec<u8>) {
+        self.lock().on_transit(t_ns, request_unix_ms, &body);
+    }
+
     /// The registered LTE cell's ID, if any, at the time it was recorded: names the station.
     pub fn on_cell(&self, t_ns: i64, cell_id: Option<i64>) {
         self.lock().on_cell(t_ns, cell_id);
@@ -281,6 +289,7 @@ impl Fusion {
             station: s.station.as_ref().map(|st| st.name.clone()),
             lines,
             at_station: s.at_station,
+            route: s.route.clone(),
             // The chime's family, or the model when what's heard and the lines leave one.
             cars: s.car_type.and_then(|c| match (c.ntt, c.model) {
                 (Some(true), Some(m)) => Some(format!("NTT ({m})")),

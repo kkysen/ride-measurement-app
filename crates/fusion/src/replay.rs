@@ -59,6 +59,8 @@ enum Event {
     NetworkFix(f64, f64, Option<f64>),
     Audio(u32, AudioSamples),
     Ble(Vec<u8>, i32),
+    /// A GTFS-realtime response body that came back, and when it was requested (unix ms).
+    Transit(Vec<u8>, i64),
 }
 
 /// The app feeds audio to fusion as it reads it, this many frames at a time (`AudioStreamRecorder.kt`).
@@ -126,7 +128,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
             }
         }
     }
-    for stream in ["location", "gnss", "radio"] {
+    for stream in ["location", "gnss", "radio", ride_session::transit::STREAM] {
         if !session.stream_path(stream).exists() {
             continue;
         }
@@ -183,6 +185,10 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                             Event::Ble(r.advertising_data, r.rssi),
                         ));
                     }
+                }
+                // The MTA's feeds, when each response arrived, as the app passes them on.
+                Some(Payload::GtfsRealtime(f)) if f.http_status == 200 => {
+                    events.push((received, Event::Transit(f.body, f.request_unix_ms)))
                 }
                 // The registered LTE cell, as the app passes it on.
                 Some(Payload::CellInfo(c)) => events.push((
@@ -279,6 +285,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
             Event::NetworkFix(lat, lon, acc) => fusion.on_network_fix(t, lat, lon, acc),
             Event::Audio(rate, audio) => fusion.on_audio(t, rate, audio),
             Event::Ble(data, rssi) => fusion.on_ble(t, &data, rssi),
+            Event::Transit(body, request_ms) => fusion.on_transit(t, request_ms, &body),
         }
     }
     fusion.finish();

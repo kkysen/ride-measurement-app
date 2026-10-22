@@ -1045,6 +1045,7 @@ name = "ride-fusion"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "prost",
  "ride-gnss",
  "ride-session",
  "rustfft",

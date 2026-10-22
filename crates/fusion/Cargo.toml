@@ -11,3 +11,6 @@ anyhow.workspace = true
 ride-gnss.workspace = true
 ride-session.workspace = true
 rustfft.workspace = true
+
+[dev-dependencies]
+prost.workspace = true
