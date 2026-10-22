@@ -623,3 +623,7 @@ Open, roughly in order:
 - GNSS: Doppler speed vs position-derived speed agree on open sky; stationary noise floor.
 - Fusion: synthetic GNSS outages on good data, error vs held-out truth;
   station-to-station distances vs OSM; correct station identity on rides starting underground.
+- Stops, dwells and doors: the rules were tuned and scored on the same 9 rides and about 28 tapped stops,
+  some from a single example (the stop 6 s before walking off, from 96 St).
+  Score the next few tapped rides as a held-out check, before any retuning on them,
+  and before trusting dwell and door times for analyses.
