@@ -335,7 +335,9 @@ cell polled every 1 s, Wi-Fi scans requested every 4 s always, BLE low latency, 
 0.1.4 (on the phone, installed 2026-10-21 from `af669b8`): post-ride recompression stores audio as FLAC,
 bit-exact (`53aa61a`), 23% smaller; the 17 sessions pulled to the PC were re-encoded with `ride recompress`
 (575 MB to 443 MB of audio, every WAV export unchanged). The phone's copies were then replaced, each checked first
-(same audio decoded, and the copy's SHA-256 on the phone); OneDrive's are as they were (the user's call).
+(same audio decoded, and the copy's SHA-256 on the phone).
+OneDrive's 6 (2026-10-22): re-encoded in a copy, each WAV export identical, then swapped in by renaming;
+the originals are in `Documents/RideLogger/sessions-original-wav` until the rider deletes them (267 MB to 211 MB).
 
 Gotchas learned:
 - Android records SSIDs quoted (`"BoldynWiFi"`); `BoldynPasspoint` is a street network, `PasspointBoldyn` the subway's.
@@ -439,6 +441,10 @@ Open, roughly in order:
    - Bus or car: the 158 (NJ Transit, 12:56 to 1:15 am) made 10 stops in 20 min and shook 0.85 m/s^2 (median);
      the Uber from Edgewater (2:48 to 3:04 am) 6 in 14 min at 0.67. Too alike with one of each, and shaking varies
      by bus (high floor shakes less, per the rider); next: bus stops' dwell and door sounds, against lights.
+   - Train beacons (`02FD`, see Ideas): ride with each train on CBTC lines, unused so far; next: per train or
+     per car (how many steady at once), decode the varying bytes, then boarding and alighting from them.
+   - OpenCelliD as Google's backup once the rider has a key; automatic OneDrive upload once they register an app
+     (client ID; package `dev.khyber.ride`).
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
