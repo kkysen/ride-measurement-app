@@ -441,8 +441,7 @@ Open, roughly in order:
    - Bus or car: the 158 (NJ Transit, 12:56 to 1:15 am) made 10 stops in 20 min and shook 0.85 m/s^2 (median);
      the Uber from Edgewater (2:48 to 3:04 am) 6 in 14 min at 0.67. Too alike with one of each, and shaking varies
      by bus (high floor shakes less, per the rider); next: bus stops' dwell and door sounds, against lights.
-   - Train beacons (`02FD`, see Ideas): ride with each train on CBTC lines, unused so far; next: per train or
-     per car (how many steady at once), decode the varying bytes, then boarding and alighting from them.
+   - Train beacons (`02FD`, see Ideas): ride with each train on CBTC lines, unused so far (see 12).
    - OpenCelliD as Google's backup once the rider has a key; automatic OneDrive upload once they register an app
      (client ID; device code sign-in, so no package name or signature hash; steps in `CHECKLIST.md`).
    - Missed from earlier sessions, now listed:
@@ -454,6 +453,24 @@ Open, roughly in order:
        (e.g. Obtainium), since wireless debugging needs the same network.
      - The tunnels with cell service are per carrier (the rider has AT&T, may switch to T-Mobile): keep the carrier
        with each cell, and don't read a tunnel's coverage on one carrier as true of another.
+
+12. After 0.1.6 (2026-10-22, not yet on the phone):
+   - Gyro bias learner retested on today's `main` (branch `gyro-bias-retest`, `8b04c78`), GNSS cut 30 s in 90
+     (outage rms / at outage end, km/h): `154951` 3.33/6.39 to 3.03/5.19, `184134` 6.84/10.98 to 7.46/11.20,
+     `214427` 2.99/0.61 to 2.27/5.48. Still mixed, so still off `main`.
+   - Elevator or escalator by the car's jolts (`elevator_jolts.py`): no separation with the phone in hand;
+     next, the jolt along gravity only and the escalator's tread vibration.
+   - Smoother: across a gap between good fixes, speeds cover at most twice the straight distance plus both accuracies
+     and 1.5 m/s (`e232062`); Flushing indoors (4:25 pm, 257 s) went from 33 to 10 mph.
+   - Position: a door cycle at an identified station pins the position there, 90 m accurate (`abc9f5e`).
+     Not yet judged on a real ride: needs a ride with stations to check the path against.
+   - Door openings learned per ride (`door_self_template.py`), all 9 subway rides: within 3 s of 30 of 60 open taps,
+     of the 33 with any candidate; the 1 to 4 kHz step up misses the rest. Not ported; next, a better step-up finder.
+   - Untagged cells (`untagged_cells_check.py`): 106 placed by Google, 2 flagged, swapping between 61 St-Woodside and
+     69 St on the elevated 7 (Oct 20, 4:02 pm); no jumps.
+   - Train beacons (`train_beacons.py`): one per car (2 to 5 steady at once, the same IDs across rides),
+     each sending its car's acceleration (64 counts per g); the 7's lie flat, another fleet's stand on edge.
+     Next: boarding and alighting from them, and the car's own acceleration against the phone's.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
