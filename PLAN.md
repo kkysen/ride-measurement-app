@@ -428,6 +428,18 @@ Open, roughly in order:
      10 m); next: a gap's displacement as a constraint for the smoother.
    Next: the rider's corrections to the station table; pin positions at stations; the elevator's jolts.
 
+11. 0.1.6 (installed 2026-10-22, early morning):
+   - Stations from Android's own fused location (Google's database), already recorded: station by station
+     underground on `182135` and `135509`; the tagged-cell table is the fallback. OpenCelliD needs an account and
+     key (the rider's call); BeaconDB sends cell IDs to its server.
+   - Car types as the rider named them: R62 (1's R62A and 3's R62 sound the same) and NTT (2 R142, 7 R188,
+     F/M/R R160), with the model from the station's lines.
+   - OMNY: the rider's own taps are the loud beeps (38 to 54 dB, others 33 or less), all 7 confirmed;
+     Google Wallet's notifications are recorded once the rider grants access (they can lag; the beep times them).
+   - Bus or car: the 158 (NJ Transit, 12:56 to 1:15 am) made 10 stops in 20 min and shook 0.85 m/s^2 (median);
+     the Uber from Edgewater (2:48 to 3:04 am) 6 in 14 min at 0.67. Too alike with one of each, and shaking varies
+     by bus (high floor shakes less, per the rider); next: bus stops' dwell and door sounds, against lights.
+
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
   Airliner speed/altitude are within consumer GNSS limits (~1900 km/h, 18 km).
