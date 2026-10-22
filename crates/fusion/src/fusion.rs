@@ -845,6 +845,7 @@ impl Fusion {
         {
             let gait = self.walking.last_gait().and_then(|(_, g)| g);
             self.step_windows.push((t_ns, gait.is_some()));
+            self.confirm_by_walking_off(t_ns);
             if walking {
                 let running = gait == Some(Gait::Running);
                 self.estimator.on_walking(t_ns, running);
@@ -1009,6 +1010,33 @@ impl Fusion {
             .filter(|s| (t_ns - s.t_ns) as f64 * 1e-9 < RECORD_MAX_DWELL_S)
             .collect();
         for stop in confirmed {
+            let from = stop.standing_ns();
+            self.hold_standing(t_ns, from, from + (STOP_STANDING_S * 1e9) as i64);
+        }
+    }
+
+    /// Stops waiting for confirmation that the rider walked off from (see [`ALIGHT_WINDOWS`]): a train that
+    /// stopped, at the end of a ride or a transfer, often with no door cycle heard and, the rider gone,
+    /// no departure (`20261021-135509`, 2:20 pm; `20261021-182135`, 6:44 pm).
+    fn confirm_by_walking_off(&mut self, t_ns: i64) {
+        let window_ns = (WALK_WINDOW_S * 1e9) as i64;
+        let walked_off: Vec<train_stops::Stop> = self
+            .unconfirmed_stops
+            .iter()
+            .copied()
+            .filter(|s| {
+                let after: Vec<bool> = self
+                    .step_windows
+                    .iter()
+                    .filter(|&&(t, _)| t - window_ns >= s.t_ns)
+                    .take(ALIGHT_OF)
+                    .map(|&(_, steps)| steps)
+                    .collect();
+                after.len() == ALIGHT_OF && after.iter().filter(|&&x| x).count() >= ALIGHT_WINDOWS
+            })
+            .collect();
+        for stop in walked_off {
+            self.unconfirmed_stops.retain(|s| s.t_ns != stop.t_ns);
             let from = stop.standing_ns();
             self.hold_standing(t_ns, from, from + (STOP_STANDING_S * 1e9) as i64);
         }
