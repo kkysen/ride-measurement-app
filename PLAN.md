@@ -341,9 +341,11 @@ Gotchas learned:
 - Wireless debugging's address changes on every reconnect; `just adb-server` first after a WSL restart.
 
 Open, roughly in order:
-1. Wi-Fi scan throttling is on (`wifi_scan_throttle_enabled` unset, so the default): the user should turn off
-   Developer options > Wi-Fi scan throttling, or the 4 s requests are mostly refused.
-2. Next ride: whether any subway access point answers ranging; how often cell readings really refresh at 1 s.
+1. Done: Wi-Fi scan throttling is off since the 2026-10-21 evening rides (`182135`, `215922`).
+2. Done (`crates/cli/examples/radio_stats.rs`): with throttling off, fresh Wi-Fi scans come every 5.0 s (median),
+   not 4 s: a scan takes longer, so requests during one merge into it. No subway access point is an 802.11mc
+   responder (only 15 home routers of 2638 to 3331 seen), so ranging is out. Cell is polled every 1 s,
+   but the modem re-measures the registered cell every 2.0 s.
 3. Stops (`python/experiments/stops.py`, `8a1159b`): door cycles up to 60 s (sound step up, chime, step down)
    find 27 of 39 stops on four rides with none at speed aboard; the lurch alone finds 37 of 39 but 42 at speed,
    so it only times a confirmed stop; start surges find 8 of 9 starts on `135509` within 1 s.
