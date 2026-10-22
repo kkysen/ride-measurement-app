@@ -102,6 +102,15 @@ pub struct SmoothedSpeed {
     pub accel_mps2: f64,
 }
 
+/// A train stop so far, for the live graph's labels (see `ride_fusion::fusion::StopRecord`).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct LiveStop {
+    pub stopped_ns: i64,
+    pub departed_ns: Option<i64>,
+    pub station: Option<String>,
+    pub in_subway: bool,
+}
+
 /// Raw GNSS progress, for the screen.
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct GnssStats {
@@ -264,6 +273,20 @@ impl Fusion {
     /// The registered LTE cell's ID, if any, at the time it was recorded: names the station.
     pub fn on_cell(&self, t_ns: i64, cell_id: Option<i64>) {
         self.lock().on_cell(t_ns, cell_id);
+    }
+
+    /// The train's stops so far, oldest first.
+    pub fn stops(&self) -> Vec<LiveStop> {
+        self.lock()
+            .stop_records()
+            .into_iter()
+            .map(|r| LiveStop {
+                stopped_ns: r.stopped_ns,
+                departed_ns: r.departed_ns,
+                station: r.station.map(|s| s.name.clone()),
+                in_subway: r.in_subway,
+            })
+            .collect()
     }
 
     /// What the rider is on and where, for the main screen, and how long they've stayed put.
