@@ -152,9 +152,15 @@ private fun newMapView(
 ): MapView {
     Configuration.getInstance().apply {
         userAgentValue = context.packageName
-        // The app's own cache, which needs no storage permission and is never mixed with recordings.
-        osmdroidBasePath = File(context.cacheDir, "osmdroid")
-        osmdroidTileCache = File(context.cacheDir, "osmdroid/tiles")
+        // The app's own files, which need no storage permission and are never mixed with recordings.
+        // Not the cache directory: Android clears that when space runs low, and every tile then comes over the network
+        // again, which is slow underground or with throttled Wi-Fi.
+        osmdroidBasePath = File(context.filesDir, "osmdroid")
+        osmdroidTileCache = File(context.filesDir, "osmdroid/tiles")
+        tileFileSystemCacheMaxBytes = 1L shl 30
+        tileFileSystemCacheTrimBytes = 900L shl 20
+        // Streets rarely change: show a cached tile for a month before asking the server for a newer one.
+        expirationOverrideDuration = 30L * 24 * 60 * 60 * 1000
     }
     val map = MapView(context)
     map.setTileSource(TileSourceFactory.MAPNIK)
