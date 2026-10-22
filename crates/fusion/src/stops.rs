@@ -33,6 +33,7 @@ const AFTER_S: (f64, f64) = (1.0, 5.0);
 const BRAKED_S: f64 = 20.0;
 const AFTER_MAX_MPS2: f64 = 0.1;
 const MIN_SCORE: f64 = 0.2;
+const ONSET_MPS2: f64 = 0.15;
 pub const SEP_S: f64 = 30.0;
 
 /// A start surge: from a steady level (spread under [`STEADY_MPS2`] over [`STEADY_S`]), the 1 s mean steps by over
@@ -52,6 +53,8 @@ const KEEP_S: f64 = 2.0 * SEP_S + BRAKED_S + 10.0;
 pub struct Stop {
     pub t_ns: i64,
     pub score: f64,
+    /// When the braking began: the 1 s mean along its direction last under [`ONSET_MPS2`] (see [`BRAKED_S`]).
+    pub braking_since_ns: i64,
 }
 
 /// What the detector found as of the latest sample.
@@ -81,7 +84,7 @@ pub struct StopDetector {
     last_end_ns: Option<i64>,
     /// Lurches waiting for their score, and scored ones waiting [`SEP_S`] to see if a better one comes.
     unscored: VecDeque<usize>,
-    scored: VecDeque<(i64, f64)>,
+    scored: VecDeque<(i64, f64, i64)>,
     last_stop: Option<Stop>,
     next_surge: usize,
     last_surge_ns: Option<i64>,
@@ -362,7 +365,8 @@ impl StopDetector {
             }
             self.unscored.pop_front();
             if let Some(score) = self.score(i) {
-                self.scored.push_back((self.time(i), score));
+                let since = self.braking_since(i);
+                self.scored.push_back((self.time(i), score, since));
             }
         }
         // A scored lurch stops the train once nothing within `SEP_S` after it can outscore it.
@@ -371,23 +375,47 @@ impl StopDetector {
         };
         let sep = (SEP_S * 1e9) as i64;
         let wait = sep + ((AFTER_S.1 + 2.0 + SUSTAINED_S) * 1e9) as i64;
-        while let Some(&(t, score)) = self.scored.front() {
+        while let Some(&(t, score, since)) = self.scored.front() {
             if now - t < wait {
                 break;
             }
             self.scored.pop_front();
-            let beaten_later = self.scored.iter().any(|&(u, s)| u - t <= sep && s > score);
+            let beaten_later = self
+                .scored
+                .iter()
+                .any(|&(u, s, _)| u - t <= sep && s > score);
             let beaten_before = self
                 .last_stop
                 .is_some_and(|s| t - s.t_ns <= sep && s.score >= score);
             if beaten_later || beaten_before {
                 continue;
             }
-            let stop = Stop { t_ns: t, score };
+            let stop = Stop {
+                t_ns: t,
+                score,
+                braking_since_ns: since,
+            };
             self.last_stop = Some(stop);
             events.push(Event::Stopped(stop));
         }
         events
+    }
+
+    /// When the braking before lurch `i` began: going back from half a second before it, the last 1 s mean
+    /// along its direction under [`ONSET_MPS2`] (or as far as [`BRAKED_S`] back).
+    fn braking_since(&self, i: usize) -> i64 {
+        let n1 = Self::samples(1.0);
+        let u = self.mean(i.saturating_sub(Self::samples(SUSTAINED_S)), i);
+        let size = dot(u, u).sqrt().max(1e-12);
+        let u = [u[0] / size, u[1] / size];
+        let first = i
+            .saturating_sub(Self::samples(BRAKED_S))
+            .max(self.base + n1);
+        let mut k = i.saturating_sub(Self::samples(0.5)).max(first);
+        while k > first && dot(self.mean(k + 1 - n1, k + 1), u) > ONSET_MPS2 {
+            k -= 1;
+        }
+        self.time(k)
     }
 
     fn score(&self, i: usize) -> Option<f64> {
