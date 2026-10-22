@@ -165,6 +165,12 @@ object LiveSpeed {
         h.post { safely { fusion?.onBle(tNs, data, rssi) } }
     }
 
+    /** A GTFS-realtime feed's response, at its recorded time: Rust finds the train's route from it. */
+    fun onTransit(tNs: Long, requestUnixMs: Long, body: ByteArray) {
+        val h = handler ?: return
+        h.post { safely { fusion?.onTransit(tNs, requestUnixMs, body) } }
+    }
+
     /** The registered LTE cell, at its recorded time: Rust names the station from it. */
     fun onCell(tNs: Long, cellId: Long?) {
         val h = handler ?: return

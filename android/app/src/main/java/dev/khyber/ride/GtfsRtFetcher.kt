@@ -20,7 +20,8 @@ import uniffi.ride_ffi.gtfsRtPollMs
 /**
  * Records the MTA's subway GTFS-realtime feeds while recording, for which trip and train the rider was on.
  * Rust picks the feeds (`ride_fusion::gtfs_rt`: the lines near [LiveSpeed.lastPosition]) and how often;
- * this only does the HTTP requests and stores each response unchanged in the `transit` stream.
+ * this only does the HTTP requests, stores each response unchanged in the `transit` stream,
+ * and passes it on to fusion for the train's route.
  * Having no network, as underground, is only logged; recording never depends on it.
  * Underground the network comes and goes in stations, often for seconds: a poll that failed is retried
  * the moment Android says the network is back (validated), not on the next 30 s tick,
@@ -114,7 +115,9 @@ class GtfsRtFetcher(context: Context, private val records: RecordStreamRecorder)
                 .setHttpStatus(status)
                 .setBody(com.google.protobuf.ByteString.copyFrom(body ?: ByteArray(0)))
                 .build()
-            records.add { gtfsRealtime = feed }
+            val receivedNs = records.add { gtfsRealtime = feed }
+            // Rust matches the train's stops to the trips in it, at the time recorded, as a replay does.
+            if (receivedNs != null && status == 200 && body != null) LiveSpeed.onTransit(receivedNs, requestMs, body)
         } finally {
             connection.disconnect()
         }
