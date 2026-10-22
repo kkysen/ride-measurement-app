@@ -168,6 +168,7 @@ class RecorderService : Service() {
                 .toByteArray(),
         ) }
         LiveTrack.reset()
+        LiveSeries.reset()
         LiveSpeed.start(this)
         orbitFetcher = Health.guard("orbits") { OrbitFetcher(dir) }
         if (transit != null) gtfsRtFetcher = Health.guard("gtfs-rt") { GtfsRtFetcher(this, transit) }

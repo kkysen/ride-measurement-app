@@ -211,13 +211,14 @@ class MainActivity : ComponentActivity() {
                     BackHandler(enabled = page != "main") { page = "main" }
                     when {
                         page == "map" -> LiveMapScreen(onBack = { page = "main" })
+                        page == "graph" -> LiveGraphScreen(onBack = { page = "main" })
                         page == "rides" -> PastRidesScreen(onBack = { page = "main" }, onShowTaps = { id ->
                             // The ride being recorded is still being written: its taps come from the live list.
                             page = if (id == RecorderService.state.value.sessionId) "taps" else "rideTaps:$id"
                         })
                         page == "taps" -> TapsScreen(onBack = { page = "main" })
                         page.startsWith("rideTaps:") -> RideTapsScreen(page.removePrefix("rideTaps:"), onBack = { page = "rides" })
-                        else -> Screen(onShowMap = { page = "map" }, onShowRides = { page = "rides" }, onShowTaps = { page = "taps" })
+                        else -> Screen(onShowMap = { page = "map" }, onShowGraph = { page = "graph" }, onShowRides = { page = "rides" }, onShowTaps = { page = "taps" })
                     }
                 }
             }
@@ -225,7 +226,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Screen(onShowMap: () -> Unit, onShowRides: () -> Unit, onShowTaps: () -> Unit) {
+    private fun Screen(onShowMap: () -> Unit, onShowGraph: () -> Unit, onShowRides: () -> Unit, onShowTaps: () -> Unit) {
         // Recording doesn't use the Rust core, so if it fails to load, show why and keep going.
         val rustCoreStatus = remember {
             try {
@@ -266,6 +267,7 @@ class MainActivity : ComponentActivity() {
                         if (state.recording) RecorderService.stop(this@MainActivity) else RecorderService.start(this@MainActivity)
                     }) { Text(if (state.recording) "Stop" else "Start") }
                     HapticButton(onClick = onShowMap) { Text("Map") }
+                    HapticButton(onClick = onShowGraph) { Text("Graph") }
                     HapticButton(onClick = onShowRides) { Text("Past rides") }
                     HapticButton(onClick = onShowTaps) { Text("Taps") }
                 }

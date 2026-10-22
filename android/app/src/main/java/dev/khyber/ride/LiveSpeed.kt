@@ -44,7 +44,10 @@ object LiveSpeed {
     private val publish = object : Runnable {
         override fun run() {
             safely {
-                _estimate.value = fusion?.estimate(SystemClock.elapsedRealtimeNanos())
+                val now = SystemClock.elapsedRealtimeNanos()
+                val estimate = fusion?.estimate(now)
+                _estimate.value = estimate
+                estimate?.let { LiveSeries.addLive(now, it.speedMps, it.accelMps2) }
                 _gnss.value = fusion?.gnssStats()
                 val status = fusion?.status()
                 _status.value = status
@@ -65,7 +68,13 @@ object LiveSpeed {
     // the first fix after it implies.
     private val smooth = object : Runnable {
         override fun run() {
-            safely { fusion?.smoothed()?.let { LiveTrack.applySmoothed(it) } }
+            safely {
+                fusion?.smoothed()?.let {
+                    LiveTrack.applySmoothed(it)
+                    LiveSeries.applySmoothed(it)
+                }
+                fusion?.stops()?.let { LiveSeries.setStops(it) }
+            }
             handler?.postDelayed(this, SMOOTH_MS)
         }
     }
