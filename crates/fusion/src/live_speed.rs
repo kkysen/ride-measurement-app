@@ -150,12 +150,13 @@ const CAR_MIN_READINGS: u32 = 60;
 const CAR_MIN_CORR: f64 = 0.5;
 const CAR_WINDOW_S: f64 = 4.0;
 const CAR_SIGMA_MPS2: f64 = 0.6;
-/// Whether the car's accelerometer corrects the phone's bias. Not yet: on 2026-10-22 it changed little.
+/// Whether the car's accelerometer corrects the phone's bias, without recent GNSS only.
+/// On since 2026-10-22 at the rider's call: it changed little, but helped at underground stops.
 /// It follows GNSS's acceleration (correlation 0.7, no lag), but 0.46 m/s^2 of it is noise against a 0.61 signal.
 /// With GNSS cut 30 s of every 90 s, outage rms 3.33 to 3.41 km/h on `154951` and 6.84 on `184134` either way
 /// (always on, at 0.3: 4.57 and 6.75); at underground stop taps, the 90th percentile forward speed fell from
 /// 46 to 38 mph on `184134` and was unchanged elsewhere, still at the subway's 55 mph cap.
-const USE_CAR_ACCEL: bool = false;
+const USE_CAR_ACCEL: bool = true;
 /// While stopped, the car's level reading (its mounting and the station's grade) is learned over this (s).
 const CAR_LEVEL_TAU_S: f64 = 3.0;
 
