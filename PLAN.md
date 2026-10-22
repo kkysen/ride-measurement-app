@@ -511,6 +511,27 @@ Open, roughly in order:
    - The C's cars are R211s (a few R179s) in `stations.rs`.
    - Uploads: the rider will register the Azure app later (a free Azure account, for the tenant); nothing until then.
 
+14. Tried on 2026-10-22, after the car's accelerometer went on (no recent GNSS only):
+   - Gyro bias learner, gated (`gyro-bias-retest`, `7abdfaf`, `GB_MODE`/`GB_TAU` experiment knobs), GNSS cut 30 s in 90
+     (outage rms / at outage end, km/h): `main` 3.41/6.54, 6.84/10.97, 2.99/0.61 (`154951`, `184134`, `214427`).
+     Learning only while still: 120 s 2.95/5.66, 4.61/6.75, 3.23/1.03; 600 s 3.27/6.28, 5.63/9.36, 3.04/0.50.
+     Applying only after 10 or 20 s without GNSS, or not learning while handled, changed little.
+     Still-only at 600 s is better on two rides and within 0.05 km/h on the third, but the time constant's effect
+     isn't monotonic (240 s: 3.11, 3.83, 3.28/3.53): not merged; needs more rides with GNSS to tune.
+   - Speed from fixed radios (`radio_pass_speed.py`): not usable. 129 of 171 passes are one 4 s Wi-Fi scan, and
+     how long a station is heard barely follows the speed (correlation 0.20); the 1 s registered cell is no better
+     (-0.14), since handovers follow the modem's hysteresis. Would need faster scans or RTT ranging.
+   - Traction sound on the 7's R188s (`vvvf_gnss.py`, 7227 frames with GNSS): a line locked to speed at 32.5 Hz per m/s
+     (harmonics near 65, 98), strongest braking and motoring, but too weak per 0.5 s to read speed from
+     (7 to 13 m/s off; near a 3 m/s-off prior, 1 to 4.5 m/s off); band levels give motoring AUC 0.57, braking 0.62.
+     Next: longer FFTs, other car types.
+   - Car position (`car_position.py`, ready for "Car number" taps): consist and the rider's car, tags mapped to beacons,
+     offset behind the stop marker by car length (A Division 15.7 m, B Division 18.4 m).
+     Ahead or behind needs direction: the train pulling in past a still rider (front cars peak first),
+     the walking order against the phone's heading, each beacon's braking sign (car facing), consecutive car numbers,
+     platform-end Wi-Fi. Range is 2 to 3 cars, so without direction only the train's ends resolve.
+     On `184134` and `135509` every other car's peak at boarding came while walking: an order only so far.
+
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
   Airliner speed/altitude are within consumer GNSS limits (~1900 km/h, 18 km).
