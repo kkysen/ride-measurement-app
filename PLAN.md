@@ -532,6 +532,26 @@ Open, roughly in order:
      platform-end Wi-Fi. Range is 2 to 3 cars, so without direction only the train's ends resolve.
      On `184134` and `135509` every other car's peak at boarding came while walking: an order only so far.
 
+15. Stops and transfers (2026-10-22, after 14):
+   - Long "dwells" were mostly the rider changing trains or waiting on the platform (59 St and 7 Av on `135509`,
+     Times Sq on `151449` and `155919`, Grand Av and Jackson Hts on `184134`); 86 St on `135509` (104 s) and
+     Elmhurst Av on `184134` (78 s) were real holds. 110 St is the rider's usual station: long records there
+     are usually platform waits, a check, not a rule.
+   - From the step rhythm, stop records now have `alighted_ns` (walking off), `boarded_ns` (the last steps before
+     another train's departure), and `on_platform` (walking up to a stop heard from the platform); no dwell for these.
+     Off and back on within 30 s is stepping out to let others off: dwell kept.
+     The sensors can't see the other train's events at a transfer; a closing heard within 60 s is still the train left
+     (7 Av's 21.5 s: the D's, as the rider guessed, and 22.4 s by the rider's taps).
+   - A departure's fading pull read as a stop (Grand Central, `151449`, 3:44 pm, and 3 more): braking that began 0 to
+     8 s after a door closing and lasted 7 s or more is now the departure (its start surge was missed), not a stop.
+   - `stops_tapped.csv` (offline): stops as the taps tell them, transfers marked, filled from the sensors.
+     23 of 28 tapped stops matched, the sensors 0.8 s early, dwells 1.2 s long, all within 3 s;
+     6 of 9 tapped alightings seen, the rest at stops never found.
+   - Walking off now confirms a stop for zero speed: smoothed speed 2 s after "train stopped" taps, p90 11.2 to
+     2.5 mph (median 0); GNSS-cut scores unchanged. Left: 2 stops the lurch detector misses
+     (`182135` 6:27 pm, `215922` 10:37 pm).
+   - The gated gyro bias learner (branch `gyro-bias-retest`) waits for the rider's next outdoor ride to tune on.
+
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
   Airliner speed/altitude are within consumer GNSS limits (~1900 km/h, 18 km).
