@@ -74,6 +74,14 @@ const GRAVITY_TAU_MOVING_S: f64 = 30.0;
 /// Moving without GNSS: the IMU can't tell tilt from sustained acceleration, so a short time constant would take
 /// the vehicle's acceleration for tilt and lose the speed it gained; until a stop, the gyro alone carries gravity.
 const GRAVITY_TAU_UNAIDED_S: f64 = 600.0;
+/// Before any measurement has set the speed, while the phone is being handled (turning faster than
+/// [`HANDLED_RAD_S`] on average): gravity from the first sample, taken with the phone moving in a hand, was 3 m/s^2
+/// off at the start of `20261020-184134`, and with no GNSS to re-learn it the speed ran to 221 mph. Handled, the speed
+/// is mostly the hand's anyway, so gravity follows the accelerometer closely. A phone lying in a train that starts
+/// underground barely turns, so the train's first acceleration isn't taken for tilt.
+const GRAVITY_TAU_HANDLED_S: f64 = 2.0;
+const HANDLED_RAD_S: f64 = 0.15;
+const HANDLED_TAU_S: f64 = 2.0;
 const AXIS_TAU_S: f64 = 30.0;
 /// How recent GNSS must be for the fused acceleration to be the vehicle's, so gravity can follow the rest.
 const GNSS_RECENT_S: f64 = 5.0;
@@ -132,6 +140,8 @@ pub struct LiveSpeedEstimator {
     // IMU front end.
     gravity: [f64; 3],
     gravity_init: bool,
+    /// The phone's rotation rate (rad/s), low-passed over [`HANDLED_TAU_S`].
+    turning: f64,
     /// Mean and covariance of horizontal acceleration: centered, so a constant leak of gravity isn't the axis.
     axis_mean: [f64; 3],
     cov: [f64; 9],
@@ -196,6 +206,7 @@ impl Default for LiveSpeedEstimator {
         Self {
             gravity: [0.0; 3],
             gravity_init: false,
+            turning: 0.0,
             axis_mean: [0.0; 3],
             cov: [0.0; 9],
             axis: [1.0, 0.0, 0.0],
@@ -339,8 +350,12 @@ impl LiveSpeedEstimator {
         self.rotate_cov(&tilting, dt);
         let gnss_recent =
             self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+        let w = norm(&self.omega);
+        self.turning += (1.0 - (-dt / HANDLED_TAU_S).exp()) * (w - self.turning);
         let tau = if still {
             GRAVITY_TAU_STILL_S
+        } else if !self.initialized && self.turning > HANDLED_RAD_S {
+            GRAVITY_TAU_HANDLED_S
         } else if gnss_recent {
             GRAVITY_TAU_MOVING_S
         } else {
