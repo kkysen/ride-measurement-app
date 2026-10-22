@@ -355,6 +355,8 @@ Open, roughly in order:
 6. The speed estimator's runaway and sigma (the position gate, `just test-sdc-position`, fails on it),
    and its start-up runaway in the first minute (221 mph on `184134`).
    2026-10-21: the position filter now sets off from a stop in its last direction (`ce084a5`; median 182 m to 147 m).
+   On the phone's rides it lets the speed's errors move the path: fix vs position, 95% worse on four of five rides,
+   max 20 m to 331 m on `214427` (`crates/cli/examples/positions.rs`); the user decides whether it stays.
    The runaway is mostly gyro bias tilting gravity (`crates/fusion/examples/sdc_speed.rs`; the bias at rest, removed,
    takes the first outage's end from 226 m/s to 45 m/s), and no stop ever registers in the car.
    A bias learner is on the local branch `gyro-bias-learner` (`3bacc5c`): better on `154951` and `184134`,
