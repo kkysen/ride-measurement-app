@@ -3,6 +3,8 @@
 //! The decoded content (the sequence of length-delimited chunks) is unchanged, so readers don't care.
 //! A stream is replaced only after its new file is synced and decodes to the same SHA-256 as the original;
 //! any failure, including an original that doesn't decode cleanly (e.g. a crash-truncated tail), keeps the original.
+//! Audio streams also have each chunk's PCM moved into FLAC (`crate::audio_flac`); their content is compared
+//! with every chunk converted back, which gives the original chunks byte for byte.
 
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read, Write};
@@ -10,8 +12,9 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use crate::STREAM_EXTENSION;
-use crate::delimited::MAX_MESSAGE_BYTES;
+use crate::delimited::{MAX_MESSAGE_BYTES, read_message};
+use crate::proto::StreamKind;
+use crate::{STREAM_EXTENSION, audio_flac};
 use sha2::{Digest, Sha256};
 
 pub const LEVEL: i32 = 19;
@@ -42,8 +45,45 @@ fn kept(reason: impl std::fmt::Display) -> Outcome {
     }
 }
 
+/// An audio stream's layout, for its FLAC.
+#[derive(Clone, Copy, Debug)]
+pub struct Audio {
+    pub channels: usize,
+    pub sample_rate_hz: usize,
+}
+
+/// The session's audio streams by file name, from its `session.pb` (none if it can't be read).
+/// The session's audio streams by file name, from its `session.pb` (none if it can't be read).
+#[doc(hidden)]
+pub fn audio_streams_for_test(dir: &Path) -> std::collections::BTreeMap<String, Audio> {
+    audio_streams(dir)
+}
+
+fn audio_streams(dir: &Path) -> std::collections::BTreeMap<String, Audio> {
+    let Ok(session) = crate::read::Session::open(dir) else {
+        return Default::default();
+    };
+    session
+        .info
+        .streams
+        .iter()
+        .filter(|s| s.kind == StreamKind::Audio as i32)
+        .filter_map(|s| {
+            let a = s.audio.as_ref()?;
+            Some((
+                format!("{}.{STREAM_EXTENSION}", s.name),
+                Audio {
+                    channels: usize::try_from(a.channels).ok()?,
+                    sample_rate_hz: usize::try_from(a.sample_rate_hz).ok()?,
+                },
+            ))
+        })
+        .collect()
+}
+
 /// Recompresses every stream of the session in `dir`, in name order; writes [`MARKER`] once all were handled.
 pub fn recompress_session(dir: &Path, level: i32) -> anyhow::Result<Vec<(String, Outcome)>> {
+    let audio = audio_streams(dir);
     let mut names: Vec<String> = fs::read_dir(dir)
         .with_context(|| format!("reading {}", dir.display()))?
         .filter_map(|e| e.ok())
@@ -55,7 +95,11 @@ pub fn recompress_session(dir: &Path, level: i32) -> anyhow::Result<Vec<(String,
     let results: Vec<(String, Outcome)> = names
         .into_iter()
         .map(|name| {
-            let outcome = recompress_stream(&dir.join(&name), level);
+            let path = dir.join(&name);
+            let outcome = match audio.get(&name) {
+                Some(&a) => recompress_audio_stream(&path, level, a),
+                None => recompress_stream(&path, level),
+            };
             (name, outcome)
         })
         .collect();
@@ -69,7 +113,11 @@ pub fn recompress_session(dir: &Path, level: i32) -> anyhow::Result<Vec<(String,
 }
 
 pub fn recompress_stream(path: &Path, level: i32) -> Outcome {
-    recompress_stream_checked(path, level, |_| {})
+    recompress_stream_checked(path, level, None, |_| {})
+}
+
+pub fn recompress_audio_stream(path: &Path, level: i32, audio: Audio) -> Outcome {
+    recompress_stream_checked(path, level, Some(audio), |_| {})
 }
 
 /// `corrupt_for_test` can damage the new file before verification, to check the original survives.
@@ -77,13 +125,14 @@ pub fn recompress_stream(path: &Path, level: i32) -> Outcome {
 pub fn recompress_stream_checked(
     path: &Path,
     level: i32,
+    audio: Option<Audio>,
     corrupt_for_test: impl FnOnce(&Path),
 ) -> Outcome {
     let mut tmp_name = path.as_os_str().to_owned();
     tmp_name.push(TMP_SUFFIX);
     let tmp = Path::new(&tmp_name);
     let _ = fs::remove_file(tmp);
-    let outcome = recompress_via(path, tmp, level, corrupt_for_test);
+    let outcome = recompress_via(path, tmp, level, audio, corrupt_for_test);
     let _ = fs::remove_file(tmp);
     outcome
 }
@@ -92,6 +141,7 @@ fn recompress_via(
     path: &Path,
     tmp: &Path,
     level: i32,
+    audio: Option<Audio>,
     corrupt_for_test: impl FnOnce(&Path),
 ) -> Outcome {
     let original = match fs::metadata(path) {
@@ -106,7 +156,11 @@ fn recompress_via(
         return kept(format!("original doesn't decode cleanly: {e}"));
     }
     // One decoding pass over the original checks it, recompresses it, and hashes it.
-    let original_digest = match write_recompressed(&original, tmp, level) {
+    let written = match audio {
+        Some(a) => write_audio_recompressed(&original, tmp, level, a),
+        None => write_recompressed(&original, tmp, level),
+    };
+    let original_digest = match written {
         Ok(digest) => digest,
         Err(e) if e.kind() == io::ErrorKind::InvalidData => {
             return kept(format!("original doesn't decode cleanly: {e}"));
@@ -114,7 +168,11 @@ fn recompress_via(
         Err(e) => return kept(format!("writing the new file failed: {e}")),
     };
     corrupt_for_test(tmp);
-    match decoded_digest(tmp) {
+    let digest = match audio {
+        Some(_) => restored_digest(tmp),
+        None => decoded_digest(tmp),
+    };
+    match digest {
         Ok(digest) if digest == original_digest => {}
         Ok(_) => return kept("decoded content differs"),
         Err(e) => return kept(format!("new file doesn't decode: {e}")),
@@ -178,6 +236,64 @@ fn write_recompressed(original: &[u8], tmp: &Path, level: i32) -> io::Result<[u8
     messages.finish()?;
     encoder.finish()?.sync_all()?;
     Ok(sha.finalize().into())
+}
+
+/// Like [`write_recompressed`] for an audio stream, chunk by chunk, with each chunk's PCM as FLAC where that's
+/// lossless; returns the SHA-256 of the content with every chunk as PCM (as [`restored_digest`] computes it).
+fn write_audio_recompressed(
+    original: &[u8],
+    tmp: &Path,
+    level: i32,
+    audio: Audio,
+) -> io::Result<[u8; 32]> {
+    let file = File::create_new(tmp)?;
+    let mut encoder = zstd::stream::write::Encoder::new(file, level)?;
+    encoder.include_checksum(true)?;
+    let mut decoder = BufReader::new(zstd::stream::read::Decoder::new(original)?);
+    let mut sha = Sha256::new();
+    // A bad checksum, corrupt frame, or cut-off message in the original.
+    let invalid = |e: io::Error| io::Error::new(io::ErrorKind::InvalidData, e);
+    while let Some(message) = read_message(&mut decoder).map_err(invalid)? {
+        hash_message(
+            &mut sha,
+            audio_flac::to_pcm(&message).as_deref().unwrap_or(&message),
+        );
+        let out = audio_flac::to_flac(&message, audio.channels, audio.sample_rate_hz);
+        write_message(&mut encoder, out.as_deref().unwrap_or(&message))?;
+    }
+    encoder.finish()?.sync_all()?;
+    Ok(sha.finalize().into())
+}
+
+/// SHA-256 of an audio stream's content with every FLAC chunk converted back to PCM.
+fn restored_digest(path: &Path) -> io::Result<[u8; 32]> {
+    let mut decoder = BufReader::new(zstd::stream::read::Decoder::new(BufReader::new(
+        File::open(path)?,
+    ))?);
+    let mut sha = Sha256::new();
+    while let Some(message) = read_message(&mut decoder)? {
+        hash_message(
+            &mut sha,
+            audio_flac::to_pcm(&message).as_deref().unwrap_or(&message),
+        );
+    }
+    Ok(sha.finalize().into())
+}
+
+fn delimiter(len: usize) -> Vec<u8> {
+    let mut d = Vec::with_capacity(10);
+    prost::encoding::encode_varint(len as u64, &mut d);
+    d
+}
+
+fn hash_message(sha: &mut Sha256, body: &[u8]) {
+    sha.update(delimiter(body.len()));
+    sha.update(body);
+}
+
+fn write_message(w: &mut impl Write, body: &[u8]) -> io::Result<()> {
+    w.write_all(&delimiter(body.len()))?;
+    w.write_all(body)
 }
 
 /// SHA-256 of what a file decodes to.

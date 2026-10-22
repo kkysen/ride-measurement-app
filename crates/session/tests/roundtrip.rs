@@ -162,6 +162,7 @@ fn audio_stream_round_trips() {
                 boottime_ns: 1_000_000_000 * (c + 1),
             }],
             written_elapsed_realtime_ns: c,
+            flac: Vec::new(),
         })
         .collect();
     let mut w = StreamWriter::create(dir.path(), "audio").unwrap();

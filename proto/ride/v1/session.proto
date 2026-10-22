@@ -339,10 +339,14 @@ message BatteryStatus {
 message AudioChunk {
   // Index of the first frame (sample per channel) in this chunk since the stream started.
   int64 first_frame = 1;
+  // As recorded; empty once post-ride recompression has moved the samples into `flac`.
   bytes pcm_s16le = 2;
   // `AudioRecord.getTimestamp` with `TIMEBASE_BOOTTIME`, to place frames on the elapsed realtime clock.
   repeated AudioTimestamp timestamps = 3;
   int64 written_elapsed_realtime_ns = 4;
+  // The same samples as one FLAC stream, bit-exact, instead of `pcm_s16le`: post-ride recompression sets it
+  // only when converting back gives the original chunk byte for byte. Readers restore `pcm_s16le` from it.
+  bytes flac = 5;
 }
 
 message AudioTimestamp {

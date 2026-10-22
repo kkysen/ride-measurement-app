@@ -7,6 +7,8 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+claxon = "0.4.3"
+flacenc = "0.5.1"
 prost.workspace = true
 sha2 = "0.11.1"
 zstd.workspace = true

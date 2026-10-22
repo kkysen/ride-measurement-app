@@ -1,5 +1,6 @@
 //! Reading and writing ride sessions, as described in `proto/ride/v1/session.proto`.
 
+pub mod audio_flac;
 mod delimited;
 pub mod marks;
 pub mod read;

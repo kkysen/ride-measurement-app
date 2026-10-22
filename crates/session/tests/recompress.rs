@@ -68,7 +68,7 @@ fn keeps_original_when_verification_fails() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_stream(dir.path(), "accel", 50);
     let original = fs::read(&path).unwrap();
-    let outcome = recompress_stream_checked(&path, LEVEL, |tmp| {
+    let outcome = recompress_stream_checked(&path, LEVEL, None, |tmp| {
         let mut bytes = fs::read(tmp).unwrap();
         let mid = bytes.len() / 2;
         bytes[mid] ^= 0xff;
@@ -137,4 +137,122 @@ fn keeps_original_cut_at_a_frame_boundary_mid_message() {
     let outcome = recompress_stream(&path, LEVEL);
     assert!(matches!(outcome, Outcome::KeptOriginal { .. }), "{outcome}");
     assert_eq!(fs::read(&path).unwrap(), bytes);
+}
+
+/// An audio stream of `chunks` 2 s chunks of a noisy tone, in the live format.
+fn write_audio(dir: &Path, chunks: usize) -> PathBuf {
+    let mut w = StreamWriter::create(dir, "audio").unwrap();
+    let mut x: u32 = 7;
+    for c in 0..chunks {
+        let pcm: Vec<u8> = (0..32_000)
+            .flat_map(|i| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let t = (c * 32_000 + i) as f64;
+                (((t * 0.07).sin() * 3000.0) as i16 + (x >> 26) as i16).to_le_bytes()
+            })
+            .collect();
+        w.append(&ride_session::AudioChunk {
+            first_frame: (c * 32_000) as i64,
+            pcm_s16le: pcm,
+            timestamps: Vec::new(),
+            written_elapsed_realtime_ns: c as i64,
+            flac: Vec::new(),
+        })
+        .unwrap();
+    }
+    w.path().to_owned()
+}
+
+fn audio_session(dir: &Path) {
+    write_session_info(
+        dir,
+        &SessionInfo {
+            format_version: FORMAT_VERSION,
+            streams: vec![StreamInfo {
+                name: "audio".into(),
+                kind: ride_session::proto::StreamKind::Audio as i32,
+                audio: Some(ride_session::proto::AudioInfo {
+                    sample_rate_hz: 16_000,
+                    channels: 1,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn audio_becomes_flac_and_reads_back_as_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    audio_session(dir.path());
+    let path = write_audio(dir.path(), 5);
+    let before = Session::open(dir.path())
+        .unwrap()
+        .read_audio("audio")
+        .unwrap()
+        .chunks;
+    // The same stream recompressed by zstd alone, to beat.
+    let plain = tempfile::tempdir().unwrap();
+    let plain_path = write_audio(plain.path(), 5);
+    recompress_stream(&plain_path, LEVEL);
+    let zstd_only = fs::metadata(&plain_path).unwrap().len();
+    let results = recompress_session(dir.path(), LEVEL).unwrap();
+    assert!(
+        matches!(results[0].1, Outcome::Replaced { .. }),
+        "{results:?}"
+    );
+    let flac = fs::metadata(&path).unwrap().len();
+    assert!(flac < zstd_only, "{flac} >= {zstd_only}");
+    let raw = ride_session::read::read_stream_file::<ride_session::AudioChunk>(&path).unwrap();
+    assert!(
+        raw.chunks
+            .iter()
+            .all(|c| c.pcm_s16le.is_empty() && !c.flac.is_empty())
+    );
+    let after = Session::open(dir.path())
+        .unwrap()
+        .read_audio("audio")
+        .unwrap();
+    assert!(after.is_clean());
+    assert_eq!(after.chunks, before);
+    // Again: already FLAC, nothing to gain, and still the same.
+    let again = recompress_session(dir.path(), LEVEL).unwrap();
+    assert!(
+        matches!(again[0].1, Outcome::KeptOriginal { .. }),
+        "{again:?}"
+    );
+    assert_eq!(
+        Session::open(dir.path())
+            .unwrap()
+            .read_audio("audio")
+            .unwrap()
+            .chunks,
+        before
+    );
+}
+
+#[test]
+fn keeps_audio_whose_flac_is_damaged() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_audio(dir.path(), 3);
+    let original = fs::read(&path).unwrap();
+    let audio = ride_session::recompress::Audio {
+        channels: 1,
+        sample_rate_hz: 16_000,
+    };
+    let outcome = recompress_stream_checked(&path, LEVEL, Some(audio), |tmp| {
+        // Rewrite the new file with one FLAC byte flipped, so it still decodes as zstd.
+        let mut bytes = decoded(tmp);
+        let n = bytes.len();
+        bytes[n / 2] ^= 0x10;
+        fs::write(tmp, zstd::encode_all(bytes.as_slice(), 3).unwrap()).unwrap();
+    });
+    assert!(
+        matches!(outcome, Outcome::KeptOriginal { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
 }

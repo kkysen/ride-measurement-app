@@ -43,8 +43,23 @@ impl Session {
     }
 
     /// Reads an audio stream.
+    /// Chunks recompressed to FLAC come back as recorded, with their PCM in `pcm_s16le`;
+    /// one whose FLAC doesn't decode is left out and counted as damage.
     pub fn read_audio(&self, name: &str) -> anyhow::Result<StreamContents<AudioChunk>> {
-        read_stream_file(&self.stream_path(name))
+        let mut contents: StreamContents<AudioChunk> = read_stream_file(&self.stream_path(name))?;
+        let before = contents.chunks.len();
+        contents.chunks.retain_mut(crate::audio_flac::restore);
+        if contents.chunks.len() < before {
+            contents.damage.push(Damage {
+                offset: 0,
+                len: 0,
+                reason: format!(
+                    "{} FLAC chunks don't decode",
+                    before - contents.chunks.len()
+                ),
+            });
+        }
+        Ok(contents)
     }
 
     /// Reads a record stream.
