@@ -221,8 +221,9 @@ Signals, what they showed, and how to use them:
   All three Google Wallet taps on 2026-10-20 match: Flushing 18:56:03 (2852 Hz, `184134`), Grand Av 19:16:02 (2945 Hz, `184134`),
   Times Sq 21:45:06.8 (2984 Hz, `214427`; fainter same-pitch beeps after it are other riders).
   A station-entry signal for the fusion, with the station's Wi-Fi APs; to do: a detector, checked on more taps.
-- **Train beacons**: a BLE beacon family (manufacturer `02FD`, ID prefix `e2c56db5-dffb-48d2-b060-d0f5a710`) rides with each train
-  on the 7, R, M, F (CBTC lines) and was absent on the 1, 2, 3. Gives exact boarding/alighting and the trainset;
+- **Train beacons**: a BLE beacon family (manufacturer `02FD`, ID prefix `e2c56db5-dffb-48d2-b060-d0f5a710`), one per car,
+  on CBTC-equipped or CBTC-ready cars: R188 (7), R160 (F, M, R), R211 (C; also a few R179s there); none on
+  R62, R62A, R142 (1, 2, 3; the R142 is an NTT, from 2000, without them). Gives exact boarding/alighting and the car;
   short sightings are other trains. Decode the varying bytes. Piper's BLE beacons (B Division, not the L) power countdown clocks,
   on trains or stations; not yet identified. Phones and trackers (Apple, Find My Device `0x40` Eddystone) are riders.
 - **Crowding**: BLE device counts (300 to 600 on platforms), but the unfiltered scan pauses with the screen off, so normalize for that;
@@ -471,6 +472,31 @@ Open, roughly in order:
    - Train beacons (`train_beacons.py`): one per car (2 to 5 steady at once, the same IDs across rides),
      each sending its car's acceleration (64 counts per g); the 7's lie flat, another fleet's stand on edge.
      Next: boarding and alighting from them, and the car's own acceleration against the phone's.
+
+13. Later on 2026-10-22 (0.1.7 built, not installed):
+   - Car beacons in Rust (`car_beacons.rs`, `b32b06d`): decoded live and in replay; the rider's car is the steady
+     beacon heard loudest (5 dB to switch). The main screen shows it ("car a199"), and a "Car number" tag
+     (`KIND_CAR_NUMBER`, a label) records the number painted on the car, to tie beacons to cars (`5784d1c`).
+     On `184134` the cars rank `a199` (-74 dBm, the rider's), `a1d2` -76, `a138` -78, `a139` -85, `a1f6` -91.
+   - The car's accelerometer as a measurement of the phone's bias (`LiveSpeedEstimator::on_car_accel`): its forward
+     axis and sign are learned (correlation 0.7, no lag), but it's noisy (0.46 m/s^2 left of a 0.61 signal) and
+     changed little (GNSS cut: `154951` 3.33 to 3.41 km/h, `184134` 6.84 either way; underground stop taps,
+     `184134`'s 90th percentile forward speed 46 to 38 mph, others unchanged), so off (`USE_CAR_ACCEL`).
+   - Beacon prediction to check: present on the L (R143, R160; the oldest CBTC, Siemens) and on the A's R211s,
+     absent on the 4, 5, 6 (R142, R142A; a no-CBTC control, whose cars will be replaced before any CBTC).
+     The rider will ride the J/Z (R160s not fitted for CBTC, R179s CBTC-ready, the line not CBTC):
+     beacons on both means they follow car models, on only the R179s means CBTC equipment, on neither means
+     they need a CBTC line.
+   - On foot in a gap (`5d6a052`): the walking allowance counts only detected steps, and out of a vehicle each speed
+     is held to a run (4.5 m/s), walk (2.6), or standing (0.5): Flushing's McDonald's (4:25 pm, 257 s) from 10 mph
+     to 1.5 at most. A run in a gap stays a run (tested).
+   - Door openings searched 1 to 10 s after the lurch (`door_lurch_openings.py`): 32 of 60 taps, against 30;
+     not ported. The taps follow the lurch steadily (median 3.3 s), but a cycle's last lurch is often not the
+     stopping one; next, find the stopping lurch itself.
+   - Elevator or escalator by the climb's shape and the walking around it (`elevator_shape.py`): no separation, and
+     the PABT escalators aren't among the climbs found; needs the rider's times for escalator rides.
+   - The C's cars are R211s (a few R179s) in `stations.rs`.
+   - Uploads: the rider will register the Azure app later (a free Azure account, for the tenant); nothing until then.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
