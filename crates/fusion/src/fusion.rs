@@ -20,7 +20,7 @@
 //!   the fixes, the gyro's turns about up, and the forward speed at each sample; its inputs are light,
 //!   so they're kept for the whole ride and smoothed when asked.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use ride_gnss::solve::{Navigator, geodetic_to_ecef};
 use ride_session::proto::{GnssMeasurementsEvent, GnssNavigationMessage};
@@ -139,6 +139,9 @@ pub struct StopRecord {
     /// and after boarding: different around a step out is a change of car on the same train.
     pub car_before: Option<u16>,
     pub car_after: Option<u16>,
+    /// Every car heard steadily in the [`TRAIN_SPAN_S`] before the stop differs from every car heard after the
+    /// departure: another train, boarded across the platform with too few steps to see (see [`trains_differ`]).
+    pub train_change: bool,
 }
 
 /// A closing heard after the rider walked off is still their train's if this soon after the stop (s).
@@ -1019,6 +1022,9 @@ impl Fusion {
                 r.car_before = strongest_car(&self.car_readings, a - span, a);
                 r.car_after = strongest_car(&self.car_readings, b, b + span);
             }
+            if let Some(d) = r.departed_ns {
+                r.train_change = trains_differ(&self.car_readings, r.stopped_ns, d);
+            }
         }
         records
     }
@@ -1655,6 +1661,7 @@ fn stop_records(
             boarded_ns: boarded,
             car_before: None,
             car_after: None,
+            train_change: false,
         });
     }
     out
@@ -1706,6 +1713,32 @@ fn missed_stop(
 
 /// The rider's car is the strongest car beacon over this long (s) before stepping off or after boarding.
 const CAR_SPAN_S: f64 = 20.0;
+
+/// How long (s) before a stop and after its departure the cars heard name the train.
+const TRAIN_SPAN_S: f64 = 60.0;
+
+/// The car beacons heard at least 3 times between `from` and `until`.
+fn cars_heard(readings: &[(i64, u16, i32)], from: i64, until: i64) -> HashSet<u16> {
+    let mut counts: HashMap<u16, usize> = HashMap::new();
+    for &(_, car, _) in readings.iter().filter(|&&(t, ..)| t >= from && t <= until) {
+        *counts.entry(car).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .filter(|&(_, n)| n >= 3)
+        .map(|(car, _)| car)
+        .collect()
+}
+
+/// Whether the train before the stop at `stopped` and after its departure at `departed` are different ones:
+/// cars heard on both sides, none of them the same. A beacon is heard 2 to 3 cars away, so the rider's own train
+/// always shares a car across a stop it stays on.
+fn trains_differ(readings: &[(i64, u16, i32)], stopped: i64, departed: i64) -> bool {
+    let span = (TRAIN_SPAN_S * 1e9) as i64;
+    let before = cars_heard(readings, stopped - span, stopped);
+    let after = cars_heard(readings, departed, departed + span);
+    !before.is_empty() && !after.is_empty() && before.is_disjoint(&after)
+}
 
 /// The car beacon with the highest mean RSSI between `from` and `until`, heard at least 3 times.
 fn strongest_car(readings: &[(i64, u16, i32)], from: i64, until: i64) -> Option<u16> {
@@ -1884,6 +1917,24 @@ mod tests {
             missed_stop(&windows(0, 300, 104..120), &[], &[30 * S], 210 * S),
             None
         );
+    }
+
+    #[test]
+    fn other_cars_after_a_stop_are_another_train() {
+        let heard = |cars: &[u16], from_s: i64, to_s: i64| -> Vec<(i64, u16, i32)> {
+            (from_s..to_s)
+                .step_by(5)
+                .flat_map(|t| cars.iter().map(move |&c| (t * S, c, -80)))
+                .collect()
+        };
+        let mut swapped = heard(&[1, 2, 3], 40, 100);
+        swapped.extend(heard(&[7, 8], 160, 220));
+        assert!(trains_differ(&swapped, 100 * S, 160 * S));
+        let mut stayed = heard(&[1, 2, 3], 40, 100);
+        stayed.extend(heard(&[3, 4], 160, 220));
+        assert!(!trains_differ(&stayed, 100 * S, 160 * S));
+        // Nothing heard on one side says nothing.
+        assert!(!trains_differ(&heard(&[1], 40, 100), 100 * S, 160 * S));
     }
 
     #[test]

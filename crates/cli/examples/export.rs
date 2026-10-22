@@ -131,14 +131,14 @@ fn main() -> anyhow::Result<()> {
     let mut f = std::fs::File::create(out.join("stops.csv"))?;
     writeln!(
         f,
-        "stopped_ns,score,in_subway,station,doors_open_ns,doors_open_heard,doors_closed_ns,departed_ns,on_platform,alighted_ns,boarded_ns,dwell_s,doors_open_s,car_before,car_after,car_change"
+        "stopped_ns,score,in_subway,station,doors_open_ns,doors_open_heard,doors_closed_ns,departed_ns,on_platform,alighted_ns,boarded_ns,dwell_s,doors_open_s,car_before,car_after,car_change,train_change"
     )?;
     let opt = |v: Option<i64>| v.map_or(String::new(), |v| v.to_string());
     let opt_s = |v: Option<f64>| v.map_or(String::new(), |v| format!("{v:.1}"));
     for s in &r.stops {
         writeln!(
             f,
-            "{},{:.2},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{:.2},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             s.stopped_ns,
             s.score,
             s.in_subway,
@@ -155,6 +155,7 @@ fn main() -> anyhow::Result<()> {
             s.car_before.map_or(String::new(), |c| format!("{c:04x}")),
             s.car_after.map_or(String::new(), |c| format!("{c:04x}")),
             s.car_change(),
+            s.train_change,
         )?;
     }
     write_tapped_stops(out, &s, &r.stops)?;
