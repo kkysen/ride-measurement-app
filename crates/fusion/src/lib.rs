@@ -6,5 +6,6 @@ pub mod live_speed;
 pub mod position;
 pub mod replay;
 pub mod speed_colors;
+pub mod stations;
 pub mod subway;
 pub mod walking;
