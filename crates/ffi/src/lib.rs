@@ -68,6 +68,11 @@ pub struct RideStatus {
     pub staying_s: f64,
     /// The rider's car, by its beacon's ID in hex (e.g. `a199`), if a steady one is heard.
     pub car: Option<String>,
+    /// At a stop, until the train departs: since it stopped (s), since its doors opened (s) until they close,
+    /// then how long they were open (s).
+    pub stopped_s: Option<f64>,
+    pub doors_open_s: Option<f64>,
+    pub doors_were_open_s: Option<f64>,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -302,6 +307,9 @@ impl Fusion {
             }),
             staying_s: s.staying_s,
             car: s.car.map(|c| format!("{c:04x}")),
+            stopped_s: s.dwell.as_ref().map(|d| d.stopped_s),
+            doors_open_s: s.dwell.as_ref().and_then(|d| d.doors_open_s),
+            doors_were_open_s: s.dwell.as_ref().and_then(|d| d.doors_were_open_s),
         }
     }
 

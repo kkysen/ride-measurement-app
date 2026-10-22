@@ -399,6 +399,19 @@ pub struct Status {
     pub staying_s: f64,
     /// The rider's car: its beacon's ID (see [`crate::car_beacons`]).
     pub car: Option<u16>,
+    /// The train's current stop, until it departs.
+    pub dwell: Option<Dwell>,
+}
+
+/// The train's current stop, live: how long since it stopped, and its doors (see [`Fusion::stop_records`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dwell {
+    /// Since the stopping lurch (s); it's found a few seconds after, so this starts there, not at 0.
+    pub stopped_s: f64,
+    /// Since the doors opened (s), heard or estimated at [`DOORS_OPEN_AFTER_STOP_S`], until they close.
+    pub doors_open_s: Option<f64>,
+    /// How long they were open (s), once their closing is heard.
+    pub doors_were_open_s: Option<f64>,
 }
 
 /// Forward estimates are kept at every fix and at least this often, so smoothing covers gaps without fixes.
@@ -699,7 +712,36 @@ impl Fusion {
                 .stay
                 .map_or(0.0, |(since, _)| (t - since) as f64 * 1e-9),
             car: self.cars.current_at(t),
+            dwell: self.dwell(t),
         }
+    }
+
+    /// The train's stop now, if it hasn't departed since; as in [`Self::stop_records`], without walking off.
+    fn dwell(&self, t: i64) -> Option<Dwell> {
+        let (stop, ..) = self
+            .train_stops
+            .iter()
+            .rev()
+            .find(|(stop, _, in_subway)| *in_subway && !self.departure_fade(stop))?;
+        let s_ns = |s: f64| (s * 1e9) as i64;
+        let since = |from: i64| (t - from) as f64 * 1e-9;
+        let stopped_s = since(stop.t_ns);
+        if self.departures.iter().any(|&d| d > stop.t_ns) || stopped_s > RECORD_MAX_DWELL_S {
+            return None;
+        }
+        let cycle = self
+            .door_cycles
+            .iter()
+            .find(|c| c.close_ns > stop.t_ns + s_ns(DOORS_AFTER_STOP_S.0));
+        let opened = cycle
+            .map(|c| c.open_ns)
+            .filter(|&o| o >= stop.t_ns && o <= stop.t_ns + s_ns(DOORS_AFTER_STOP_S.1))
+            .unwrap_or(stop.t_ns + s_ns(DOORS_OPEN_AFTER_STOP_S));
+        Some(Dwell {
+            stopped_s,
+            doors_open_s: (cycle.is_none() && t >= opened).then(|| since(opened)),
+            doors_were_open_s: cycle.map(|c| (c.close_ns - opened) as f64 * 1e-9),
+        })
     }
 
     /// Keeps track of how long the rider has stayed in one place out of the subway (see [`Status::staying_s`]).

@@ -90,6 +90,12 @@ class MainActivity : ComponentActivity() {
             status?.let { st ->
                 val where = st.station?.let { (if (st.atStation) " · at " else " · near ") + it + st.lines.joinToString("/", " (", ")").takeIf { st.lines.isNotEmpty() }.orEmpty() }.orEmpty()
                 Text(st.mode + where + (st.cars?.let { " · $it cars" } ?: "") + (st.car?.let { " · car $it" } ?: ""), style = MaterialTheme.typography.titleMedium)
+                st.stoppedS?.let { stopped ->
+                    val doors = st.doorsOpenS?.let { " · doors open ${clockDuration(it)}" }
+                        ?: st.doorsWereOpenS?.let { " · doors were open ${clockDuration(it)}" }
+                        ?: ""
+                    Text("stopped ${clockDuration(stopped)}$doors")
+                }
             }
             val sensors = estimate.sensors.sortedBy { it.ordinal }.joinToString { it.name.lowercase().replace('_', ' ') }
             Text(if (estimate.stopped) "stopped · $sensors" else sensors)
