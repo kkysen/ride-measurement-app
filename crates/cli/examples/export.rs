@@ -121,6 +121,31 @@ fn main() -> anyhow::Result<()> {
     for c in &r.door_cycles {
         writeln!(f, "{},{}", c.open_ns, c.close_ns)?;
     }
+    // The train's stops, for dwell and door analyses; empty fields are unknown (no doors heard: a tunnel stop,
+    // or doors missed).
+    let mut f = std::fs::File::create(out.join("stops.csv"))?;
+    writeln!(
+        f,
+        "stopped_ns,score,in_subway,station,doors_open_ns,doors_open_heard,doors_closed_ns,departed_ns,dwell_s,doors_open_s"
+    )?;
+    let opt = |v: Option<i64>| v.map_or(String::new(), |v| v.to_string());
+    let opt_s = |v: Option<f64>| v.map_or(String::new(), |v| format!("{v:.1}"));
+    for s in &r.stops {
+        writeln!(
+            f,
+            "{},{:.2},{},{},{},{},{},{},{},{}",
+            s.stopped_ns,
+            s.score,
+            s.in_subway,
+            s.station.map_or(String::new(), |st| st.name.clone()),
+            opt(s.doors_open_ns),
+            s.doors_open_heard,
+            opt(s.doors_closed_ns),
+            opt(s.departed_ns),
+            opt_s(s.dwell_s()),
+            opt_s(s.doors_open_s()),
+        )?;
+    }
     let mut f = std::fs::File::create(out.join("fused.csv"))?;
     writeln!(f, "t_ns,speed,sigma,forward,backward,accel")?;
     for x in &r.smoothed {

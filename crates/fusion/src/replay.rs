@@ -19,6 +19,8 @@ pub struct Replay {
     pub positions: Vec<crate::position::PositionEstimate>,
     /// Door cycles heard, if the session has audio.
     pub door_cycles: Vec<DoorCycle>,
+    /// The train's stops, with dwell and the doors' times (see [`crate::fusion::StopRecord`]).
+    pub stops: Vec<crate::fusion::StopRecord>,
     /// When the subway detector switched on (true) or off.
     pub subway_changes: Vec<(i64, bool)>,
     /// What the app would have shown, every [`STATUS_EVERY_NS`].
@@ -279,6 +281,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
         gnss: fusion.navigator().stats.clone(),
         positions: fusion.positions(),
         door_cycles: fusion.door_cycles().to_vec(),
+        stops: fusion.stop_records(),
         subway_changes: fusion.subway_changes().to_vec(),
         statuses,
     })

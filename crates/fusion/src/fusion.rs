@@ -31,6 +31,7 @@ use crate::doors::{DoorCycle, DoorDetector};
 use crate::live_speed::{Estimate, LiveSpeedEstimator, SUBWAY_MAX_SPEED_MPS};
 use crate::position::{PositionEstimate, PositionInput, smooth};
 use crate::stations::{self, Station};
+use crate::stops::{self as train_stops, StopDetector};
 use crate::subway::SubwayDetector;
 use crate::walking::{Gait, WalkingDetector};
 
@@ -71,6 +72,50 @@ enum Input {
 /// and openings, found less surely, aren't used.
 const DWELL_SURE_S: f64 = 8.0;
 const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
+/// A stop's record: its doors' cycle closes from [`DOORS_AFTER_STOP_S`]'s start on, and before the next stop
+/// or [`RECORD_MAX_DWELL_S`]; the opening is the cycle's own if heard within [`DOORS_AFTER_STOP_S`] of the stop,
+/// else the stop plus [`DOORS_OPEN_AFTER_STOP_S`] (the rider's "doors open" taps: median 3.2 s after the stopping
+/// lurch, 1.9 to 5.2 s for the 10th to 90th percentile; "plus 3.2 s" put 43 of 60 within 3 s, the openings heard
+/// 37). The departure is the first start surge after the closing (or [`DEPART_AFTER_STOP_S`] after the stop).
+const DOORS_AFTER_STOP_S: (f64, f64) = (1.0, 10.0);
+const DOORS_OPEN_AFTER_STOP_S: f64 = 3.2;
+const DEPART_AFTER_STOP_S: f64 = 5.0;
+const RECORD_MAX_DWELL_S: f64 = 300.0;
+
+/// One stop of the train, for later analyses: dwell, and the doors' times. A stop with no door cycle is a
+/// tunnel stop, or one whose doors weren't heard.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StopRecord {
+    /// The stopping lurch (see [`crate::stops`]), and its score (higher is surer).
+    pub stopped_ns: i64,
+    pub score: f64,
+    pub in_subway: bool,
+    /// The MTA's name for the station Android's location or the tagged cell named, if any.
+    pub station: Option<&'static Station>,
+    pub doors_open_ns: Option<i64>,
+    /// Whether the opening was heard, rather than estimated from the stop.
+    pub doors_open_heard: bool,
+    pub doors_closed_ns: Option<i64>,
+    pub departed_ns: Option<i64>,
+}
+
+impl StopRecord {
+    /// From the stop to pulling away (s).
+    pub fn dwell_s(&self) -> Option<f64> {
+        self.departed_ns
+            .map(|d| (d - self.stopped_ns) as f64 * 1e-9)
+    }
+
+    /// How long the doors stood open (s).
+    pub fn doors_open_s(&self) -> Option<f64> {
+        Some((self.doors_closed_ns? - self.doors_open_ns?) as f64 * 1e-9)
+    }
+}
+
+/// Whether the train's stopping lurch (see [`crate::stops`]) holds the speed at zero, in the subway,
+/// for the [`STOP_STANDING_S`] after the braking's collapse that showed the car still.
+const USE_STOPPING_LURCH: bool = true;
+const STOP_STANDING_S: f64 = 4.0;
 
 /// Across a gap between two fixes at least this good (m, 68%), the smoothed speeds may cover at most
 /// [`GAP_PATH_RATIO`] times the straight distance between them, plus both accuracies and [`GAP_WANDER_MPS`]
@@ -393,6 +438,13 @@ pub struct Fusion {
     /// Door cycles from the microphone, if it's fed; and those found so far.
     doors: Option<DoorDetector>,
     door_cycles: Vec<DoorCycle>,
+    /// The train's stops from its motion (see [`crate::stops`]), with the station named when each was found,
+    /// and its departures.
+    stop_detector: StopDetector,
+    train_stops: Vec<(train_stops::Stop, Option<&'static Station>, bool)>,
+    departures: Vec<i64>,
+    /// Stops in the subway waiting for a door closing or a departure to confirm them.
+    unconfirmed_stops: Vec<train_stops::Stop>,
     walking: WalkingDetector,
     cars: CarTracker,
     /// When the subway detector switched, and to what.
@@ -454,6 +506,10 @@ impl Fusion {
             last_gyro_ns: None,
             doors: None,
             door_cycles: Vec::new(),
+            stop_detector: StopDetector::new(),
+            train_stops: Vec::new(),
+            departures: Vec::new(),
+            unconfirmed_stops: Vec::new(),
             walking: WalkingDetector::default(),
             cars: CarTracker::default(),
             subway_changes: Vec::new(),
@@ -744,6 +800,20 @@ impl Fusion {
             self.estimator.on_walking(t_ns, running);
             self.buffer(t_ns, Input::Walking(running));
         }
+        let stop_events = match &input {
+            Pending::Accel(a) => self.stop_detector.on_accel(t_ns, *a),
+            Pending::Gyro(w) => self.stop_detector.on_gyro(t_ns, *w),
+            _ => Vec::new(),
+        };
+        for event in stop_events {
+            match event {
+                train_stops::Event::Stopped(stop) => self.on_train_stop(t_ns, stop),
+                train_stops::Event::Departed(at) => {
+                    self.departures.push(at);
+                    self.confirm_stops(t_ns, at);
+                }
+            }
+        }
         let Some(kept) = kept else {
             return;
         };
@@ -789,11 +859,8 @@ impl Fusion {
     /// A door cycle found at `t_ns`: the train stood from [`DWELL_SURE_S`] before its closing to the closing.
     fn on_door_cycle(&mut self, t_ns: i64, cycle: DoorCycle) {
         self.door_cycles.push(cycle);
-        let network = self
-            .network_station
-            .filter(|&(at, _)| (t_ns - at) as f64 * 1e-9 <= 30.0)
-            .map(|(_, s)| s);
-        let station = network.or_else(|| self.cell.and_then(|(_, c)| stations::of_cell(c)));
+        self.confirm_stops(t_ns, cycle.close_ns);
+        let station = self.station_now(t_ns);
         self.last_stop = Some((t_ns, station));
         // Stopped at a known station: underground, the only fix there is, and what keeps the heading fix
         // (the position's direction of travel, `ce084a5`) from carrying a drift on to the next station.
@@ -809,27 +876,130 @@ impl Fusion {
                 },
             ));
         }
+        self.hold_standing(
+            t_ns,
+            cycle.close_ns - (DWELL_SURE_S * 1e9) as i64,
+            cycle.close_ns,
+        );
+    }
+
+    /// Each stop of the train found so far, with its doors and departure (see [`StopRecord`]).
+    pub fn stop_records(&self) -> Vec<StopRecord> {
+        let mut out = Vec::new();
+        for (k, &(stop, station, in_subway)) in self.train_stops.iter().enumerate() {
+            let next = self
+                .train_stops
+                .get(k + 1)
+                .map_or(i64::MAX, |(s, ..)| s.t_ns);
+            let limit = next.min(stop.t_ns + (RECORD_MAX_DWELL_S * 1e9) as i64);
+            let cycle = self.door_cycles.iter().find(|c| {
+                c.close_ns > stop.t_ns + (DOORS_AFTER_STOP_S.0 * 1e9) as i64 && c.close_ns < limit
+            });
+            let doors_open = cycle.map(|c| {
+                let heard = c.open_ns - stop.t_ns;
+                if heard as f64 * 1e-9 >= DOORS_AFTER_STOP_S.0
+                    && heard as f64 * 1e-9 <= DOORS_AFTER_STOP_S.1
+                {
+                    (c.open_ns, true)
+                } else {
+                    (stop.t_ns + (DOORS_OPEN_AFTER_STOP_S * 1e9) as i64, false)
+                }
+            });
+            let after = cycle.map_or(stop.t_ns + (DEPART_AFTER_STOP_S * 1e9) as i64, |c| {
+                c.close_ns
+            });
+            let departed = self.departures.iter().copied().find(|&d| {
+                d > after && d > stop.t_ns + (DEPART_AFTER_STOP_S * 1e9) as i64 && d < limit
+            });
+            out.push(StopRecord {
+                stopped_ns: stop.t_ns,
+                score: stop.score,
+                in_subway,
+                station,
+                doors_open_ns: doors_open.map(|d| d.0),
+                doors_open_heard: doors_open.is_some_and(|d| d.1),
+                doors_closed_ns: cycle.map(|c| c.close_ns),
+                departed_ns: departed,
+            });
+        }
+        out
+    }
+
+    /// The station Android's own location or the registered cell names as of `t_ns`, if any.
+    fn station_now(&self, t_ns: i64) -> Option<&'static Station> {
+        let network = self
+            .network_station
+            .filter(|&(at, _)| (t_ns - at) as f64 * 1e-9 <= 30.0)
+            .map(|(_, s)| s);
+        network.or_else(|| self.cell.and_then(|(_, c)| stations::of_cell(c)))
+    }
+
+    /// The train's stopping lurch, found at `t_ns` ([`train_stops::SEP_S`] and a bit after it): in the subway,
+    /// the train stood from the braking's collapse through the seconds that showed it still.
+    fn on_train_stop(&mut self, t_ns: i64, stop: train_stops::Stop) {
+        let in_subway = self.context.in_subway;
+        let station = self
+            .network_station
+            .filter(|&(at, _)| (stop.t_ns - at) as f64 * 1e-9 <= 60.0)
+            .map(|(_, s)| s)
+            .or_else(|| self.cell.and_then(|(_, c)| stations::of_cell(c)));
+        self.train_stops.push((stop, station, in_subway));
+        if USE_STOPPING_LURCH && in_subway {
+            self.unconfirmed_stops.push(stop);
+            // What came while the stop was being decided.
+            let since: Vec<i64> = self
+                .door_cycles
+                .iter()
+                .map(|c| c.close_ns)
+                .chain(self.departures.iter().copied())
+                .filter(|&x| x > stop.t_ns)
+                .collect();
+            for x in since {
+                self.confirm_stops(t_ns, x);
+            }
+        }
+    }
+
+    /// A door closing or a departure at `at`, found at `t_ns`, confirms the unconfirmed stops it follows:
+    /// a train that stopped either opens its doors or pulls away. A lurch with neither after it, found at speed on
+    /// the elevated 7 (`154951`, 3:55 and 4:10 pm), was braking that eased; with GNSS cut 30 s in 90 they made
+    /// the outages worse (3.41 to 4.49 km/h rms).
+    fn confirm_stops(&mut self, t_ns: i64, at: i64) {
+        let (confirmed, waiting): (Vec<_>, Vec<_>) =
+            self.unconfirmed_stops.drain(..).partition(|s| {
+                let dt = (at - s.t_ns) as f64 * 1e-9;
+                dt > DEPART_AFTER_STOP_S && dt < RECORD_MAX_DWELL_S
+            });
+        self.unconfirmed_stops = waiting
+            .into_iter()
+            .filter(|s| (t_ns - s.t_ns) as f64 * 1e-9 < RECORD_MAX_DWELL_S)
+            .collect();
+        for stop in confirmed {
+            let from = stop.standing_ns();
+            self.hold_standing(t_ns, from, from + (STOP_STANDING_S * 1e9) as i64);
+        }
+    }
+
+    /// The train stood still from `from` to `to`, found at `t_ns`: the speed is zero there, measured.
+    fn hold_standing(&mut self, t_ns: i64, from: i64, to: i64) {
         // Since the speed was last measured, the IMU alone carried it, and its error there is mostly a constant
         // leak (gravity through a small tilt, or bias), which grows linearly: take it out of the forward samples
         // as a ramp from nothing then to all of it at the closing, and all of it after.
-        if let Some(anchor) = self
-            .estimator
-            .last_measured_ns()
-            .filter(|&a| a < cycle.close_ns)
+        if let Some(anchor) = self.estimator.last_measured_ns().filter(|&a| a < to)
             && let Some(error) = self
                 .forward
                 .iter()
                 .rev()
-                .find(|(t, _)| *t <= cycle.close_ns)
+                .find(|(t, _)| *t <= to)
                 .map(|(_, e)| e.speed_mps)
         {
             let ramp = |t: i64| {
                 if t <= anchor {
                     0.0
-                } else if t >= cycle.close_ns {
+                } else if t >= to {
                     error
                 } else {
-                    error * (t - anchor) as f64 / (cycle.close_ns - anchor) as f64
+                    error * (t - anchor) as f64 / (to - anchor) as f64
                 }
             };
             for (t, e) in self.forward.iter_mut().rev() {
@@ -847,11 +1017,10 @@ impl Fusion {
                 }
             }
         }
-        self.estimator.on_stopped_at(cycle.close_ns, t_ns);
-        let from = cycle.close_ns - (DWELL_SURE_S * 1e9) as i64;
-        self.buffer(cycle.close_ns, Input::StandingSince(from));
+        self.estimator.on_stopped_at(to, t_ns);
+        self.buffer(to, Input::StandingSince(from));
         let mut t = from;
-        while t <= cycle.close_ns {
+        while t <= to {
             self.position_inputs
                 .push((t, PositionInput::Speed(0.0, DOOR_STOP_SIGMA_MPS)));
             t += SAMPLE_EVERY_NS;
