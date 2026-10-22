@@ -3,6 +3,7 @@
 pub mod car_beacons;
 pub mod doors;
 pub mod fusion;
+pub mod gtfs_rt;
 pub mod live_speed;
 pub mod position;
 pub mod replay;

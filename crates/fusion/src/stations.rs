@@ -64,7 +64,7 @@ pub fn car_model(line: &str) -> Option<&'static str> {
     })
 }
 
-fn all() -> &'static [Station] {
+pub(crate) fn all() -> &'static [Station] {
     static ALL_STATIONS: OnceLock<Vec<Station>> = OnceLock::new();
     ALL_STATIONS.get_or_init(|| {
         ALL.lines()

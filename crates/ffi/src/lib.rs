@@ -475,6 +475,19 @@ pub fn smooth_every_ns() -> i64 {
     ride_fusion::fusion::SMOOTH_EVERY_NS
 }
 
+/// The MTA GTFS-realtime feed URLs to record now (`ride_fusion::gtfs_rt::feeds_near`): the lines near the last
+/// known position, or every feed without one.
+#[uniffi::export]
+pub fn gtfs_rt_feeds(lat: Option<f64>, lon: Option<f64>) -> Vec<String> {
+    ride_fusion::gtfs_rt::feeds_near(lat.zip(lon))
+}
+
+/// How often to poll [`gtfs_rt_feeds`] while recording (ms).
+#[uniffi::export]
+pub fn gtfs_rt_poll_ms() -> i64 {
+    ride_fusion::gtfs_rt::POLL_MS
+}
+
 #[uniffi::export]
 pub fn orbit_refresh_ms() -> i64 {
     ride_gnss::orbits::LIVE_REFRESH_MS
