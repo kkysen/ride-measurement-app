@@ -165,7 +165,7 @@ class RecorderService : Service() {
                 .toByteArray(),
         ) }
         LiveTrack.reset()
-        LiveSpeed.start()
+        LiveSpeed.start(this)
         orbitFetcher = Health.guard("orbits") { OrbitFetcher(dir) }
         recorders.forEach { r -> Health.guard("sensor ${r.name}") { r.start() } }
         Health.guard("gnss") { gnssRecorder?.start() }

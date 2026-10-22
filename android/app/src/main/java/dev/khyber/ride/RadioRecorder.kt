@@ -171,7 +171,13 @@ class RadioRecorder(
                 Executor { handler.post(it) },
                 object : TelephonyManager.CellInfoCallback() {
                     override fun onCellInfo(cells: MutableList<CellInfo>) {
-                        radio.add { cellInfo = CellInfoSnapshot.newBuilder().addAllCells(cells.map { it.toProto() }).build() }
+                        val snapshot = Health.guard("cell info proto") {
+                            CellInfoSnapshot.newBuilder().addAllCells(cells.map { it.toProto() }).build()
+                        } ?: return
+                        val t = radio.add { cellInfo = snapshot } ?: return
+                        // The registered LTE cell as recorded, so live sees what replay does.
+                        val registered = snapshot.cellsList.firstOrNull { it.registered && it.kind == "lte" }
+                        LiveSpeed.onCell(t, registered?.takeIf { it.hasCellId() }?.cellId)
                     }
                 },
             )

@@ -84,6 +84,11 @@ class MainActivity : ComponentActivity() {
             }
             // Along the direction of travel: negative is braking.
             Text("%+.2f ${Units.accelUnit}".format(Units.accel(estimate.accelMps2)), style = MaterialTheme.typography.headlineMedium)
+            val status by LiveSpeed.status.collectAsStateWithLifecycle()
+            status?.let { st ->
+                val where = st.station?.let { (if (st.atStation) " · at " else " · near ") + it + st.lines.joinToString("/", " (", ")").takeIf { st.lines.isNotEmpty() }.orEmpty() }.orEmpty()
+                Text(st.mode + where + (st.cars?.let { " · $it" } ?: ""), style = MaterialTheme.typography.titleMedium)
+            }
             val sensors = estimate.sensors.sortedBy { it.ordinal }.joinToString { it.name.lowercase().replace('_', ' ') }
             Text(if (estimate.stopped) "stopped · $sensors" else sensors)
             val gnss by LiveSpeed.gnss.collectAsStateWithLifecycle()

@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import uniffi.ride_ffi.Estimate
 import uniffi.ride_ffi.Fusion
 import uniffi.ride_ffi.GnssStats
+import uniffi.ride_ffi.RideStatus
 import uniffi.ride_ffi.settleNs
 import uniffi.ride_ffi.smoothEveryNs
 
@@ -27,16 +28,22 @@ object LiveSpeed {
     val estimate: StateFlow<Estimate?> = _estimate
     private val _gnss = MutableStateFlow<GnssStats?>(null)
     val gnss: StateFlow<GnssStats?> = _gnss
+    private val _status = MutableStateFlow<RideStatus?>(null)
+    val status: StateFlow<RideStatus?> = _status
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
 
     private var lateInputs = 0uL
+    private var reminder: StayReminder? = null
 
     private val publish = object : Runnable {
         override fun run() {
             safely {
                 _estimate.value = fusion?.estimate(SystemClock.elapsedRealtimeNanos())
                 _gnss.value = fusion?.gnssStats()
+                val status = fusion?.status()
+                _status.value = status
+                status?.let { reminder?.check(it.stayingS) }
                 val late = fusion?.lateInputs() ?: 0uL
                 // These went into the live forward pass out of time order, so live differs from a replay there.
                 if (late > lateInputs) {
@@ -71,12 +78,13 @@ object LiveSpeed {
     }
 
     @Synchronized
-    fun start() {
+    fun start(context: android.content.Context) {
         if (thread != null) return
         val t = HandlerThread("live-speed").apply { start() }
         thread = t
         handler = Handler(t.looper)
         lateInputs = 0uL
+        reminder = StayReminder(context.applicationContext)
         safely { fusion = Fusion() }
         handler?.post(publish)
         handler?.postDelayed(smooth, SMOOTH_MS)
@@ -91,6 +99,9 @@ object LiveSpeed {
         fusion = null
         _estimate.value = null
         _gnss.value = null
+        _status.value = null
+        reminder?.cancel()
+        reminder = null
     }
 
     /** A batch of one sensor's samples, from its recorder's thread. Rust decides what to use. */
@@ -128,6 +139,12 @@ object LiveSpeed {
     fun onWifiScan(tNs: Long, ssids: List<String>) {
         val h = handler ?: return
         h.post { safely { fusion?.onWifiScan(tNs, ssids) } }
+    }
+
+    /** The registered LTE cell, at its recorded time: Rust names the station from it. */
+    fun onCell(tNs: Long, cellId: Long?) {
+        val h = handler ?: return
+        h.post { safely { fusion?.onCell(tNs, cellId) } }
     }
 
     /** One microphone read: Rust hears door cycles in it, which mean the train is standing. */
