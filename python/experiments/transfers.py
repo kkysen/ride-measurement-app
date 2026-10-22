@@ -97,6 +97,9 @@ def tagged_line(tags, t, side):
     return c[0][2] if c else ""
 
 
+STEP_OUT_S = 30.0
+
+
 def build(ride, pairs, segs, tags, use_tags):
     d = tl.ANALYSIS / tl.RIDES[ride]
     clock = tl.clock_of(ride)
@@ -126,6 +129,13 @@ def build(ride, pairs, segs, tags, use_tags):
             "height_m": round(h, 1),
             "kind": "passage" if (abs(h) >= PASSAGE_M or walking >= PASSAGE_WALK_S) else "same platform",
         })
+        # Off and back on within `STEP_OUT_S` is the same train (`StopRecord::stepped_out` in Rust):
+        # into another car (82 St, `184134`, 7:07 pm, `a199` to `a138`), or the same one, not a transfer.
+        if total < STEP_OUT_S:
+            row = out[-1]
+            row["to_line"], row["to_dir"] = row["from_line"], row["from_dir"]
+            cars = row["from_car"], row["to_car"]
+            row["kind"] = "car change" if all(cars) and cars[0] != cars[1] else "stepped out"
     return out
 
 
