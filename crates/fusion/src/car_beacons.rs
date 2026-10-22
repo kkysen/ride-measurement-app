@@ -96,6 +96,13 @@ impl CarTracker {
         self.current == Some(r.car)
     }
 
+    /// Whether `car` is heard steadily as of `t_ns`: a car of the rider's train, not one passing.
+    pub fn steady(&self, t_ns: i64, car: u16) -> bool {
+        self.heard.get(&car).is_some_and(|h| {
+            h.times.len() >= STEADY_READINGS && (t_ns - h.last_ns) as f64 * 1e-9 <= STEADY_S
+        })
+    }
+
     /// The rider's car, if a steady one is heard.
     pub fn current(&self) -> Option<u16> {
         self.current

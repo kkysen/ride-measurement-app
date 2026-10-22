@@ -797,7 +797,8 @@ impl Fusion {
             return;
         }
         if let Pending::Car(r) = input {
-            if self.cars.on_reading(t_ns, &r) {
+            self.cars.on_reading(t_ns, &r);
+            if self.cars.steady(t_ns, r.car) {
                 self.estimator.on_car_accel(t_ns, r.car, r.accel);
                 self.buffer(t_ns, Input::Car(r.car, r.accel));
             }
