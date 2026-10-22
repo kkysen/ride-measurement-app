@@ -4,7 +4,12 @@ use ride_session::read::Session;
 fn main() -> anyhow::Result<()> {
     let s = Session::open(std::env::args().nth(1).unwrap())?;
     println!("t_ns,provider,lat,lon,h_acc");
-    for r in s.read_records("location")?.chunks.into_iter().flat_map(|c| c.records) {
+    for r in s
+        .read_records("location")?
+        .chunks
+        .into_iter()
+        .flat_map(|c| c.records)
+    {
         if let Some(Payload::Location(l)) = r.payload
             && l.provider != "gps"
         {
