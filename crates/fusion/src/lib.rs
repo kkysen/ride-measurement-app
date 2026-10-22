@@ -8,5 +8,6 @@ pub mod position;
 pub mod replay;
 pub mod speed_colors;
 pub mod stations;
+pub mod stops;
 pub mod subway;
 pub mod walking;
