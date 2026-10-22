@@ -566,6 +566,25 @@ Open, roughly in order:
    - Every steady car's accelerometer, averaged (`crates/fusion/src/live_speed.rs`): two cars agree with each other
      0.86, with GNSS 0.81 and 0.82, so their noise is their own; outage rms (at end) `154951` 3.41 (6.54) to
      3.25 (6.22) km/h, `184134` 6.84 (10.97) to 6.39 (9.82), `214427` unchanged. Gain against GNSS 0.6 to 0.75.
+17. Chimes, boarding, car changes, and the cars' scale (2026-10-22, after 16):
+   - The chime's car type (`crates/fusion/src/doors.rs`): each tone's family is the one leading most of its windows,
+     and it counts only once a closing follows within 8 s; the status shows it only in the subway mode.
+     The status had kept the last chime-like tone for 15 minutes (the 7 read R62 after walking off at Flushing).
+     Each confirmed chime is exported (`chimes.csv`), and line identification counts them:
+     48 of 62 tags right, from 44 (the 3 on `151449` 3:30 pm, `155919` 4:13 pm, `215922` 10:14 pm; the 2 stays 2).
+     The B runs R68s and R211s (the rider), so beacons don't separate the B from the C either.
+   - Boarding (`python/experiments/boarding.py`, `stepped_in` in `crates/fusion/src/fusion.rs`): a step onto a train
+     is often too short for a step window; a car beacon first heard after the last walking that rises 8 dB is the
+     boarding. Times Sq 3 to 7 (`151449`): 3:40:34 pm against the tap at 3:40:30, from 3:38:57; the other 4 tapped
+     boardings unchanged, all within 10 s. Waiting for the boarded train's door cycle failed when the rider
+     boarded early (+156 s on `155919`).
+   - Changes of car on the same train: each stop record keeps the strongest car beacon before stepping off and
+     after boarding; a step out (under 30 s) into another car is `car_change` (82 St, `184134`, 7:07 pm,
+     `a199` to `a138`), not a transfer, in `stops.csv` and `transfers.py`.
+   - The cars' scale (`python/experiments/car_scale.py`): the 0.6 to 0.75 gain is the readings' noise diluting the
+     fit; dividing by it makes the error worse (0.38 to 0.50 m/s^2 on `a14e`), and the 3D direction adds little
+     (correlation 0.65 against 0.63), so the raw single axis stays and no per-car table is kept.
+   - Pending the rider's decision: recording GTFS-RT for which train, and subwaydata.nyc's archives for past rides.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
