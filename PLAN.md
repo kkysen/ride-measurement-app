@@ -493,6 +493,19 @@ Open, roughly in order:
    - Door openings searched 1 to 10 s after the lurch (`door_lurch_openings.py`): 32 of 60 taps, against 30;
      not ported. The taps follow the lurch steadily (median 3.3 s), but a cycle's last lurch is often not the
      stopping one; next, find the stopping lurch itself.
+   - The stopping lurch (`stopping_lurch.py`, ported as `crates/fusion/src/stops.rs`): the lurch after which the
+     car is still or settles back along the braking direction (1 to 5 s after), scored by the braking before it,
+     the best within 30 s either side, known about 40 s later. 21 of 28 precise "train stopped" taps within 1 s,
+     22 within 2 s (any lurch at all: 23 and 24, among 746).
+     In the subway, once a door closing or a departure confirms it, it holds the speed at zero for 4 s:
+     2 s after the stop taps, smoothed 6.2 mph median and 39.6 p90 before, 0.0 and 11.2 now; GNSS-cut scores
+     unchanged (unconfirmed, two lurches at speed on `154951` made them worse).
+   - Per-stop records (`Fusion::stop_records`, `stops.csv` from `export.rs`): stopping lurch and score, station,
+     doors' opening and closing, departure, dwell, and doors-open time; offline from recorded sensors, nothing new
+     recorded. Openings: heard 1 to 10 s after the stop, else the stop plus 3.2 s (flagged): "plus 3.2 s" puts 43 of
+     60 "doors open" taps within 3 s, the learned sound searched after the stopping lurch 37, before 32.
+     Next: confirm stops whose doors weren't heard and that no surge ends (most of the 11.2 mph p90); dwell at
+     stations against the rider's taps; show the last dwell live if wanted.
    - Elevator or escalator by the climb's shape and the walking around it (`elevator_shape.py`): no separation, and
      the PABT escalators aren't among the climbs found; needs the rider's times for escalator rides.
    - The C's cars are R211s (a few R179s) in `stations.rs`.
