@@ -134,6 +134,7 @@ fn position_through_gnss_outages() {
     fusion.finish();
     let positions = fusion.positions();
     assert!(!positions.is_empty());
+    let speeds = fusion.smoothed();
 
     // Each truth point in an outage against the position at the nearest sample.
     let mut errors = Vec::new();
@@ -154,8 +155,13 @@ fn position_through_gnss_outages() {
         let e = meters((p.lat, p.lon), (tr.lat, tr.lon));
         if std::env::var_os("SDC_DEBUG").is_some() && (tr.t_ns - t0) / 1_000_000_000 % 10 == 0 {
             let hd = p.velocity[0].atan2(p.velocity[1]).to_degrees();
+            let j = speeds
+                .partition_point(|s| s.elapsed_realtime_ns < tr.t_ns)
+                .min(speeds.len() - 1);
+            let s = speeds[j];
             eprintln!(
-                "{:5} s truth {:.5},{:.5} {:5.1} m/s | est {:.5},{:.5} {:5.1} m/s hdg {hd:6.1} sigma {:6.1} err {e:6.1}",
+                "{:5} s truth {:.5},{:.5} {:5.1} m/s | est {:.5},{:.5} {:5.1} m/s hdg {hd:6.1} sigma {:6.1} err {e:6.1} \
+                 | speed fwd {:5.1} bwd {:5.1} sigma {:5.1}",
                 (tr.t_ns - t0) / 1_000_000_000,
                 tr.lat,
                 tr.lon,
@@ -163,7 +169,10 @@ fn position_through_gnss_outages() {
                 p.lat,
                 p.lon,
                 p.velocity[0].hypot(p.velocity[1]),
-                p.sigma_m
+                p.sigma_m,
+                s.forward_mps,
+                s.backward_mps,
+                s.sigma_mps
             );
         }
         if e <= 3.0 * p.sigma_m {
