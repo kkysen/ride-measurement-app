@@ -156,11 +156,11 @@ pub struct DoorDetector {
     downs: Steps,
     /// Openings not yet paired with a closing, within [`MAX_CYCLE_S`].
     open_steps: VecDeque<i64>,
-    /// The current chime-like tone's start (time, frames), and recent chimes' start times.
+    /// The current chime-like tone's start (time, frames), and recent chimes' start times and pitch families.
     tone: Option<(i64, usize)>,
-    chimes: VecDeque<i64>,
-    /// The current tone's pitch family, and the latest chime's time and car type.
-    tone_cars: Option<ChimeCars>,
+    chimes: VecDeque<(i64, Option<ChimeCars>)>,
+    /// The current tone's windows led by each family (NTT, R62), and the latest confirmed chime's time and car type.
+    tone_votes: [usize; 2],
     last_chime: Option<(i64, ChimeCars)>,
 }
 
@@ -205,12 +205,14 @@ impl DoorDetector {
             open_steps: VecDeque::new(),
             tone: None,
             chimes: VecDeque::new(),
-            tone_cars: None,
+            tone_votes: [0; 2],
             last_chime: None,
         }
     }
 
-    /// The latest door chime: its time, and the car type its pitches tell.
+    /// The latest door chime a closing followed: its time, and the car type its pitches tell.
+    /// Only confirmed chimes count: the motor's tone sweeps through the chime pitches with speed
+    /// (32.5 Hz per m/s on the R188), which made a third of the 7's status read R62.
     pub fn last_chime(&self) -> Option<(i64, ChimeCars)> {
         self.last_chime
     }
@@ -307,12 +309,17 @@ impl DoorDetector {
             self.open_steps.pop_front();
         }
         let down = self.downs.on(t_mid, -d, DOWN_DB)?;
-        let chimed = self.chimes.iter().any(|&c| {
-            let before = (down - c) as f64 * 1e-9;
-            before > 0.0 && before < CHIME_BEFORE_S
-        });
-        if !chimed {
-            return None;
+        let chime = self
+            .chimes
+            .iter()
+            .filter(|&&(c, _)| {
+                let before = (down - c) as f64 * 1e-9;
+                before > 0.0 && before < CHIME_BEFORE_S
+            })
+            .last()
+            .copied()?;
+        if let (c, Some(cars)) = chime {
+            self.last_chime = Some((c, cars));
         }
         // The earliest opening within a cycle's length: later steps up are mostly noise while the doors are open
         // (announcements, people), and in the Python scoring no opening paired this way came while moving.
@@ -342,14 +349,17 @@ impl DoorDetector {
             .iter()
             .map(|&p| 10.0 * (f64::from(p) + 1e-9).log10())
             .collect();
-        let prominent = self.chime_bins.iter().find(|&&(i, a, b, _)| {
+        // Each family's most prominent bin; the window counts for the family that leads.
+        let mut best = [f64::NEG_INFINITY; 2];
+        for &(i, a, b, cars) in &self.chime_bins {
             let mut near: Vec<f64> = db[a - lo..b - lo].to_vec();
             near.sort_by(f64::total_cmp);
-            db[i - lo] - near[near.len() / 2] > CHIME_PROMINENT_DB
-        });
-        let tone = prominent.is_some();
-        if let Some(&(_, _, _, cars)) = prominent {
-            self.tone_cars = Some(cars);
+            let k = cars as usize;
+            best[k] = best[k].max(db[i - lo] - near[near.len() / 2]);
+        }
+        let tone = best.iter().any(|&p| p > CHIME_PROMINENT_DB);
+        if tone {
+            self.tone_votes[usize::from(best[1] > best[0])] += 1;
         }
         let min_frames = (CHIME_MIN_S * self.rate_hz / CHIME_HOP as f64).ceil() as usize;
         match (&mut self.tone, tone) {
@@ -357,10 +367,15 @@ impl DoorDetector {
             (None, true) => self.tone = Some((t, 1)),
             (Some((start, n)), false) => {
                 if *n >= min_frames {
-                    self.chimes.push_back(*start);
-                    self.last_chime = self.tone_cars.map(|c| (*start, c));
+                    let [ntt, r62] = self.tone_votes;
+                    let cars = match ntt.cmp(&r62) {
+                        std::cmp::Ordering::Greater => Some(ChimeCars::Ntt),
+                        std::cmp::Ordering::Less => Some(ChimeCars::R62),
+                        std::cmp::Ordering::Equal => None,
+                    };
+                    self.chimes.push_back((*start, cars));
                 }
-                self.tone_cars = None;
+                self.tone_votes = [0; 2];
                 self.tone = None;
             }
             (None, false) => {}
@@ -368,7 +383,7 @@ impl DoorDetector {
         while self
             .chimes
             .front()
-            .is_some_and(|&c| (t - c) as f64 * 1e-9 > MAX_CYCLE_S)
+            .is_some_and(|&(c, _)| (t - c) as f64 * 1e-9 > MAX_CYCLE_S)
         {
             self.chimes.pop_front();
         }

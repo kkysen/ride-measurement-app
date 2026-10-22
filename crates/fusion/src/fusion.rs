@@ -656,6 +656,8 @@ impl Fusion {
                 .as_ref()
                 .and_then(DoorDetector::last_chime)
                 .filter(|&(at, _)| recent(at, 900.0))
+                // Only aboard: once walking off, the last train's chime no longer says what the rider is on.
+                .filter(|_| matches!(mode, Mode::Subway { .. }))
                 .map(|(_, c)| c),
             staying_s: self
                 .stay
