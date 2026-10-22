@@ -22,7 +22,12 @@ RIDES = {
     "154951": "20261020-154951",
     "184134": "20261020-184134",
     "214427": "20261020-214427",
+    # Sparser taps, from the evening of 2026-10-21 (many stops untapped; door taps sometimes off).
+    "155919": "20261021-155919",
+    "182135": "20261021-182135",
+    "215922": "20261021-215922",
 }
+PRECISE = {"135509", "155919", "182135", "215922"}  # rides with "train stopped" taps
 RATE = 50.0
 
 
@@ -87,6 +92,8 @@ def truth(name):
     """(times ns, window before, window after) a detection may fall in, in s."""
     if name == "135509":
         return np.array(ss.taps()["TRAIN_STOPPED"]), 3.0, 1.0
+    if name in PRECISE:
+        return np.array(doors.taps(name, "TRAIN_STOPPED")), 3.0, 1.0
     return np.array(doors.taps(name, "DOORS_OPEN")), 25.0, 1.0
 
 
