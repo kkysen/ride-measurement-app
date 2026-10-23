@@ -433,8 +433,12 @@ Open, roughly in order:
 
 11. 0.1.6 (installed 2026-10-22, early morning):
    - Stations from Android's own fused location (Google's database), already recorded: station by station
-     underground on `182135` and `135509`; the tagged-cell table is the fallback. OpenCelliD needs an account and
-     key (the rider's call); BeaconDB sends cell IDs to its server.
+     underground on `182135` and `135509`; the tagged-cell table is the fallback. BeaconDB sends cell IDs to its server.
+   - OpenCelliD doesn't work for us (checked 2026-10-23 with the rider's key, AT&T 310/410):
+     of the 52 tagged station cells, 38 are unknown and 14 have one sample each, ranges 0.9 to 6.9 km;
+     only Flushing-Main St is within 100 m (85 m), four more within 330 m, the rest 400 m to 12 km off.
+     Subway cells get few GPS-tagged reports, placed from wherever GPS last was. Not built; the key stays
+     in `~/.gradle/gradle.properties` (`ride.opencellidKey`), unused. Recheck coverage before reconsidering.
    - Car types as the rider named them: R62 (1's R62A and 3's R62 sound the same) and NTT (2 R142, 7 R188,
      F/M/R R160), with the model from the station's lines.
    - OMNY: the rider's own taps are the loud beeps (38 to 54 dB, others 33 or less), all 7 confirmed;
@@ -443,7 +447,7 @@ Open, roughly in order:
      the Uber from Edgewater (2:48 to 3:04 am) 6 in 14 min at 0.67. Too alike with one of each, and shaking varies
      by bus (high floor shakes less, per the rider); next: bus stops' dwell and door sounds, against lights.
    - Train beacons (`02FD`, see Ideas): ride with each train on CBTC lines, unused so far (see 12).
-   - OpenCelliD as Google's backup once the rider has a key; automatic OneDrive upload once they register an app
+   - Automatic OneDrive upload once they register an app
      (client ID; device code sign-in, so no package name or signature hash; steps in `CHECKLIST.md`).
    - Missed from earlier sessions, now listed:
      - Train and line identification (asked 2026-10-21): line from route geometry, stations, and car type;
