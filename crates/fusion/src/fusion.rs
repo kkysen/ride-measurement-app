@@ -1433,7 +1433,7 @@ impl Fusion {
     }
 
     /// The likely stop the train is standing at now, if any: not departed since, no GNSS speed since says it's
-    /// moving, and under [`RECORD_MAX_DWELL_S`] ago. A later lurch replaces it.
+    /// moving, the rider not walking now, and under [`RECORD_MAX_DWELL_S`] ago. A later lurch replaces it.
     fn likely_stop_now(&self, now_ns: i64) -> Option<train_stops::Stop> {
         let stop = self.likely_stop?;
         let moving_gnss = self
@@ -1446,7 +1446,13 @@ impl Fusion {
         let dropped = since_s > LIKELY_DECIDED_BY_S
             && !self.train_stops.iter().any(|(s, ..)| s.t_ns == stop.t_ns);
         let old = since_s > RECORD_MAX_DWELL_S;
-        (self.context.in_subway && !moving_gnss && !departed && !dropped && !old).then_some(stop)
+        // Walking since the stop: the rider is moving (off the train, or along it), so the walking pace shows.
+        let walking = self
+            .step_windows
+            .last()
+            .is_some_and(|&(t, steps)| steps && t > stop.t_ns);
+        (self.context.in_subway && !moving_gnss && !departed && !dropped && !old && !walking)
+            .then_some(stop)
     }
 
     fn estimate_unheld(&self, now_ns: i64) -> Estimate {
