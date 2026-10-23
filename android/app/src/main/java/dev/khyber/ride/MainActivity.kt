@@ -88,7 +88,10 @@ class MainActivity : ComponentActivity() {
             Text("%+.2f ${Units.accelUnit}".format(Units.accel(estimate.accelMps2)), style = MaterialTheme.typography.headlineMedium)
             val status by LiveSpeed.status.collectAsStateWithLifecycle()
             status?.let { st ->
-                val where = st.station?.let { (if (st.atStation) " · at " else " · near ") + it + st.lines.joinToString("/", " (", ")").takeIf { st.lines.isNotEmpty() }.orEmpty() }.orEmpty()
+                // The train's route from the realtime feeds, if known (a late-night 2 at Canal St, not the station's usual 1),
+                // else the station's lines.
+                val lines = st.route?.let { " ($it train)" } ?: st.lines.joinToString("/", " (", ")").takeIf { st.lines.isNotEmpty() }.orEmpty()
+                val where = st.station?.let { (if (st.atStation) " · at " else " · near ") + it + lines }.orEmpty()
                 Text(st.mode + where + (st.cars?.let { " · $it cars" } ?: "") + (st.car?.let { " · car $it" } ?: ""), style = MaterialTheme.typography.titleMedium)
                 st.stoppedS?.let { stopped ->
                     val doors = st.doorsOpenS?.let { " · doors open ${clockDuration(it)}" }
