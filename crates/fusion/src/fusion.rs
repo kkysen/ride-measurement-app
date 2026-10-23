@@ -82,6 +82,10 @@ const DOORS_AFTER_STOP_S: (f64, f64) = (1.0, 10.0);
 const DOORS_OPEN_AFTER_STOP_S: f64 = 3.2;
 const DEPART_AFTER_STOP_S: f64 = 5.0;
 const RECORD_MAX_DWELL_S: f64 = 300.0;
+/// A GNSS speed over this after a likely stop means the train is moving after all.
+const LIKELY_STOP_GNSS_MPS: f64 = 1.0;
+/// By when (s after the lurch) the stop detector has decided on it: [`train_stops::SEP_S`] and the 10 s it waits more.
+const LIKELY_DECIDED_BY_S: f64 = train_stops::SEP_S + 12.0;
 /// A "stop" whose braking began within [`FADE_AFTER_CLOSE_S`] after a door closing, and lasted at least
 /// [`FADE_MIN_S`], is the departure's pull fading (the train sped away, then cruised): at Grand Central on
 /// `20261020-151449` (3:44 pm), and three more, the pull began 0 to 8 s after the closing and lasted 11 to 17 s.
@@ -551,6 +555,8 @@ pub struct Fusion {
     stop_detector: StopDetector,
     train_stops: Vec<(train_stops::Stop, Option<&'static Station>, bool)>,
     departures: Vec<i64>,
+    /// The latest lurch the car settled after, shown live as the stop before it's decided (see [`Fusion::estimate`]).
+    likely_stop: Option<train_stops::Stop>,
     /// Stops in the subway waiting for a door closing or a departure to confirm them.
     unconfirmed_stops: Vec<train_stops::Stop>,
     walking: WalkingDetector,
@@ -623,6 +629,7 @@ impl Fusion {
             stop_detector: StopDetector::new(),
             train_stops: Vec::new(),
             departures: Vec::new(),
+            likely_stop: None,
             unconfirmed_stops: Vec::new(),
             walking: WalkingDetector::default(),
             step_windows: Vec::new(),
@@ -787,11 +794,19 @@ impl Fusion {
 
     /// The train's stop now, if it hasn't departed since; as in [`Self::stop_records`], without walking off.
     fn dwell(&self, t: i64) -> Option<Dwell> {
-        let (stop, ..) = self
+        let decided = self
             .train_stops
             .iter()
             .rev()
-            .find(|(stop, _, in_subway)| *in_subway && !self.departure_fade(stop))?;
+            .find(|(stop, _, in_subway)| *in_subway && !self.departure_fade(stop))
+            .map(|(stop, ..)| stop);
+        // A likely stop shows first; once decided, the decided one (the same lurch, or a stronger one after it).
+        let stop = match (decided, self.likely_stop_now(t)) {
+            (Some(d), Some(l)) if l.t_ns > d.t_ns => &l.clone(),
+            (Some(d), _) => d,
+            (None, Some(l)) => &l.clone(),
+            (None, None) => return None,
+        };
         let s_ns = |s: f64| (s * 1e9) as i64;
         let since = |from: i64| (t - from) as f64 * 1e-9;
         let stopped_s = since(stop.t_ns);
@@ -1026,6 +1041,11 @@ impl Fusion {
         for event in stop_events {
             match event {
                 train_stops::Event::Stopped(stop) => self.on_train_stop(t_ns, stop),
+                train_stops::Event::Likely(stop) => {
+                    if self.context.in_subway && !self.departure_fade(&stop) {
+                        self.likely_stop = Some(stop);
+                    }
+                }
                 train_stops::Event::Departed(at) => {
                     if self.context.in_subway
                         && let Some(stop) =
@@ -1349,7 +1369,37 @@ impl Fusion {
 
     /// The estimate at `now_ns`: the settled forward pass carried on, in a copy, through the inputs still
     /// settling, with measurements solved without changing the navigator. Nothing of it is kept.
+    /// The live estimate. While a likely stop holds (see [`Self::likely_stop_now`]) it shows standing still,
+    /// without changing what fusion computes: the stop is only measured once a closing, departure, or walking off
+    /// confirms it, as eased braking at speed also settles (`154951`, the elevated 7).
     pub fn estimate(&self, now_ns: i64) -> Estimate {
+        let mut e = self.estimate_unheld(now_ns);
+        if self.likely_stop_now(now_ns).is_some() {
+            e.speed_mps = 0.0;
+            e.accel_mps2 = 0.0;
+            e.stopped = true;
+        }
+        e
+    }
+
+    /// The likely stop the train is standing at now, if any: not departed since, no GNSS speed since says it's
+    /// moving, and under [`RECORD_MAX_DWELL_S`] ago. A later lurch replaces it.
+    fn likely_stop_now(&self, now_ns: i64) -> Option<train_stops::Stop> {
+        let stop = self.likely_stop?;
+        let moving_gnss = self
+            .estimator
+            .last_gnss_speed()
+            .is_some_and(|(t, v)| t > stop.t_ns && v > LIKELY_STOP_GNSS_MPS);
+        let departed = self.departures.last().is_some_and(|&d| d > stop.t_ns);
+        let since_s = (now_ns - stop.t_ns) as f64 * 1e-9;
+        // Once the decision is due, it must have kept this lurch (on `135509` and `215922`, 3 of 34 weren't).
+        let dropped = since_s > LIKELY_DECIDED_BY_S
+            && !self.train_stops.iter().any(|(s, ..)| s.t_ns == stop.t_ns);
+        let old = since_s > RECORD_MAX_DWELL_S;
+        (self.context.in_subway && !moving_gnss && !departed && !dropped && !old).then_some(stop)
+    }
+
+    fn estimate_unheld(&self, now_ns: i64) -> Estimate {
         if self.pending.is_empty() {
             return self.estimator.estimate(now_ns);
         }

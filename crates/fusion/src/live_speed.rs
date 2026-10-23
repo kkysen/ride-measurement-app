@@ -280,6 +280,8 @@ pub struct LiveSpeedEstimator {
 
     // GNSS.
     last_gnss_ns: i64,
+    /// The last plausible GNSS speed and its time.
+    last_gnss_speed: Option<(i64, f64)>,
     /// Recent (time, signed speed), every [`HISTORY_EVERY_S`], for measurements of a past moment.
     history: std::collections::VecDeque<(i64, f64)>,
     /// How far the covariance has been propagated, by the IMU or [`Self::inflate_to`].
@@ -345,6 +347,7 @@ impl Default for LiveSpeedEstimator {
             accel_initialized: false,
             accel_reset: false,
             last_gnss_ns: 0,
+            last_gnss_speed: None,
             history: std::collections::VecDeque::new(),
             predicted_ns: 0,
             prev_doppler: None,
@@ -748,6 +751,11 @@ impl LiveSpeedEstimator {
         self.track_accel(now_ns);
     }
 
+    /// The last plausible GNSS speed (m/s) and its time.
+    pub fn last_gnss_speed(&self) -> Option<(i64, f64)> {
+        self.last_gnss_speed
+    }
+
     /// The last time a measurement (GNSS, a stop, or a door cycle) set the speed, not just the IMU.
     pub fn last_measured_ns(&self) -> Option<i64> {
         [
@@ -912,6 +920,7 @@ impl LiveSpeedEstimator {
             *self.rejected.entry(sensor).or_default() += 1;
             return;
         }
+        self.last_gnss_speed = Some((t_ns, speed));
         let signed = if self.v < 0.0 && !self.axis_sign_known {
             -speed
         } else {

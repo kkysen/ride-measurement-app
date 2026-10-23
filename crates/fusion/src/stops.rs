@@ -61,6 +61,9 @@ pub struct Stop {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
     Stopped(Stop),
+    /// A lurch the car settled after, as soon as it's scored (the 5 s after it seen), before [`SEP_S`] decides
+    /// whether a stronger one follows: for showing the stop live; [`Event::Stopped`] is what's kept.
+    Likely(Stop),
     /// A start surge's beginning: the train pulling away.
     Departed(i64),
 }
@@ -367,6 +370,11 @@ impl StopDetector {
             if let Some(score) = self.score(i) {
                 let since = self.braking_since(i);
                 self.scored.push_back((self.time(i), score, since));
+                events.push(Event::Likely(Stop {
+                    t_ns: self.time(i),
+                    score,
+                    braking_since_ns: since,
+                }));
             }
         }
         // A scored lurch stops the train once nothing within `SEP_S` after it can outscore it.
