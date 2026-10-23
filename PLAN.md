@@ -382,6 +382,11 @@ Open, roughly in order:
    Express passes to check: the 2 past 59 St and 66 St (`214427`), and the F express in Queens on `184134`,
    which passed 65 St very fast and 36 St more slowly (per the rider).
 
+7a. The 2026-10-23 ride (1 to the L at 14 St, then the L to Brooklyn), once uploaded: on the L platform at 6 Av,
+   the live speed read 25 mph (IMU drift standing still), and the status 1 train and R62, then Q at Union Sq and
+   3 Av (a one-stop GTFS-RT match; the boarding at 6 Av likely not a stop), and R62 despite a steady car beacon
+   (the 1's chime kept 15 min). Also check for cell service under the East River on the L and which cells serve it.
+
 8. The home elevator (`python/experiments/elevator.py`): 12 m in 25 s with the phone still is the elevator,
    with steps (4.9 to 6.4 m/s^2 std) the stairs; marks the start and end of a trip at home.
 
