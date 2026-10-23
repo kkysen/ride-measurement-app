@@ -75,11 +75,10 @@ const DWELL_SURE_S: f64 = 8.0;
 const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
 /// A stop's record: its doors' cycle closes from [`DOORS_AFTER_STOP_S`]'s start on, and before the next stop
 /// or [`RECORD_MAX_DWELL_S`]; the opening is the cycle's own if heard within [`DOORS_AFTER_STOP_S`] of the stop,
-/// else the stop plus [`DOORS_OPEN_AFTER_STOP_S`] (the rider's "doors open" taps: median 3.2 s after the stopping
-/// lurch, 1.9 to 5.2 s for the 10th to 90th percentile; "plus 3.2 s" put 43 of 60 within 3 s, the openings heard
-/// 37). The departure is the first start surge after the closing (or [`DEPART_AFTER_STOP_S`] after the stop).
+/// else unknown: conductors open the doors when they choose, so no fixed time after the stop stands in for it
+/// (the rider's taps ranged 1.9 to 5.2 s after the lurch, 10th to 90th percentile).
+/// The departure is the first start surge after the closing (or [`DEPART_AFTER_STOP_S`] after the stop).
 const DOORS_AFTER_STOP_S: (f64, f64) = (1.0, 10.0);
-const DOORS_OPEN_AFTER_STOP_S: f64 = 3.2;
 const DEPART_AFTER_STOP_S: f64 = 5.0;
 const RECORD_MAX_DWELL_S: f64 = 300.0;
 /// A GNSS speed over this after a likely stop means the train is moving after all.
@@ -422,7 +421,7 @@ pub struct Status {
 pub struct Dwell {
     /// Since the stopping lurch (s); it's found a few seconds after, so this starts there, not at 0.
     pub stopped_s: f64,
-    /// Since the doors opened (s), heard or estimated at [`DOORS_OPEN_AFTER_STOP_S`], until they close.
+    /// Since the doors opened (s), once heard, until they close.
     pub doors_open_s: Option<f64>,
     /// How long they were open (s), once their closing is heard.
     pub doors_were_open_s: Option<f64>,
@@ -817,14 +816,16 @@ impl Fusion {
             .door_cycles
             .iter()
             .find(|c| c.close_ns > stop.t_ns + s_ns(DOORS_AFTER_STOP_S.0));
+        // A cycle is heard whole at its closing, so live the opening is known only then.
         let opened = cycle
             .map(|c| c.open_ns)
-            .filter(|&o| o >= stop.t_ns && o <= stop.t_ns + s_ns(DOORS_AFTER_STOP_S.1))
-            .unwrap_or(stop.t_ns + s_ns(DOORS_OPEN_AFTER_STOP_S));
+            .filter(|&o| o >= stop.t_ns && o <= stop.t_ns + s_ns(DOORS_AFTER_STOP_S.1));
         Some(Dwell {
             stopped_s,
-            doors_open_s: (cycle.is_none() && t >= opened).then(|| since(opened)),
-            doors_were_open_s: cycle.map(|c| (c.close_ns - opened) as f64 * 1e-9),
+            doors_open_s: None,
+            doors_were_open_s: cycle
+                .zip(opened)
+                .map(|(c, o)| (c.close_ns - o) as f64 * 1e-9),
         })
     }
 
@@ -1805,13 +1806,10 @@ fn stop_records(
         } else {
             (None, ridden_departure)
         };
-        let doors_open = cycle.map(|c| {
+        let doors_open = cycle.and_then(|c| {
             let heard = (c.open_ns - stop.t_ns) as f64 * 1e-9;
-            if heard >= DOORS_AFTER_STOP_S.0 && heard <= DOORS_AFTER_STOP_S.1 {
-                (c.open_ns, true)
-            } else {
-                (stop.t_ns + s_ns(DOORS_OPEN_AFTER_STOP_S), false)
-            }
+            (heard >= DOORS_AFTER_STOP_S.0 && heard <= DOORS_AFTER_STOP_S.1)
+                .then_some((c.open_ns, true))
         });
         out.push(StopRecord {
             stopped_ns: stop.t_ns,
