@@ -161,6 +161,26 @@ pub fn nearest(lat: f64, lon: f64) -> Option<(&'static Station, f64)> {
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
+/// The part of `station`'s complex the rider's `lines` stop at: itself if it serves one of them (or `lines` is empty),
+/// else the nearest station within [`COMPLEX_M`] that does (59 St-Columbus Circle's 1 platforms for a rider on the 1,
+/// not its A/B/C/D ones), else itself.
+pub fn on_lines(station: &'static Station, lines: &[String]) -> &'static Station {
+    let serves = |s: &Station| s.lines.iter().any(|l| lines.contains(l));
+    if lines.is_empty() || serves(station) {
+        return station;
+    }
+    all()
+        .iter()
+        .filter(|s| serves(s))
+        .map(|s| (s, meters((station.lat, station.lon), (s.lat, s.lon))))
+        .filter(|&(_, d)| d <= COMPLEX_M)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map_or(station, |(s, _)| s)
+}
+
+/// How far apart (m) the parts of one station complex can be (Times Sq to 42 St-Port Authority is about 250).
+const COMPLEX_M: f64 = 350.0;
+
 /// The station a registered LTE cell serves, if it's one the rider has tagged, by the MTA's name for it.
 pub fn of_cell(cell_id: i64) -> Option<&'static Station> {
     let tagged = table().get(&cell_id)?;
@@ -170,6 +190,20 @@ pub fn of_cell(cell_id: i64) -> Option<&'static Station> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_complex_is_named_for_the_line_ridden() {
+        let abcd = all()
+            .iter()
+            .find(|s| s.name == "59 St-Columbus Circle" && s.lines.iter().any(|l| l == "A"))
+            .unwrap();
+        let on_2 = on_lines(abcd, &["2".into(), "1".into()]);
+        assert_eq!(on_2.lines, ["1"]);
+        assert!(std::ptr::eq(on_lines(abcd, &["C".into()]), abcd));
+        assert!(std::ptr::eq(on_lines(abcd, &[]), abcd));
+        // No part of it serves the 7: as found.
+        assert!(std::ptr::eq(on_lines(abcd, &["7".into()]), abcd));
+    }
 
     #[test]
     fn known_cells_name_their_stations() {

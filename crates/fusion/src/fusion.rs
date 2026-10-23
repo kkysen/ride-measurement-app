@@ -81,6 +81,8 @@ const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
 const DOORS_AFTER_STOP_S: (f64, f64) = (1.0, 10.0);
 const DEPART_AFTER_STOP_S: f64 = 5.0;
 const RECORD_MAX_DWELL_S: f64 = 300.0;
+/// Step windows ([`WALK_WINDOW_S`] each) between stops that start the rider's line over (see [`Fusion::riding_lines`]).
+const LINE_RESET_WINDOWS: usize = 2;
 /// A GNSS speed over this after a likely stop means the train is moving after all.
 const LIKELY_STOP_GNSS_MPS: f64 = 1.0;
 /// By when (s after the lurch) the stop detector has decided on it: [`train_stops::SEP_S`] and the 10 s it waits more.
@@ -718,6 +720,46 @@ impl Fusion {
         self.trips.route(recent, t)
     }
 
+    /// The lines the rider's train can be, from the stations it stopped at: each stop narrows them to the lines
+    /// serving it too, so a 2 at 59 St stays a 2, not the A/B/C/D there. They start over from a stop
+    /// none of them serve (a transfer across the platform), or after [`LINE_RESET_WINDOWS`] step windows since the
+    /// stop before: walking to another platform needn't look like walking off (74 St to Jackson Hts on `184134`,
+    /// 7:09 pm, by stairs), and steps within a car at a stop don't change the line anyway.
+    fn riding_lines(&self, t: i64) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        let mut prev = i64::MIN;
+        for (stop, station, in_subway) in &self.train_stops {
+            let Some(station) = station.filter(|_| *in_subway && stop.t_ns <= t) else {
+                continue;
+            };
+            let walked = self
+                .step_windows
+                .iter()
+                .filter(|&&(at, steps)| steps && at > prev && at <= stop.t_ns)
+                .count()
+                >= LINE_RESET_WINDOWS;
+            let both: Vec<String> = lines
+                .iter()
+                .filter(|l| station.lines.contains(l))
+                .cloned()
+                .collect();
+            lines = if both.is_empty() || walked {
+                station.lines.clone()
+            } else {
+                both
+            };
+            prev = stop.t_ns;
+        }
+        // Walking since the last stop: the next may be another line's.
+        let walked_since = self
+            .step_windows
+            .iter()
+            .filter(|&&(at, steps)| steps && at > prev && at <= t)
+            .count()
+            >= LINE_RESET_WINDOWS;
+        if walked_since { Vec::new() } else { lines }
+    }
+
     /// What the rider is doing and where, as of the settled input, for the app to show.
     pub fn status(&self) -> Status {
         let t = self.now_ns;
@@ -751,8 +793,10 @@ impl Fusion {
             .last_stop
             .filter(|&(at, _)| recent(at, 60.0))
             .and_then(|(_, s)| s);
+        let riding = self.riding_lines(t);
         let station = stopped_at
             .or(cell_station.filter(|_| self.context.in_subway))
+            .map(|s| stations::on_lines(s, &riding))
             .cloned();
         let aboard = matches!(mode, Mode::Subway { .. });
         let cars = self
@@ -765,8 +809,10 @@ impl Fusion {
             .map(|(_, c)| c);
         let car = self.cars.current_at(t);
         let route = self.route(t).filter(|_| aboard);
+        // The route if the feeds give it, else the lines the train has been on, else the station's.
         let lines = match &route {
             Some(r) => vec![r.clone()],
+            None if !riding.is_empty() && aboard => riding,
             None => station
                 .as_ref()
                 .map(|s| s.lines.clone())
@@ -1176,7 +1222,9 @@ impl Fusion {
             .network_station
             .filter(|&(at, _)| (t_ns - at) as f64 * 1e-9 <= 30.0)
             .map(|(_, s)| s);
-        network.or_else(|| self.cell.and_then(|(_, c)| stations::of_cell(c)))
+        network
+            .or_else(|| self.cell.and_then(|(_, c)| stations::of_cell(c)))
+            .map(|s| stations::on_lines(s, &self.riding_lines(t_ns)))
     }
 
     /// The train's stopping lurch, found at `t_ns` ([`train_stops::SEP_S`] and a bit after it): in the subway,
@@ -1187,7 +1235,8 @@ impl Fusion {
             .network_station
             .filter(|&(at, _)| (stop.t_ns - at) as f64 * 1e-9 <= 60.0)
             .map(|(_, s)| s)
-            .or_else(|| self.cell.and_then(|(_, c)| stations::of_cell(c)));
+            .or_else(|| self.cell.and_then(|(_, c)| stations::of_cell(c)))
+            .map(|s| stations::on_lines(s, &self.riding_lines(stop.t_ns)));
         self.train_stops.push((stop, station, in_subway));
         if USE_STOPPING_LURCH && in_subway && !self.departure_fade(&stop) {
             self.unconfirmed_stops.push(stop);
