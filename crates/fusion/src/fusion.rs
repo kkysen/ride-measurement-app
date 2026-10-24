@@ -81,6 +81,13 @@ const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
 const DOORS_AFTER_STOP_S: (f64, f64) = (1.0, 10.0);
 const DEPART_AFTER_STOP_S: f64 = 5.0;
 const RECORD_MAX_DWELL_S: f64 = 300.0;
+/// A transfer (see [`Fusion::transfer_s`]) is shown for at most this long (s): a late night wait for a train.
+const TRANSFER_MAX_S: f64 = 1_800.0;
+/// A departure is the rider's new train if no step window ends within this before and after it (s).
+const TRANSFER_STILL_S: (f64, f64) = (10.0, 5.0);
+/// A car heard as the rider's this long (s) is their train's, not one standing at the platform:
+/// at Jackson Hts on `184134`, 7:21 pm, the trains waited at most 70 s.
+const TRANSFER_CAR_S: f64 = 180.0;
 /// Step windows ([`WALK_WINDOW_S`] each) between stops that start the rider's line over (see [`Fusion::riding_lines`]).
 const LINE_RESET_WINDOWS: usize = 2;
 /// A GNSS speed over this after a likely stop means the train is moving after all.
@@ -416,6 +423,8 @@ pub struct Status {
     pub car: Option<u16>,
     /// The train's current stop, until it departs.
     pub dwell: Option<Dwell>,
+    /// Since the rider walked off a train (s), in the subway, until they're on another (see [`Fusion::transfer_s`]).
+    pub transfer_s: Option<f64>,
 }
 
 /// The train's current stop, live: how long since it stopped, and its doors (see [`Fusion::stop_records`]).
@@ -564,6 +573,8 @@ pub struct Fusion {
     /// Each step-rhythm window's end, and whether it had steps: for when the rider leaves or boards a train.
     step_windows: Vec<(i64, bool)>,
     cars: CarTracker,
+    /// The rider's car (see [`CarTracker::current`]) and since when it has been.
+    car_since: Option<(u16, i64)>,
     /// Every trip the GTFS-realtime feeds have listed.
     trips: trips::Trips,
     /// When the subway detector switched, and to what.
@@ -635,6 +646,7 @@ impl Fusion {
             walking: WalkingDetector::default(),
             step_windows: Vec::new(),
             cars: CarTracker::default(),
+            car_since: None,
             trips: trips::Trips::default(),
             subway_changes: Vec::new(),
             cell: None,
@@ -833,7 +845,8 @@ impl Fusion {
                 .stay
                 .map_or(0.0, |(since, _)| (t - since) as f64 * 1e-9),
             car,
-            dwell: self.dwell(t),
+            dwell: self.transfer_s(t).map_or_else(|| self.dwell(t), |_| None),
+            transfer_s: self.transfer_s(t),
         }
     }
 
@@ -873,6 +886,37 @@ impl Fusion {
                 .zip(opened)
                 .map(|(c, o)| (c.close_ns - o) as f64 * 1e-9),
         })
+    }
+
+    /// Since the rider walked off their train (s), while still in the subway: a transfer, or leaving the station.
+    /// It ends on boarding another train: a departure with no steps around it (the lurch detectors fire on walking
+    /// too), or a car beacon heard as the rider's for [`TRANSFER_CAR_S`], other than the train's they left
+    /// (departures are missed on the L). Trains at the platform are heard steadily too, but leave sooner.
+    /// Stops found meanwhile don't end it: walking through a station makes lurches.
+    fn transfer_s(&self, t: i64) -> Option<f64> {
+        if !self.context.in_subway {
+            return None;
+        }
+        let records = self.stop_records();
+        let left = records.iter().rfind(|r| r.rider_left())?;
+        let alighted = left.alighted_ns?;
+        let s_ns = |s: f64| (s * 1e9) as i64;
+        // The departures found, and those the stop records give (a stop stepped out at, then ridden on from).
+        let departed = records.iter().filter_map(|r| r.departed_ns);
+        let boarded = self.departures.iter().copied().chain(departed).any(|d| {
+            d > alighted
+                && !self.step_windows.iter().any(|&(at, steps)| {
+                    steps && at > d - s_ns(TRANSFER_STILL_S.0) && at < d + s_ns(TRANSFER_STILL_S.1)
+                })
+        });
+        let new_car = self.car_since.is_some_and(|(c, since)| {
+            self.cars.current_at(t) == Some(c)
+                && left.car_before != Some(c)
+                && since > alighted
+                && (t - since) as f64 * 1e-9 >= TRANSFER_CAR_S
+        });
+        let since_s = (t - alighted) as f64 * 1e-9;
+        (!boarded && !new_car && since_s <= TRANSFER_MAX_S).then_some(since_s)
     }
 
     /// Keeps track of how long the rider has stayed in one place out of the subway (see [`Status::staying_s`]).
@@ -1018,6 +1062,10 @@ impl Fusion {
         }
         if let Pending::Car(r) = input {
             self.cars.on_reading(t_ns, &r);
+            let current = self.cars.current();
+            if current != self.car_since.map(|(c, _)| c) {
+                self.car_since = current.map(|c| (c, t_ns));
+            }
             self.car_readings.push((t_ns, r.car, r.rssi));
             if self.cars.steady(t_ns, r.car) {
                 self.estimator.on_car_accel(t_ns, r.car, r.accel);

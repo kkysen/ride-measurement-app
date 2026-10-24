@@ -94,6 +94,7 @@ class MainActivity : ComponentActivity() {
                 val lines = st.route?.let { " ($it train)" } ?: st.lines.joinToString("/", " (", ")").takeIf { st.lines.isNotEmpty() }.orEmpty()
                 val where = st.station?.let { (if (st.atStation) " · at " else " · near ") + it + lines }.orEmpty()
                 Text(st.mode + where + (st.cars?.let { " · $it cars" } ?: "") + (st.car?.let { " · car $it" } ?: ""), style = MaterialTheme.typography.titleMedium)
+                st.transferS?.let { Text("transfer ${clockDuration(it)}") }
                 st.stoppedS?.let { stopped ->
                     val doors = st.doorsOpenS?.let { " · doors open ${clockDuration(it)}" }
                         ?: st.doorsWereOpenS?.let { " · doors were open ${clockDuration(it)}" }

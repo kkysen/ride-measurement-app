@@ -75,6 +75,8 @@ pub struct RideStatus {
     pub stopped_s: Option<f64>,
     pub doors_open_s: Option<f64>,
     pub doors_were_open_s: Option<f64>,
+    /// Since the rider walked off a train, in the subway, until they board another.
+    pub transfer_s: Option<f64>,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -328,6 +330,7 @@ impl Fusion {
             stopped_s: s.dwell.as_ref().map(|d| d.stopped_s),
             doors_open_s: s.dwell.as_ref().and_then(|d| d.doors_open_s),
             doors_were_open_s: s.dwell.as_ref().and_then(|d| d.doors_were_open_s),
+            transfer_s: s.transfer_s,
         }
     }
 
