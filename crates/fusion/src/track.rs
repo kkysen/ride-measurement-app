@@ -149,11 +149,25 @@ pub fn between(a: &Station, b: &Station) -> Option<Track> {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Joined {
     pub pairs: usize,
-    /// Pairs of stops at stations no shape joins; farther apart along it than the subway's top speed covers
-    /// in the time between them (a station misnamed, as a cell a station off); or with a good fix between them.
+    /// Pairs of stops at stations no shape joins; farther apart along it than a train goes in the time between
+    /// them (see [`fastest_s`]: a station misnamed, as a cell a station off); or with a good fix between them.
     pub no_track: usize,
     pub too_far: usize,
     pub with_fix: usize,
+}
+
+/// The subway's highest rate of acceleration and braking (m/s^2): 3 mph/s.
+const SUBWAY_MAX_ACCEL_MPS2: f64 = 3.0 * 0.44704;
+
+/// The least time (s) a train takes from a stop to a stop `length` (m) along: speeding up and braking at
+/// [`SUBWAY_MAX_ACCEL_MPS2`], at most at [`SUBWAY_MAX_SPEED_MPS`] between.
+fn fastest_s(length: f64) -> f64 {
+    let (a, v) = (SUBWAY_MAX_ACCEL_MPS2, SUBWAY_MAX_SPEED_MPS);
+    if length < v * v / a {
+        2.0 * (length / a).sqrt()
+    } else {
+        length / v + v / a
+    }
 }
 
 /// Whether a stop anchors the path: underground at a named station, not a hold between stations.
@@ -161,18 +175,25 @@ fn anchor(r: &StopRecord) -> bool {
     r.in_subway && r.station.is_some() && !r.between_stations
 }
 
-/// Moves `positions` underground onto the track: from each stop at a station to the next on the same train,
-/// along the track between them by the share of the distance the smoothed `speeds` cover, and through each joined stop's
-/// dwell at its station. `good_fix_ns` are the times of fixes good enough that the path there is GNSS's own;
-/// a pair with one between is left alone. `skip` leaves one stop out as an anchor (for scoring).
-pub fn join(
-    positions: &mut [PositionEstimate],
-    speeds: &[SmoothedSpeed],
+/// A train's run between two stops at stations, along the track.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Leg {
+    /// The departure from the first stop (its stop, if no departure was found) and the stop at the second.
+    pub from_ns: i64,
+    pub to_ns: i64,
+    pub track: Track,
+}
+
+/// The legs between consecutive stops at stations on the same train (no walk off or platform wait between),
+/// with no good fix between them (`good_fix_ns`: where the path is GNSS's own), a shape joining the stations,
+/// and a track a train can cover in the time (see [`fastest_s`]). `skip` leaves one stop out (for scoring).
+pub fn legs(
     records: &[StopRecord],
     good_fix_ns: &[i64],
     skip: Option<usize>,
-) -> Joined {
-    let mut out = Joined::default();
+) -> (Vec<Leg>, Joined) {
+    let mut out = Vec::new();
+    let mut stats = Joined::default();
     let mut last: Option<&StopRecord> = None;
     for (k, r) in records.iter().enumerate() {
         if r.on_platform {
@@ -183,65 +204,76 @@ pub fn join(
             let (sa, sb) = (a.station.unwrap(), r.station.unwrap());
             let from = a.departed_ns.unwrap_or(a.stopped_ns);
             let to = r.stopped_ns;
-            out.pairs += 1;
+            stats.pairs += 1;
             if sa.name != sb.name && to > from {
                 match between(sa, sb) {
-                    None => out.no_track += 1,
-                    Some(_) if good_fix_ns.iter().any(|&t| t > from && t < to) => out.with_fix += 1,
-                    Some(track) => {
-                        if !place(positions, speeds, &track, from, to) {
-                            out.too_far += 1;
-                        }
+                    None => stats.no_track += 1,
+                    Some(_) if good_fix_ns.iter().any(|&t| t > from && t < to) => {
+                        stats.with_fix += 1
                     }
+                    Some(track) if (to - from) as f64 * 1e-9 < fastest_s(track.length_m()) => {
+                        stats.too_far += 1
+                    }
+                    Some(track) => out.push(Leg {
+                        from_ns: from,
+                        to_ns: to,
+                        track,
+                    }),
                 }
             }
         }
         if is_anchor {
-            let s = r.station.unwrap();
-            let end = r.departed_ns.or(r.alighted_ns).unwrap_or(r.stopped_ns);
-            for p in positions.iter_mut() {
-                if p.elapsed_realtime_ns >= r.stopped_ns && p.elapsed_realtime_ns <= end {
-                    (p.lat, p.lon) = (s.lat, s.lon);
-                }
-            }
             last = Some(r);
         }
         if r.alighted_ns.is_some() {
             last = None;
         }
     }
-    out
+    (out, stats)
 }
 
-/// Places the samples from `from` to `to` along `track`, by the share of the distance `speeds` cover to each
-/// (by time when they cover none): the speeds' shape, not their scale, which is often far off underground
-/// (a third of the track on the L, `20261023-193658`). False (nothing moved) when the track is too long
-/// for the time (see [`Joined::too_far`]).
-fn place(
+/// Moves `positions` underground onto the track: along each of the [`legs`] by the share of the distance the
+/// smoothed `speeds` cover (their shape, not their scale, which is often far off underground: a third of the
+/// track on the L, `20261023-193658`; by time when they cover none), and through each stop's dwell at its
+/// station.
+pub fn join(
     positions: &mut [PositionEstimate],
     speeds: &[SmoothedSpeed],
-    track: &Track,
-    from: i64,
-    to: i64,
-) -> bool {
-    let length = track.length_m();
-    if length > SUBWAY_MAX_SPEED_MPS * (to - from) as f64 * 1e-9 {
-        return false;
+    records: &[StopRecord],
+    good_fix_ns: &[i64],
+    skip: Option<usize>,
+) -> Joined {
+    let (legs, stats) = legs(records, good_fix_ns, skip);
+    for (k, r) in records.iter().enumerate() {
+        if !anchor(r) || skip == Some(k) {
+            continue;
+        }
+        let s = r.station.unwrap();
+        let end = r.departed_ns.or(r.alighted_ns).unwrap_or(r.stopped_ns);
+        for p in positions.iter_mut() {
+            if p.elapsed_realtime_ns >= r.stopped_ns && p.elapsed_realtime_ns <= end {
+                (p.lat, p.lon) = (s.lat, s.lon);
+            }
+        }
     }
-    let total = covered_m(speeds, from, to);
-    for p in positions
-        .iter_mut()
-        .filter(|p| p.elapsed_realtime_ns >= from && p.elapsed_realtime_ns <= to)
-    {
-        let t = p.elapsed_realtime_ns;
-        let share = if total > 0.0 {
-            covered_m(speeds, from, t) / total
-        } else {
-            (t - from) as f64 / (to - from) as f64
-        };
-        (p.lat, p.lon) = track.at(share * length);
+    for leg in &legs {
+        let (from, to) = (leg.from_ns, leg.to_ns);
+        let total = covered_m(speeds, from, to);
+        let length = leg.track.length_m();
+        for p in positions
+            .iter_mut()
+            .filter(|p| p.elapsed_realtime_ns >= from && p.elapsed_realtime_ns <= to)
+        {
+            let t = p.elapsed_realtime_ns;
+            let share = if total > 0.0 {
+                covered_m(speeds, from, t) / total
+            } else {
+                (t - from) as f64 / (to - from) as f64
+            };
+            (p.lat, p.lon) = leg.track.at(share * length);
+        }
     }
-    true
+    stats
 }
 
 /// The distance (m) the smoothed `speeds` cover from `from` to `to`, by the trapezoid rule.
@@ -279,6 +311,14 @@ mod tests {
         // Halfway is under the river, not at either end.
         let mid = t.at(t.length_m() / 2.0);
         assert!(meters(mid, t.points[0]) > 500.0 && meters(mid, *t.points.last().unwrap()) > 500.0);
+    }
+
+    #[test]
+    fn a_train_needs_time_to_speed_up() {
+        // 528 m in 22 s would average 52 mph: a station misnamed (`20261024-003357`).
+        assert!(fastest_s(528.0) > 35.0);
+        // 2.2 km at 55 mph with 18 s each to speed up and brake.
+        assert!((100.0..115.0).contains(&fastest_s(2217.0)));
     }
 
     #[test]
