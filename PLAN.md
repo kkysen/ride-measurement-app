@@ -403,6 +403,10 @@ Open, roughly in order:
    Back at 14 St, waiting for the 1 after walking from the L: a passing 2's chime was taken as the rider's
    (NTT cars), the live speed ran to 55 mph standing on the platform, and the station read 14 St (L),
    from the L just ridden. While between trains: ignore chimes, hold the speed, name the station by all its lines.
+   The average speed seems to leave out underground travel (the rider). Between two stops at known stations,
+   the track distance (GTFS shapes) over the time between them is that run's average speed, and the speed
+   integrated from the departure to the stop must cover that distance: a measurement for the smoother, which would
+   end runaway IMU speeds between known stations. Needs the stations right (tunnel holds, cells shifted at speed).
 
 8. The home elevator (`python/experiments/elevator.py`): 12 m in 25 s with the phone still is the elevator,
    with steps (4.9 to 6.4 m/s^2 std) the stairs; marks the start and end of a trip at home.
