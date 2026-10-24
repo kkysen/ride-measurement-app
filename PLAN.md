@@ -407,6 +407,8 @@ Open, roughly in order:
    the track distance (GTFS shapes) over the time between them is that run's average speed, and the speed
    integrated from the departure to the stop must cover that distance: a measurement for the smoother, which would
    end runaway IMU speeds between known stations. Needs the stations right (tunnel holds, cells shifted at speed).
+   86 St on the uptown 1 wasn't named live (the rider): it has no tagged cell yet; add it from this ride's tap,
+   or from the stop between 79 St and 96 St.
 
 8. The home elevator (`python/experiments/elevator.py`): 12 m in 25 s with the phone still is the elevator,
    with steps (4.9 to 6.4 m/s^2 std) the stairs; marks the start and end of a trip at home.
