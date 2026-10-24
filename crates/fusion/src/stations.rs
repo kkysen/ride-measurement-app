@@ -68,6 +68,7 @@ const R62A: CarModel = model("R62A", Some(false), Some(false));
 const R142: CarModel = model("R142", Some(true), Some(false));
 const R188: CarModel = model("R188", Some(true), Some(true));
 const R160: CarModel = model("R160", Some(true), Some(true));
+const R143: CarModel = model("R143", Some(true), Some(true));
 const R211: CarModel = model("R211", Some(true), Some(true));
 /// Not NTT-chimed; whether they have beacons isn't known.
 const R68: CarModel = model("R68", Some(false), None);
@@ -80,6 +81,7 @@ pub fn car_models(line: &str) -> Option<&'static [CarModel]> {
         "2" => &[R142],
         "7" => &[R188],
         "F" | "M" | "R" => &[R160],
+        "L" => &[R143, R160],
         // Mostly R211s, with a few R179s.
         "C" => &[R211],
         "B" => &[R68, R211],
@@ -106,13 +108,18 @@ pub fn car_type(ntt: Option<bool>, beacons: bool, lines: &[String]) -> Option<Ca
         ntt.is_none_or(|n| m.ntt != Some(!n)) && (!beacons || m.beacons != Some(false))
     };
     let known: Option<Vec<&[CarModel]>> = lines.iter().map(|l| car_models(l)).collect();
-    let mut models: Vec<&CarModel> = known
+    let fleet: Vec<&CarModel> = known
         .filter(|_| !lines.is_empty())
         .unwrap_or_default()
         .into_iter()
         .flatten()
-        .filter(|m| fits(m))
         .collect();
+    let mut models: Vec<&CarModel> = fleet.iter().copied().filter(|m| fits(m)).collect();
+    // A chime no car of the lines' fleets makes is another train's (a 2 across the platform from the 1):
+    // then the fleets say what the cars are.
+    if models.is_empty() && !fleet.is_empty() && ntt.is_some() {
+        return car_type(None, beacons, lines);
+    }
     models.sort_by_key(|m| m.name);
     models.dedup();
     let agreed = |f: fn(&CarModel) -> Option<bool>| {
@@ -178,6 +185,19 @@ pub fn on_lines(station: &'static Station, lines: &[String]) -> &'static Station
         .map_or(station, |(s, _)| s)
 }
 
+/// Every line of a station's complex: what the rider may take next from it.
+pub fn complex_lines(station: &Station) -> Vec<String> {
+    let mut lines: Vec<String> = all()
+        .iter()
+        .filter(|s| meters((station.lat, station.lon), (s.lat, s.lon)) <= COMPLEX_M)
+        .flat_map(|s| s.lines.iter().cloned())
+        .chain(station.lines.iter().cloned())
+        .collect();
+    lines.sort();
+    lines.dedup();
+    lines
+}
+
 /// How far apart (m) the parts of one station complex can be (Times Sq to 42 St-Port Authority is about 250).
 const COMPLEX_M: f64 = 350.0;
 
@@ -222,6 +242,15 @@ mod tests {
     }
 
     #[test]
+    fn a_complex_has_all_its_lines() {
+        let l = all()
+            .iter()
+            .find(|s| s.name == "14 St-Union Sq" && s.lines == ["L"])
+            .unwrap();
+        assert_eq!(complex_lines(l), ["4", "5", "6", "L", "N", "Q", "R", "W"]);
+    }
+
+    #[test]
     fn car_type_from_chime_beacons_and_lines() {
         let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let ct = |ntt, model| Some(CarType { ntt, model });
@@ -254,6 +283,11 @@ mod tests {
         );
         // Beacons alone on the B: the R68s' aren't known, so either.
         assert_eq!(car_type(None, true, &b), ct(None, None));
+        // An NTT chime on the 1 is another train's (a 2 across the platform at 96 St): it says nothing,
+        // and nothing else is heard.
+        assert_eq!(car_type(Some(true), false, &lines(&["1"])), None);
+        // The L: NTT either way, R143s or R160s.
+        assert_eq!(car_type(None, true, &lines(&["L"])), ct(Some(true), None));
         // A line whose fleet isn't known: no model.
         assert_eq!(
             car_type(Some(true), false, &lines(&["2", "Q"])),
