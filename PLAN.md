@@ -741,10 +741,30 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    of 47, no cue; the same site (ID / 256), 73 of 87 tapped, shared by neighboring stations; the time since the
    stop before overlaps. Untapped stops include real ones the rider didn't tap, so the 47 aren't all false.
    Next: the time since the departure (Lorimer's was 20 s after it), once more taps check it.
-8. The track between stations (GTFS shapes, embedded like `open_track.bin`): stations joined along the track for
-   the underground path on the map (dead reckoning alone is a median 429 to 2066 m off at stations,
-   `crates/cli/examples/stop_positions.rs`), the average speed between known stations, and the speed integrated
-   between them held to the track distance (a measurement for the smoother).
+8. Partly done (`13ead04`, `dcb8c74`, `ec85c9f`, `ba8a343`, `9610696`): the track between stations, from the MTA's GTFS
+   shapes (`python/experiments/subway_track.py` to `crates/fusion/data/subway_track.bin`, 182 KB; `crates/fusion/src/track.rs`).
+   Legs (`track::legs`): consecutive stops at named stations underground on the same train, no good fix between,
+   a shape joining them, and no faster than a train can go (3 mph/s up and down, 55 mph between): 126 pairs
+   over all sessions, 8 too fast (likely misnamed), 14 with a fix, none without a shape.
+   - The map path: each leg's samples placed along the track by the share of the smoothed speeds' distance, each
+     stop's dwell at its station. `stop_positions` (`just sweep stop_positions`, `target/track/`): 166 stops,
+     dead reckoned a median 482 m off (90th 2902 m), joined 0 m (353 m) by construction; the honest score, each
+     stop left out with its neighbors joined across it (88 stops): 180 m (737 m), against 830 m (3189 m)
+     dead reckoned on the same stops.
+   - The smoothed speed held to the track (`track::hold_to_track`, after `bound_gaps`): underground the speeds
+     covered a median 0.46 of the track (90 legs; a tenth under 0.14), so they're scaled to it, at most 55 mph.
+     Scored by `crates/cli/examples/legs_gnss.rs` (GNSS cut throughout, against the ride as recorded) on the 13
+     legs with GNSS through them (3 rides): each leg's distance a median 462 m off to 82 m (the track 51 m);
+     the per-fix speed RMS unchanged, 12.3 to 12.5 mph: the shape stays the IMU's. Forward and live speeds
+     are untouched (`curves`, `holds` identical on `193658`).
+   - The average speed from the last station (`StopRecord::from_last_station`): a median 0.8 mph off on those
+     legs, against 5.0 from the raw speeds; a median 21.5 mph over all legs.
+   Left: no map draws the joined path yet (`Fusion::positions`, `Replay::positions`: the app's maps and
+   `just map` draw the GPS fixes); the hold is a scaling after smoothing, not a distance measurement inside the
+   filter's passes (that would fix the speeds' shape too); the live (forward) speed isn't held; the average isn't
+   shown in the app; no licensing note for the MTA's data exists in the repo, for this or `open_track.bin`;
+   Lorimer St on `193658` (681 m in 47 s, 32 mph) unchecked; legs need both ends' stations right, and a
+   cell a station off within the time bound still passes.
 9. Done (`80c1aa5`, `374cb64`, `37fc39e`; scored by `crates/cli/examples/walkoffs.rs`): walk offs found within
    20 s before to 45 s after an "alighted" tap, 27 to 29 of 33; false ones (no tap near) 5 to 4.
    90 St dropped (a short walk, then carried to the next stop felt, no departure between); 74 St found from the
