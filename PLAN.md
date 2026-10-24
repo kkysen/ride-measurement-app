@@ -745,8 +745,17 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    the underground path on the map (dead reckoning alone is a median 429 to 2066 m off at stations,
    `crates/cli/examples/stop_positions.rs`), the average speed between known stations, and the speed integrated
    between them held to the track distance (a measurement for the smoother).
-9. Walk-off detection: missed at 74 St on `184134` (steps only began 30 s after the tapped alighting), and taken
-   from walking along the car at 90 St; the transfer status and the timeline's legs depend on it.
+9. Done (`80c1aa5`, `374cb64`, `37fc39e`; scored by `crates/cli/examples/walkoffs.rs`): walk offs found within
+   20 s before to 45 s after an "alighted" tap, 27 to 29 of 33; false ones (no tap near) 5 to 4.
+   90 St dropped (a short walk, then carried to the next stop felt, no departure between); 74 St found from the
+   next stop met on the platform with no departure from this one (27 s after the tap, when the steps began);
+   `181802` 6:34 pm found from a missed stop tried at each step window, not only at departures.
+   Live speed over 6 mph between "alighted" and "boarded" taps 2742 to 2587 of 11540 s; dwell seconds held
+   2233 to 2354 of 3570; `154951` gets 2 more untapped stops (589 to 594 s over 6 mph).
+   Left: `184134` 7:24 pm (one step window, no stop found); `135509` 2:17 pm (walked before the tap, the
+   train's stop missed); `182135` 6:27 pm is a step out (boarded 2 s later), not a miss; `002914` 1:15 am
+   found 26 s before the tap (walking to the doors). The 4 false ones have no taps near (likely untapped ends
+   of rides), and `002914` 3:04 am. The car beacon fading wasn't tried.
 10. 86 St on the 1 has no tagged cell; add it from the 2026-10-24 ride.
 11. Done (checked, no code change): LTE service the whole way under the East River on both crossings, no gaps.
     Brooklyn-bound (`193658`): 29205636/29205628 (PCI 246) from 7:58:36 pm, 29448828 (PCI 372) from 7:59:53 pm;
