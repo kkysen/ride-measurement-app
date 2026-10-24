@@ -6,7 +6,7 @@
 use ride_fusion::position::PositionEstimate;
 use ride_fusion::replay::{Options, replay_with};
 use ride_fusion::stations::meters;
-use ride_fusion::track::join;
+use ride_fusion::track::{join, place};
 use ride_session::read::Session;
 
 fn at(positions: &[PositionEstimate], t: i64) -> Option<&PositionEstimate> {
@@ -65,6 +65,16 @@ fn main() -> anyhow::Result<()> {
                 Some(k),
             );
             let o = at(&left_out, s.stopped_ns).unwrap();
+            // Whether it was placed along the track, before the rest of the path is blended to meet it.
+            let mut placed_only = r.dead_reckoned.clone();
+            place(
+                &mut placed_only,
+                &r.smoothed,
+                &r.stops,
+                &r.good_fix_ns,
+                Some(k),
+            );
+            let o_placed = at(&placed_only, s.stopped_ns).unwrap();
             let d = |p: &PositionEstimate| meters((p.lat, p.lon), (station.lat, station.lon));
             let (a, b, c) = (d(p), d(q), d(o));
             println!(
@@ -74,7 +84,7 @@ fn main() -> anyhow::Result<()> {
             dr.push(a);
             joined.push(b);
             // Placed along the track with it left out: its neighbors were joined across it.
-            if (o.lat, o.lon) != (p.lat, p.lon) {
+            if (o_placed.lat, o_placed.lon) != (p.lat, p.lon) {
                 loo.push(c);
                 loo_dr.push(a);
             }

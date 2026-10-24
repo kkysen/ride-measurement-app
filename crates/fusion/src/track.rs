@@ -235,7 +235,8 @@ pub fn legs(
 /// Moves `positions` underground onto the track: along each of the [`legs`] by the share of the distance the
 /// smoothed `speeds` cover (their shape, not their scale, which is often far off underground: a third of the
 /// track on the L, `20261023-193658`; by time when they cover none), and through each stop's dwell at its
-/// station.
+/// station. Then shifts the rest of the path so it meets the joined points and the good fixes next to it
+/// (see [`blend`]): no jump where the joined path hands over to dead reckoning.
 pub fn join(
     positions: &mut [PositionEstimate],
     speeds: &[SmoothedSpeed],
@@ -243,6 +244,22 @@ pub fn join(
     good_fix_ns: &[i64],
     skip: Option<usize>,
 ) -> Joined {
+    let before: Vec<(f64, f64)> = positions.iter().map(|p| (p.lat, p.lon)).collect();
+    let (stats, placed) = place(positions, speeds, records, good_fix_ns, skip);
+    blend(positions, &before, &placed, good_fix_ns);
+    stats
+}
+
+/// [`join`] without [`blend`]: only the samples it places on the track or at a station move,
+/// and which ones those are.
+pub fn place(
+    positions: &mut [PositionEstimate],
+    speeds: &[SmoothedSpeed],
+    records: &[StopRecord],
+    good_fix_ns: &[i64],
+    skip: Option<usize>,
+) -> (Joined, Vec<bool>) {
+    let mut placed = vec![false; positions.len()];
     let (legs, stats) = legs(records, good_fix_ns, skip);
     for (k, r) in records.iter().enumerate() {
         if !anchor(r) || skip == Some(k) {
@@ -250,9 +267,10 @@ pub fn join(
         }
         let s = r.station.unwrap();
         let end = r.departed_ns.or(r.alighted_ns).unwrap_or(r.stopped_ns);
-        for p in positions.iter_mut() {
+        for (p, placed) in positions.iter_mut().zip(&mut placed) {
             if p.elapsed_realtime_ns >= r.stopped_ns && p.elapsed_realtime_ns <= end {
                 (p.lat, p.lon) = (s.lat, s.lon);
+                *placed = true;
             }
         }
     }
@@ -260,10 +278,12 @@ pub fn join(
         let (from, to) = (leg.from_ns, leg.to_ns);
         let total = covered_m(speeds, from, to);
         let length = leg.track.length_m();
-        for p in positions
+        for (p, placed) in positions
             .iter_mut()
-            .filter(|p| p.elapsed_realtime_ns >= from && p.elapsed_realtime_ns <= to)
+            .zip(&mut placed)
+            .filter(|(p, _)| p.elapsed_realtime_ns >= from && p.elapsed_realtime_ns <= to)
         {
+            *placed = true;
             let t = p.elapsed_realtime_ns;
             let share = if total > 0.0 {
                 covered_m(speeds, from, t) / total
@@ -273,7 +293,66 @@ pub fn join(
             (p.lat, p.lon) = leg.track.at(share * length);
         }
     }
-    stats
+    (stats, placed)
+}
+
+/// Shifts each stretch of `positions` that [`place`] left alone by an offset blended, over time,
+/// from the shift of the pinned sample before it to that of the one after:
+/// the shift [`place`] made to a placed sample, none at a good fix (the path there is GNSS's own).
+/// A stretch pinned on one side only (the ride's start or end) takes that side's shift whole.
+/// `before` is each position before [`place`] moved it.
+pub fn blend(
+    positions: &mut [PositionEstimate],
+    before: &[(f64, f64)],
+    placed: &[bool],
+    good_fix_ns: &[i64],
+) {
+    if !placed.iter().any(|&p| p) {
+        return;
+    }
+    let mut fixes = good_fix_ns.to_vec();
+    fixes.sort_unstable();
+    let shift = |i: usize, p: &PositionEstimate| -> Option<(f64, f64)> {
+        if placed[i] {
+            Some((p.lat - before[i].0, p.lon - before[i].1))
+        } else if fixes.binary_search(&p.elapsed_realtime_ns).is_ok() {
+            Some((0.0, 0.0))
+        } else {
+            None
+        }
+    };
+    let pins: Vec<(usize, (f64, f64))> = positions
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| Some((i, shift(i, p)?)))
+        .collect();
+    let mut next = 0;
+    let mut prev: Option<(usize, (f64, f64))> = None;
+    for i in 0..positions.len() {
+        if next < pins.len() && pins[next].0 == i {
+            prev = Some(pins[next]);
+            next += 1;
+            continue;
+        }
+        let after = pins.get(next).copied();
+        let (dlat, dlon) = match (prev, after) {
+            (Some((_, a)), None) => a,
+            (None, Some((_, b))) => b,
+            (Some((ia, a)), Some((ib, b))) => {
+                let ta = positions[ia].elapsed_realtime_ns;
+                let tb = positions[ib].elapsed_realtime_ns;
+                let f = if tb > ta {
+                    (positions[i].elapsed_realtime_ns - ta) as f64 / (tb - ta) as f64
+                } else {
+                    0.5
+                };
+                (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)
+            }
+            (None, None) => (0.0, 0.0),
+        };
+        positions[i].lat += dlat;
+        positions[i].lon += dlon;
+    }
 }
 
 /// Holds the smoothed `speeds` over each of the [`legs`] to its track's length: scaled to cover it
@@ -392,5 +471,25 @@ mod tests {
         // 96 St to 72 St on the 1/2/3: two local stops between, on the same track.
         let t = between(station("96 St", "1"), station("72 St", "1")).unwrap();
         assert!((1700.0..2600.0).contains(&t.length_m()), "{}", t.length_m());
+    }
+
+    #[test]
+    fn the_path_is_shifted_to_meet_what_was_placed() {
+        let pos = |t: i64, lat: f64| PositionEstimate {
+            elapsed_realtime_ns: t * 1_000_000_000,
+            lat,
+            lon: 0.0,
+            sigma_m: 1.0,
+            velocity: [0.0; 2],
+        };
+        // A good fix at 0 s, dead reckoning from 1 to 3 s, a sample placed 0.04 degrees north at 4 s.
+        let before = [0.0, 0.0, 0.0, 0.0, 0.0];
+        let mut positions: Vec<_> = (0..5).map(|t| pos(t, before[t as usize])).collect();
+        positions[4].lat = 0.04;
+        let placed = [false, false, false, false, true];
+        let before: Vec<_> = before.iter().map(|&l| (l, 0.0)).collect();
+        blend(&mut positions, &before, &placed, &[0]);
+        let lats: Vec<f64> = positions.iter().map(|p| (p.lat * 100.0).round()).collect();
+        assert_eq!(lats, [0.0, 1.0, 2.0, 3.0, 4.0]);
     }
 }
