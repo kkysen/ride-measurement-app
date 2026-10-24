@@ -124,8 +124,9 @@ pub struct LiveStop {
 pub struct TimelineSegment {
     pub start_ns: i64,
     pub end_ns: i64,
-    /// `walking`, a line (`7`), or `subway` when the line isn't known.
+    /// `walking`, `stairs up`, `elevator or escalator down`, a line (`7`), or `subway` when the line isn't known.
     pub label: String,
+    /// Walking, stairs, or an elevator or escalator, rather than a subway leg.
     pub walking: bool,
 }
 
@@ -319,9 +320,17 @@ impl Fusion {
             .map(|s| TimelineSegment {
                 start_ns: s.start_ns,
                 end_ns: s.end_ns,
-                walking: s.doing == Doing::Walking,
+                walking: !matches!(s.doing, Doing::Subway { .. }),
                 label: match s.doing {
                     Doing::Walking => "walking".to_string(),
+                    Doing::Stairs { up: true } => "stairs up".to_string(),
+                    Doing::Stairs { up: false } => "stairs down".to_string(),
+                    Doing::ElevatorOrEscalator { up: true } => {
+                        "elevator or escalator up".to_string()
+                    }
+                    Doing::ElevatorOrEscalator { up: false } => {
+                        "elevator or escalator down".to_string()
+                    }
                     Doing::Subway { line: Some(l) } => l,
                     Doing::Subway { line: None } => "subway".to_string(),
                 },
@@ -344,6 +353,10 @@ impl Fusion {
                 Mode::Still => "still",
                 Mode::Walking => "walking",
                 Mode::Running => "running",
+                Mode::Stairs { up: true } => "stairs up",
+                Mode::Stairs { up: false } => "stairs down",
+                Mode::ElevatorOrEscalator { up: true } => "elevator or escalator up",
+                Mode::ElevatorOrEscalator { up: false } => "elevator or escalator down",
                 Mode::Subway { underground: true } => "subway, underground",
                 Mode::Subway { underground: false } => "subway, above ground",
                 Mode::Vehicle => "bus, car, or other train",

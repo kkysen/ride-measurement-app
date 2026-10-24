@@ -33,6 +33,8 @@ pub struct Replay {
     pub statuses: Vec<(i64, crate::fusion::Status)>,
     /// What the rider did over the ride (see [`Fusion::timeline`]), as of its end.
     pub timeline: Vec<crate::fusion::Segment>,
+    /// Stairs, elevators, and escalators (see [`crate::vertical`]).
+    pub vertical: Vec<crate::vertical::Move>,
 }
 
 pub const STATUS_EVERY_NS: i64 = 10_000_000_000;
@@ -53,6 +55,7 @@ enum Event {
     Accel([f64; 3]),
     Gyro([f64; 3]),
     Mag([f64; 3]),
+    Pressure(f64),
     Fix(Fix),
     Measurements(ride_session::proto::GnssMeasurementsEvent),
     Navigation(ride_session::proto::GnssNavigationMessage),
@@ -127,6 +130,15 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                     Some(ImuSample::Mag(b)) => events.push((t, Event::Mag(b))),
                     None => {}
                 }
+            }
+        }
+    }
+    if session.info.streams.iter().any(|s| s.name == "pressure") {
+        for chunk in &session.read_stream("pressure")?.chunks {
+            let n = (chunk.values_per_sample as usize).max(1);
+            let values: Vec<f32> = chunk.values().collect();
+            for (i, t) in chunk.timestamps_ns().into_iter().enumerate() {
+                events.push((t, Event::Pressure(f64::from(values[i * n]))));
             }
         }
     }
@@ -277,6 +289,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
             Event::Accel(a) => fusion.on_accel(t, a),
             Event::Gyro(w) => fusion.on_gyro(t, w),
             Event::Mag(b) => fusion.on_magnetometer(t, b),
+            Event::Pressure(p) => fusion.on_pressure(t, p),
             Event::Fix(fix) => fusion.on_fix(fix),
             Event::Measurements(m) => {
                 fusion.on_gnss_measurements(t, &m);
@@ -302,6 +315,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
         step_windows: fusion.step_windows().to_vec(),
         subway_changes: fusion.subway_changes().to_vec(),
         timeline: fusion.timeline(),
+        vertical: fusion.vertical_moves(),
         statuses,
     })
 }

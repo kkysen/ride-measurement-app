@@ -12,4 +12,5 @@ pub mod stations;
 pub mod stops;
 pub mod subway;
 pub mod trips;
+pub mod vertical;
 pub mod walking;

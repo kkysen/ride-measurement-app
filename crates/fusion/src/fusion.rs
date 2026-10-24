@@ -404,10 +404,24 @@ pub enum Doing {
     Subway {
         line: Option<String>,
     },
+    /// Climbing or descending stairs (see [`crate::vertical`]).
+    Stairs {
+        up: bool,
+    },
+    /// Standing in an elevator or on an escalator, which the barometer can't tell apart.
+    ElevatorOrEscalator {
+        up: bool,
+    },
 }
 
 /// Steps over less than this (s) aren't a walk on the timeline: shifting in a seat, a step to the doors.
 const TIMELINE_WALK_S: f64 = 8.0;
+/// Riding up or down isn't an elevator or escalator with a departure within this (s) before it or during it,
+/// or at an average speed over this (m/s; an escalator moves the rider about 0.5 m/s).
+const VERTICAL_DEPARTED_S: f64 = 60.0;
+const VERTICAL_VEHICLE_MPS: f64 = 2.5;
+/// The status shows a move that ended within this (s): about half its 25 s span, the lag in finding it.
+const VERTICAL_RECENT_S: f64 = 15.0;
 /// The subway detector off for at most this (s) is the same subway ride on the timeline.
 const TIMELINE_SUBWAY_GAP_S: f64 = 60.0;
 
@@ -418,6 +432,13 @@ pub enum Mode {
     Still,
     Walking,
     Running,
+    /// Going up or down (see [`crate::vertical`]), found [`VERTICAL_RECENT_S`] late at most.
+    Stairs {
+        up: bool,
+    },
+    ElevatorOrEscalator {
+        up: bool,
+    },
     /// The subway, under or above ground; on a train or in a station.
     Subway {
         underground: bool,
@@ -487,6 +508,7 @@ pub const TYPE_MAGNETIC_FIELD_UNCALIBRATED: i32 = 14;
 pub const TYPE_GYROSCOPE: i32 = 4;
 pub const TYPE_GYROSCOPE_UNCALIBRATED: i32 = 16;
 pub const TYPE_ACCELEROMETER_UNCALIBRATED: i32 = 35;
+pub const TYPE_PRESSURE: i32 = 6;
 
 pub enum ImuSample {
     Accel([f64; 3]),
@@ -597,6 +619,7 @@ pub struct Fusion {
     cars: CarTracker,
     /// The rider's car (see [`CarTracker::current`]) and since when it has been.
     car_since: Option<(u16, i64)>,
+    altimeter: crate::vertical::Altimeter,
     /// Every trip the GTFS-realtime feeds have listed.
     trips: trips::Trips,
     /// When the subway detector switched, and to what.
@@ -669,6 +692,7 @@ impl Fusion {
             step_windows: Vec::new(),
             cars: CarTracker::default(),
             car_since: None,
+            altimeter: Default::default(),
             trips: trips::Trips::default(),
             subway_changes: Vec::new(),
             cell: None,
@@ -805,13 +829,26 @@ impl Fusion {
             .and_then(|(_, g)| g);
         let estimate = self.estimator.estimate(t);
         let underground = estimate.since_gnss_s.is_none_or(|s| s > 10.0);
-        let mode = match gait {
-            Some(Gait::Running) => Mode::Running,
-            Some(Gait::Walking) => Mode::Walking,
-            None if self.context.in_subway => Mode::Subway { underground },
-            None if estimate.initialized && estimate.speed_mps > VEHICLE_MPS => Mode::Vehicle,
-            None if estimate.stopped => Mode::Still,
-            None => Mode::Unknown,
+        // A move is found half its span late (see `vertical::moves`), so one ending just now is still going on.
+        let vertical = self
+            .vertical_moves()
+            .into_iter()
+            .rfind(|m| recent(m.end_ns, VERTICAL_RECENT_S));
+        let mode = match (vertical, gait) {
+            (Some(m), _) if m.kind == crate::vertical::Kind::Stairs => Mode::Stairs {
+                up: m.change_m > 0.0,
+            },
+            (Some(m), _) => Mode::ElevatorOrEscalator {
+                up: m.change_m > 0.0,
+            },
+            (None, gait) => match gait {
+                Some(Gait::Running) => Mode::Running,
+                Some(Gait::Walking) => Mode::Walking,
+                None if self.context.in_subway => Mode::Subway { underground },
+                None if estimate.initialized && estimate.speed_mps > VEHICLE_MPS => Mode::Vehicle,
+                None if estimate.stopped => Mode::Still,
+                None => Mode::Unknown,
+            },
         };
         // Android's own location first (Google's database), then the rider's tagged cells.
         let cell_station = self
@@ -992,6 +1029,38 @@ impl Fusion {
             end_ns: b,
             doing: Doing::Walking,
         }));
+        // Going up or down replaces what was there then (walking, mostly).
+        for m in self.vertical_moves() {
+            let mut cut = Vec::with_capacity(segments.len() + 2);
+            for s in segments {
+                if s.end_ns <= m.start_ns || s.start_ns >= m.end_ns {
+                    cut.push(s);
+                    continue;
+                }
+                if s.start_ns < m.start_ns {
+                    cut.push(Segment {
+                        end_ns: m.start_ns,
+                        ..s.clone()
+                    });
+                }
+                if s.end_ns > m.end_ns {
+                    cut.push(Segment {
+                        start_ns: m.end_ns,
+                        ..s
+                    });
+                }
+            }
+            let up = m.change_m > 0.0;
+            cut.push(Segment {
+                start_ns: m.start_ns,
+                end_ns: m.end_ns,
+                doing: match m.kind {
+                    crate::vertical::Kind::Stairs => Doing::Stairs { up },
+                    crate::vertical::Kind::Riding => Doing::ElevatorOrEscalator { up },
+                },
+            });
+            segments = cut;
+        }
         segments.sort_by_key(|s| s.start_ns);
         // Pieces left by a walk too short to show, or a flicker, join up.
         let mut joined: Vec<Segment> = Vec::new();
@@ -1110,12 +1179,53 @@ impl Fusion {
 
     /// An Android sensor sample, as delivered (`SensorEvent.values`); IMU samples are used, others ignored.
     pub fn on_sensor(&mut self, sensor_type: i32, t_ns: i64, values: &[f32]) {
+        if sensor_type == TYPE_PRESSURE {
+            if let Some(&hpa) = values.first() {
+                self.on_pressure(t_ns, f64::from(hpa));
+            }
+            return;
+        }
         match imu_sample(sensor_type, values) {
             Some(ImuSample::Accel(a)) => self.on_accel(t_ns, a),
             Some(ImuSample::Gyro(w)) => self.on_gyro(t_ns, w),
             Some(ImuSample::Mag(b)) => self.on_magnetometer(t_ns, b),
             None => {}
         }
+    }
+
+    /// Going up and down so far: stairs, and elevators or escalators (see [`crate::vertical`]).
+    /// Riding up or down with a train departing around it, or at a vehicle's speed, was the train (boarding is
+    /// walking, then its tunnel pressure waves pass for a ride): on `214427` and `182135`, aboard the 2.
+    pub fn vertical_moves(&self) -> Vec<crate::vertical::Move> {
+        let s_ns = |s: f64| (s * 1e9) as i64;
+        let smoothed = self.smoothed();
+        crate::vertical::moves(self.altimeter.heights(), &self.step_windows, WALK_WINDOW_S)
+            .into_iter()
+            .filter(|m| {
+                if m.kind == crate::vertical::Kind::Stairs {
+                    return true;
+                }
+                let departed = self
+                    .departures
+                    .iter()
+                    .any(|&d| d >= m.start_ns - s_ns(VERTICAL_DEPARTED_S) && d <= m.end_ns);
+                let speeds: Vec<f64> = smoothed
+                    .iter()
+                    .filter(|s| {
+                        s.elapsed_realtime_ns >= m.start_ns && s.elapsed_realtime_ns <= m.end_ns
+                    })
+                    .map(|s| s.speed_mps)
+                    .collect();
+                let fast = !speeds.is_empty()
+                    && speeds.iter().sum::<f64>() / speeds.len() as f64 > VERTICAL_VEHICLE_MPS;
+                !departed && !fast
+            })
+            .collect()
+    }
+
+    /// A barometer reading (hPa), for going up and down (see [`crate::vertical`]).
+    pub fn on_pressure(&mut self, t_ns: i64, hpa: f64) {
+        self.altimeter.on_pressure(t_ns, hpa);
     }
 
     /// A Bluetooth advertisement (`ScanResult`'s data and signal strength), at the time it was received;

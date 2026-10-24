@@ -128,6 +128,15 @@ fn main() -> anyhow::Result<()> {
             st.transfer_s.map_or(String::new(), |v| format!("{v:.0}"))
         )?;
     }
+    let mut f = std::fs::File::create(out.join("vertical.csv"))?;
+    writeln!(f, "start_ns,end_ns,change_m,kind")?;
+    for m in &r.vertical {
+        writeln!(
+            f,
+            "{},{},{:.1},{:?}",
+            m.start_ns, m.end_ns, m.change_m, m.kind
+        )?;
+    }
     let mut f = std::fs::File::create(out.join("timeline.csv"))?;
     writeln!(f, "start_ns,end_ns,doing")?;
     for s in &r.timeline {
