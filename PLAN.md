@@ -390,6 +390,8 @@ Open, roughly in order:
    If so, the family isn't Piper's (the rider: the L's CBTC predates Piper), unless Piper's were added to the L too.
    Approaching Lorimer St, the live dwell read stopped 0:48 just as the train arrived: a lurch found before the
    platform (a hold outside it, or braking taken for a stop), and the arrival's lurch not restarting it.
+   Taps: at Graham Av, a train start tapped by mistake for the stop, the stop tapped 1 s after it (a bit late);
+   drop the start if the rider hasn't deleted it in the app.
 
 8. The home elevator (`python/experiments/elevator.py`): 12 m in 25 s with the phone still is the elevator,
    with steps (4.9 to 6.4 m/s^2 std) the stairs; marks the start and end of a trip at home.
