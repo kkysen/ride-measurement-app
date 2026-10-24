@@ -1201,7 +1201,8 @@ impl Fusion {
     /// walking, then its tunnel pressure waves pass for a ride): on `214427` and `182135`, aboard the 2.
     pub fn vertical_moves(&self) -> Vec<crate::vertical::Move> {
         let s_ns = |s: f64| (s * 1e9) as i64;
-        let smoothed = self.smoothed();
+        // Smoothed only if needed: over a whole ride, that's smoothing it all again.
+        let smoothed = std::cell::OnceCell::new();
         crate::vertical::moves(self.altimeter.heights(), &self.step_windows, WALK_WINDOW_S)
             .into_iter()
             .filter(|m| {
@@ -1212,7 +1213,11 @@ impl Fusion {
                     .departures
                     .iter()
                     .any(|&d| d >= m.start_ns - s_ns(VERTICAL_DEPARTED_S) && d <= m.end_ns);
+                if departed {
+                    return false;
+                }
                 let speeds: Vec<f64> = smoothed
+                    .get_or_init(|| self.smoothed())
                     .iter()
                     .filter(|s| {
                         s.elapsed_realtime_ns >= m.start_ns && s.elapsed_realtime_ns <= m.end_ns
@@ -1221,7 +1226,7 @@ impl Fusion {
                     .collect();
                 let fast = !speeds.is_empty()
                     && speeds.iter().sum::<f64>() / speeds.len() as f64 > VERTICAL_VEHICLE_MPS;
-                !departed && !fast
+                !fast
             })
             .collect()
     }
