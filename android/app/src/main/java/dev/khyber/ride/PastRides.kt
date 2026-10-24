@@ -121,7 +121,7 @@ fun PastRidesScreen(onBack: () -> Unit, onShowTaps: (String) -> Unit, onShowRide
 
 /**
  * A past ride's map and graph, from an offline replay of the whole ride (`replay_session` in `crates/ffi`),
- * smoothed over all of it, not the live estimates from recording. Replayed once per app build, then cached.
+ * smoothed over all of it, not the live estimates from recording. Cached until the Rust core changes.
  * Not while recording: a replay takes hundreds of MB and a minute or more, which could cost the recording.
  */
 @Composable
@@ -138,7 +138,6 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
                 replaySession(
                     File(RecorderService.sessionsDir(), id).path,
                     File(context.filesDir, "replays").path,
-                    "${BuildConfig.VERSION_CODE} ${BuildConfig.VERSION_NAME}",
                 )
             }
         }.onSuccess { replay = it }.onFailure {

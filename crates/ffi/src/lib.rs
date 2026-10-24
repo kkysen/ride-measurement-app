@@ -687,7 +687,7 @@ pub struct RideReplay {
     pub stops: Vec<LiveStop>,
     #[prost(message, repeated, tag = "4")]
     pub timeline: Vec<TimelineSegment>,
-    /// What the cache was made by; not for the app.
+    /// The core the cache was made by ([`core_hash`]); not for the app.
     #[prost(string, tag = "5")]
     pub build: String,
     /// Unix ms minus elapsed-realtime ms over the ride, from its start, to show times on the clock.
@@ -695,15 +695,19 @@ pub struct RideReplay {
     pub clock_offset_ms: i64,
 }
 
-/// Replays a past ride, or reads the replay cached in `cache_dir` if `build` (the app's build) made it.
+/// A hash of the Rust that decides what a replay gives (see `build.rs`): app builds that don't change it
+/// keep their cached replays.
+#[uniffi::export]
+pub fn core_hash() -> String {
+    env!("RIDE_CORE_HASH").into()
+}
+
+/// Replays a past ride, or reads the replay cached in `cache_dir` if this core ([`core_hash`]) made it.
 /// The cache is per session and never in the session's directory, which is uploaded;
 /// tap edits and recompression don't change what a replay gives, so neither invalidates it.
 #[uniffi::export]
-pub fn replay_session(
-    session_dir: String,
-    cache_dir: String,
-    build: String,
-) -> Result<RideReplay, RideError> {
+pub fn replay_session(session_dir: String, cache_dir: String) -> Result<RideReplay, RideError> {
+    let build = core_hash();
     use prost::Message;
     let session = ride_session::read::Session::open(&session_dir)?;
     let id = session
