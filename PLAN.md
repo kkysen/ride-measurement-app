@@ -681,9 +681,10 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    (stopped, then not, then 2:28 once moving). Between trains, hold the speed; keep a stop alive while the phone
    is quiet, ungated underground like door cycles.
 2. Curves read as speeding up (40 to 55 mph before Jefferson St): subtract v times the gyro's yaw rate.
-3. Mostly done (`b7011be`, `51aa0fb`): the route and stop count only since the last walk off, none between
+3. Done (`b7011be`, `51aa0fb`, `0d40f12`): the route and stop count only since the last walk off, none between
    trains, where the station's lines are its complex's; a feed trip only matches its own line's platform.
-   On `193658`: nothing at 6 Av, then the L from Union Sq. Still open: the boarding stop itself (6 Av found no stop).
+   Boarding from the platform (a transfer's end) counts as a 30 s stop at the station the radio named then.
+   On `193658`: the L from 7:52:58 pm, just after boarding at 6 Av.
    Was: the line shown: 6 Av (1 train), Q at Union Sq and 3 Av, 14 St (L) on the 1's platform.
    Record the boarding stop (a train stopping while on the platform, then leaving with the rider) for the feeds'
    match; no line when two tie on one stop's timing; never a line that doesn't serve the station shown;
@@ -708,8 +709,8 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    from walking along the car at 90 St; the transfer status and the timeline's legs depend on it.
 10. 86 St on the 1 has no tagged cell; add it from the 2026-10-24 ride.
 11. Cell service under the East River on the L, and which cells serve it.
-12. The L's car beacons: the same family as the others? If so not Piper's (the L's CBTC predates Piper);
-    then fix `BleRecorder.kt`'s comment, which gives Piper beacons as its example.
+12. Done (`1ff3f9d`): the L's car beacons are the same family (header, UUID, the 100 byte, 1 m power `c5`, 1 g
+    at rest), under company ID `0x02fd`, not Apple's; `BleRecorder.kt` no longer calls them Piper's.
 13. Taps: drop the mistaken train start at Graham Av if not deleted in the app.
 14. Done (`4b14848`, `e300d7a`; 42 s to 5.3 s per replay on the laptop with `ae5a245` and `9a0d57c`): Past rides' "Ride" button replays the ride (`replay_session`), smoothed over
     all of it, on the live map and graph; cached per app build in the app's files. Not while recording, since
