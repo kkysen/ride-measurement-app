@@ -128,6 +128,11 @@ fn main() -> anyhow::Result<()> {
             st.transfer_s.map_or(String::new(), |v| format!("{v:.0}"))
         )?;
     }
+    let mut f = std::fs::File::create(out.join("timeline.csv"))?;
+    writeln!(f, "start_ns,end_ns,doing")?;
+    for s in &r.timeline {
+        writeln!(f, "{},{},{:?}", s.start_ns, s.end_ns, s.doing)?;
+    }
     let mut f = std::fs::File::create(out.join("door_cycles.csv"))?;
     writeln!(f, "open_ns,close_ns")?;
     for c in &r.door_cycles {

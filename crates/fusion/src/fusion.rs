@@ -389,6 +389,28 @@ const STAY_FIX_M: f64 = 50.0;
 const STAY_RADIUS_M: f64 = 100.0;
 const STAY_MOVING_MPS: f64 = 3.0;
 
+/// What the rider was doing over a stretch of the ride (see [`Fusion::timeline`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Segment {
+    pub start_ns: i64,
+    pub end_ns: i64,
+    pub doing: Doing,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Doing {
+    Walking,
+    /// In the subway, on a train or waiting for one, on this line if known.
+    Subway {
+        line: Option<String>,
+    },
+}
+
+/// Steps over less than this (s) aren't a walk on the timeline: shifting in a seat, a step to the doors.
+const TIMELINE_WALK_S: f64 = 8.0;
+/// The subway detector off for at most this (s) is the same subway ride on the timeline.
+const TIMELINE_SUBWAY_GAP_S: f64 = 60.0;
+
 /// What the rider is on, as well as the sensors tell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -886,6 +908,135 @@ impl Fusion {
                 .zip(opened)
                 .map(|(c, o)| (c.close_ns - o) as f64 * 1e-9),
         })
+    }
+
+    /// What the rider did over the ride so far, in time order: walking, and the subway, a leg per train,
+    /// which each walk off a train ends. Each leg's line is from all its stops: the feeds' trip matching the most
+    /// of them (see [`trips::Trips::route`]), else the one line serving every one of them, so a stop later in a
+    /// leg names the line for the whole leg. Nothing is shown out of the subway when not walking.
+    pub fn timeline(&self) -> Vec<Segment> {
+        let t = self.now_ns;
+        let s_ns = |s: f64| (s * 1e9) as i64;
+        let mut walks: Vec<(i64, i64)> = Vec::new();
+        for &(at, steps) in &self.step_windows {
+            if !steps {
+                continue;
+            }
+            let start = at - s_ns(WALK_WINDOW_S);
+            match walks.last_mut() {
+                Some(w) if start <= w.1 + s_ns(WALK_WINDOW_S) => w.1 = at,
+                _ => walks.push((start, at)),
+            }
+        }
+        walks.retain(|&(a, b)| b - a >= s_ns(TIMELINE_WALK_S));
+        let mut periods: Vec<(i64, i64)> = Vec::new();
+        let mut since = None;
+        for &(at, on) in &self.subway_changes {
+            match (on, since) {
+                // Back within a minute: the detector flickering (or an elevated stretch), the same ride.
+                (true, None)
+                    if periods
+                        .last()
+                        .is_some_and(|p| at - p.1 <= s_ns(TIMELINE_SUBWAY_GAP_S)) =>
+                {
+                    since = periods.pop().map(|p| p.0);
+                }
+                (true, None) => since = Some(at),
+                (false, Some(s)) => {
+                    periods.push((s, at));
+                    since = None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(s) = since {
+            periods.push((s, t));
+        }
+        let records = self.stop_records();
+        let mut segments: Vec<Segment> = Vec::new();
+        for (from, to) in periods {
+            let mut cuts: Vec<i64> = records
+                .iter()
+                .filter(|r| r.rider_left())
+                .filter_map(|r| r.alighted_ns)
+                .filter(|&a| a > from && a < to)
+                .collect();
+            cuts.push(to);
+            let mut start = from;
+            for end in cuts {
+                let line = self.leg_line(start, end);
+                // The leg, less the walks in it.
+                let mut at = start;
+                for &(a, b) in walks.iter().filter(|&&(a, b)| b > start && a < end) {
+                    if a > at {
+                        segments.push(Segment {
+                            start_ns: at,
+                            end_ns: a,
+                            doing: Doing::Subway { line: line.clone() },
+                        });
+                    }
+                    at = at.max(b);
+                }
+                if at < end {
+                    segments.push(Segment {
+                        start_ns: at,
+                        end_ns: end,
+                        doing: Doing::Subway { line },
+                    });
+                }
+                start = end;
+            }
+        }
+        segments.extend(walks.into_iter().map(|(a, b)| Segment {
+            start_ns: a,
+            end_ns: b,
+            doing: Doing::Walking,
+        }));
+        segments.sort_by_key(|s| s.start_ns);
+        // Pieces left by a walk too short to show, or a flicker, join up.
+        let mut joined: Vec<Segment> = Vec::new();
+        for s in segments {
+            match joined.last_mut() {
+                Some(last)
+                    if last.doing == s.doing
+                        && s.start_ns - last.end_ns <= s_ns(TIMELINE_SUBWAY_GAP_S) =>
+                {
+                    last.end_ns = last.end_ns.max(s.end_ns);
+                }
+                _ => joined.push(s),
+            }
+        }
+        joined
+    }
+
+    /// The line of a subway leg from its stops (see [`Self::timeline`]).
+    fn leg_line(&self, from: i64, to: i64) -> Option<String> {
+        let stops: Vec<trips::RiderStop> = self
+            .train_stops
+            .iter()
+            .filter(|(stop, _, in_subway)| *in_subway && stop.t_ns >= from && stop.t_ns <= to)
+            .filter_map(|(stop, station, _)| {
+                Some(trips::RiderStop {
+                    stopped_ns: stop.t_ns,
+                    departed_ns: self.departures.iter().copied().find(|&d| d > stop.t_ns),
+                    station: (*station)?,
+                })
+            })
+            .collect();
+        if stops.is_empty() {
+            return None;
+        }
+        if let Some(route) = self.trips.route(&stops, to) {
+            return Some(route);
+        }
+        let mut lines = stops[0].station.lines.clone();
+        for s in &stops[1..] {
+            lines.retain(|l| s.station.lines.contains(l));
+        }
+        match &lines[..] {
+            [line] => Some(line.clone()),
+            _ => None,
+        }
     }
 
     /// Since the rider walked off their train (s), while still in the subway: a transfer, or leaving the station.

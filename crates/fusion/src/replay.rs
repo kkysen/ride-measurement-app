@@ -31,6 +31,8 @@ pub struct Replay {
     pub subway_changes: Vec<(i64, bool)>,
     /// What the app would have shown, every [`STATUS_EVERY_NS`].
     pub statuses: Vec<(i64, crate::fusion::Status)>,
+    /// What the rider did over the ride (see [`Fusion::timeline`]), as of its end.
+    pub timeline: Vec<crate::fusion::Segment>,
 }
 
 pub const STATUS_EVERY_NS: i64 = 10_000_000_000;
@@ -299,6 +301,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
         departures: fusion.departures().to_vec(),
         step_windows: fusion.step_windows().to_vec(),
         subway_changes: fusion.subway_changes().to_vec(),
+        timeline: fusion.timeline(),
         statuses,
     })
 }
