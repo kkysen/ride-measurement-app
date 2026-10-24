@@ -9,11 +9,11 @@ use ride_fusion::speed_colors::{self, SpeedScale as Scale};
 
 uniffi::setup_scaffolding!();
 
-/// Which Rust core this is, to check the app is running the Rust it was built with: [`core_hash`],
-/// since the crate's own version is never bumped.
+/// The app version that last changed the Rust core (`scripts/bump-version.sh` sets it),
+/// to check the app is running the Rust it was built with.
 #[uniffi::export]
 pub fn core_version() -> String {
-    core_hash()
+    env!("CARGO_PKG_VERSION").into()
 }
 
 /// A fix more than this long after the previous one starts a new path segment (a tunnel).

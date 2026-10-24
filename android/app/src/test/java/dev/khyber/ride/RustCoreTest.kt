@@ -17,8 +17,8 @@ import uniffi.ride_ffi.trackMaxGapNs
 class RustCoreTest {
     @Test
     fun callsIntoRust() {
-        assertEquals(coreHash(), coreVersion())
-        assertTrue(coreVersion().matches(Regex("[0-9a-f]{16}")))
+        assertTrue(coreVersion().matches(Regex("""\d+\.\d+\.\d+""")))
+        assertTrue(coreHash().matches(Regex("[0-9a-f]{16}")))
     }
 
     @Test

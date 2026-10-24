@@ -53,6 +53,10 @@ adb-server:
     @if timeout 3 adb devices >/dev/null 2>&1; then echo "adb server already running"; \
     else (nohup adb nodaemon server start > target/adb-server.log 2>&1 &) ; sleep 1; timeout 3 adb devices; fi
 
+# Set the app's version for a new build on the phone, and the Rust core's to it if the Rust changed since.
+bump version:
+    scripts/bump-version.sh {{version}}
+
 # Install over wireless debugging (`just adb-server`, `adb pair` and `adb connect` first; see README).
 install: apk
     adb install -r {{apk}}
