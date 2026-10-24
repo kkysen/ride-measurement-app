@@ -404,12 +404,13 @@ impl Fusion {
             lines,
             at_station: s.at_station,
             route: s.route.clone(),
-            // The chime's family, or the model when what's heard and the lines leave one.
+            // The chime's family, or the model when what's heard and the lines leave one:
+            // the R62 family's chime alone isn't an R62.
             cars: s.car_type.and_then(|c| match (c.ntt, c.model) {
                 (Some(true), Some(m)) => Some(format!("NTT ({m})")),
                 (_, Some(m)) => Some(m.to_string()),
                 (Some(true), None) => Some("NTT".to_string()),
-                (Some(false), None) => Some("R62".to_string()),
+                (Some(false), None) => Some("R62-family chime".to_string()),
                 (None, None) => None,
             }),
             staying_s: s.staying_s,
