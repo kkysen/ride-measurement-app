@@ -3,7 +3,8 @@
 
 use ride_gnss::solve::Stats;
 use ride_session::proto::record::Payload;
-use ride_session::read::Session;
+use ride_session::proto::{AudioChunk, SensorChunk};
+use ride_session::read::{Session, StreamContents, read_stream_file};
 use ride_session::track::GPS_PROVIDER;
 
 use crate::doors::DoorCycle;
@@ -118,8 +119,11 @@ pub fn replay_with_progress(
     options: &Options,
     progress: &mut dyn FnMut(f64),
 ) -> anyhow::Result<Replay> {
-    let mut events: Vec<(i64, Event)> = Vec::new();
+    // Every input is merged by time, at equal times in this order: the IMU, pressure, records, audio.
+    // The big streams are read a chunk at a time as they're fed:
+    // reading a long ride's whole streams and collecting their events first took over a gigabyte.
     // The recorded streams the app feeds live, preferring uncalibrated (see `RecorderService.kt`).
+    let mut sensors: Vec<(Option<i32>, &str)> = Vec::new();
     for (name, fallback) in [
         ("accel_uncal", "accel"),
         ("gyro_uncal", "gyro"),
@@ -132,28 +136,12 @@ pub fn replay_with_progress(
         let Some(sensor_type) = stream.sensor.as_ref().map(|s| s.r#type) else {
             continue;
         };
-        for chunk in &session.read_stream(&stream.name)?.chunks {
-            let n = chunk.values_per_sample as usize;
-            let values: Vec<f32> = chunk.values().collect();
-            for (i, t) in chunk.timestamps_ns().into_iter().enumerate() {
-                match imu_sample(sensor_type, &values[i * n..(i + 1) * n]) {
-                    Some(ImuSample::Accel(a)) => events.push((t, Event::Accel(a))),
-                    Some(ImuSample::Gyro(w)) => events.push((t, Event::Gyro(w))),
-                    Some(ImuSample::Mag(b)) => events.push((t, Event::Mag(b))),
-                    None => {}
-                }
-            }
-        }
+        sensors.push((Some(sensor_type), &stream.name));
     }
     if session.info.streams.iter().any(|s| s.name == "pressure") {
-        for chunk in &session.read_stream("pressure")?.chunks {
-            let n = (chunk.values_per_sample as usize).max(1);
-            let values: Vec<f32> = chunk.values().collect();
-            for (i, t) in chunk.timestamps_ns().into_iter().enumerate() {
-                events.push((t, Event::Pressure(f64::from(values[i * n]))));
-            }
-        }
+        sensors.push((None, "pressure"));
     }
+    let mut records: Vec<(i64, Event)> = Vec::new();
     for stream in ["location", "gnss", "radio", ride_session::transit::STREAM] {
         if !session.stream_path(stream).exists() {
             continue;
@@ -176,49 +164,51 @@ pub fn replay_with_progress(
                         speed: l.speed_meters_per_second.map(f64::from),
                         speed_sigma: l.speed_accuracy_meters_per_second.map(f64::from),
                     };
-                    events.push((fix.elapsed_realtime_ns, Event::Fix(Box::new(fix))));
+                    records.push((fix.elapsed_realtime_ns, Event::Fix(Box::new(fix))));
                 }
                 // Android's own location, as the app passes it on.
-                Some(Payload::Location(l)) if l.provider == "fused" && !l.is_mock => events.push((
-                    l.elapsed_realtime_nanos,
-                    Event::NetworkFix(Box::new((
-                        l.latitude_degrees,
-                        l.longitude_degrees,
-                        l.horizontal_accuracy_meters.map(f64::from),
-                    ))),
-                )),
+                Some(Payload::Location(l)) if l.provider == "fused" && !l.is_mock => {
+                    records.push((
+                        l.elapsed_realtime_nanos,
+                        Event::NetworkFix(Box::new((
+                            l.latitude_degrees,
+                            l.longitude_degrees,
+                            l.horizontal_accuracy_meters.map(f64::from),
+                        ))),
+                    ))
+                }
                 Some(Payload::GnssMeasurements(m)) => {
                     let t = m
                         .clock
                         .as_ref()
                         .and_then(|c| c.elapsed_realtime_nanos)
                         .unwrap_or(received);
-                    events.push((t, Event::Measurements(Box::new(m))));
+                    records.push((t, Event::Measurements(Box::new(m))));
                 }
                 Some(Payload::GnssNavigationMessage(m)) => {
-                    events.push((received, Event::Navigation(Box::new(m))))
+                    records.push((received, Event::Navigation(Box::new(m))))
                 }
                 // At the time the app recorded it, which is also when it fed it live.
-                Some(Payload::WifiScan(w)) => events.push((
+                Some(Payload::WifiScan(w)) => records.push((
                     received,
                     Event::WifiScan(w.results.into_iter().map(|r| r.ssid).collect()),
                 )),
                 // Bluetooth advertisements, at each result's own time; the subway cars' beacons are used.
                 Some(Payload::BleScan(b)) => {
                     for r in b.results {
-                        events.push((
+                        records.push((
                             r.timestamp_elapsed_realtime_ns,
                             Event::Ble(Box::new((r.advertising_data, r.rssi))),
                         ));
                     }
                 }
                 // The MTA's feeds, when each response arrived, as the app passes them on.
-                Some(Payload::GtfsRealtime(f)) if f.http_status == 200 => events.push((
+                Some(Payload::GtfsRealtime(f)) if f.http_status == 200 => records.push((
                     received,
                     Event::Transit(Box::new((f.body, f.request_unix_ms))),
                 )),
                 // The registered LTE cell, as the app passes it on.
-                Some(Payload::CellInfo(c)) => events.push((
+                Some(Payload::CellInfo(c)) => records.push((
                     received,
                     Event::Cell(
                         c.cells
@@ -239,51 +229,45 @@ pub fn replay_with_progress(
         .find(|s| s.name == "audio")
         .and_then(|s| s.audio.as_ref())
         .map(|a| a.sample_rate_hz as u32);
-    if let Some(rate) = audio_rate.filter(|_| !options.ignore_audio)
-        && session.stream_path("audio").exists()
-    {
-        let mut clock: Option<(i64, i64)> = None;
-        for chunk in session.read_audio("audio")?.chunks {
-            let samples: Vec<i16> = chunk
-                .pcm_s16le
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|&b| i16::from_le_bytes(b))
-                .collect();
-            let timestamps: Vec<(i64, i64)> = chunk
-                .timestamps
-                .iter()
-                .map(|t| (t.frame_position, t.boottime_ns))
-                .collect();
-            clock = timestamps.last().copied().or(clock);
-            let Some((f0, t0)) = clock else { continue };
-            for (i, read) in samples.chunks(AUDIO_READ_FRAMES).enumerate() {
-                let first = chunk.first_frame + (i * AUDIO_READ_FRAMES) as i64;
-                let last = first + read.len() as i64;
-                let arrived = t0 + ((last - f0) as f64 / f64::from(rate) * 1e9) as i64;
-                events.push((
-                    arrived,
-                    Event::Audio(
-                        rate,
-                        Box::new(AudioSamples {
-                            first_frame: first,
-                            samples: read.to_vec(),
-                            // The app takes one timestamp per read.
-                            timestamps: timestamps.get(i).copied().into_iter().collect(),
-                        }),
-                    ),
-                ));
-            }
-        }
-    }
-    // Stable, so at equal times sensors (pushed first) come before GNSS.
-    events.sort_by_key(|(t, _)| *t);
+    // Stable, like the merge: records at equal times stay in the order read.
+    records.sort_by_key(|(t, _)| *t);
     if let Some(cut) = options.gnss_outages {
-        events.retain(|(t, e)| {
+        records.retain(|(t, e)| {
             !(matches!(e, Event::Fix(_) | Event::Measurements(_)) && cut.covers(*t))
         });
     }
+
+    let mut sources: Vec<Source> = Vec::new();
+    for &(sensor_type, name) in &sensors {
+        sources.push(in_order(
+            || {
+                Ok(Box::new(sensor_events(
+                    sensor_type,
+                    session.stream_chunks(name)?,
+                )))
+            },
+            || sensor_events(sensor_type, chunks_of(session.read_stream(name)?)).collect(),
+        )?);
+    }
+    let records_len = records.len();
+    sources.push((records_len, Box::new(records.into_iter())));
+    if let Some(rate) = audio_rate.filter(|_| !options.ignore_audio)
+        && session.stream_path("audio").exists()
+    {
+        // Still FLAC where recompressed: each chunk is decoded only as it's fed.
+        let path = session.stream_path("audio");
+        sources.push(in_order(
+            || {
+                Ok(Box::new(audio_events(
+                    rate,
+                    session.stream_chunks("audio")?,
+                )))
+            },
+            || audio_events(rate, chunks_of(read_stream_file(&path)?)).collect(),
+        )?);
+    }
+    let total = sources.iter().map(|s| s.0).sum::<usize>().max(1);
+    let events = merge(sources.into_iter().map(|s| s.1).collect());
 
     let mut fusion = Fusion::whole_ride();
     fusion.set_max_speed(options.max_speed_mps);
@@ -292,11 +276,11 @@ pub fn replay_with_progress(
         fusion.navigator_mut().add_ephemeris(eph);
     }
     let mut statuses = Vec::new();
-    let mut next_status = events.first().map_or(0, |e| e.0);
-    let total = events.len().max(1);
+    let mut events = events.peekable();
+    let mut next_status = events.peek().map_or(0, |e| e.0);
     let every = total.div_ceil(100);
     progress(0.0);
-    for (i, (t, e)) in events.into_iter().enumerate() {
+    for (i, (t, e)) in events.enumerate() {
         if i % every == 0 && i > 0 {
             progress(i as f64 / total as f64);
         }
@@ -337,5 +321,157 @@ pub fn replay_with_progress(
         timeline: fusion.timeline(),
         vertical: fusion.vertical_moves(),
         statuses,
+    })
+}
+
+/// One input's events in time order, or the error that ended its stream.
+type Events<'a> = Box<dyn Iterator<Item = anyhow::Result<(i64, Event)>> + 'a>;
+
+/// One input's events in time order, and how many there are.
+type Source<'a> = (usize, Box<dyn Iterator<Item = (i64, Event)> + 'a>);
+
+fn chunks_of<C>(contents: StreamContents<C>) -> impl Iterator<Item = anyhow::Result<C>> {
+    contents.chunks.into_iter().map(Ok)
+}
+
+/// The events of a stream read a chunk at a time by `stream`, read twice: once to count them and check their order.
+/// Collected and sorted (stably, so equal times keep their order) if they're out of order,
+/// and from `read`, the whole file, if the stream is damaged: it reads past damage, where `stream` stops.
+fn in_order<'a>(
+    stream: impl Fn() -> anyhow::Result<Events<'a>>,
+    read: impl FnOnce() -> anyhow::Result<Vec<(i64, Event)>>,
+) -> anyhow::Result<Source<'a>> {
+    let mut len = 0;
+    let mut last = i64::MIN;
+    let mut sorted = true;
+    for event in stream()? {
+        let Ok((t, _)) = event else {
+            let mut events = read()?;
+            events.sort_by_key(|(t, _)| *t);
+            return Ok((events.len(), Box::new(events.into_iter())));
+        };
+        len += 1;
+        sorted &= t >= last;
+        last = t;
+    }
+    let events = stream()?.map_while(Result::ok);
+    if sorted {
+        Ok((len, Box::new(events)))
+    } else {
+        let mut events: Vec<_> = events.collect();
+        events.sort_by_key(|(t, _)| *t);
+        Ok((len, Box::new(events.into_iter())))
+    }
+}
+
+/// Merges sources by time; at equal times, earlier sources come first,
+/// the same order as a stable sort of all of them one after another.
+fn merge<'a>(
+    sources: Vec<Box<dyn Iterator<Item = (i64, Event)> + 'a>>,
+) -> impl Iterator<Item = (i64, Event)> + 'a {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    let mut sources: Vec<_> = sources.into_iter().map(Iterator::peekable).collect();
+    let mut heads: BinaryHeap<Reverse<(i64, usize)>> = sources
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(i, s)| s.peek().map(|e| Reverse((e.0, i))))
+        .collect();
+    std::iter::from_fn(move || {
+        let Reverse((_, i)) = heads.pop()?;
+        let event = sources[i].next()?;
+        if let Some(e) = sources[i].peek() {
+            heads.push(Reverse((e.0, i)));
+        }
+        Some(event)
+    })
+}
+
+/// An IMU stream's events (`Some` of its sensor type), or the barometer's.
+fn sensor_events<'a>(
+    sensor_type: Option<i32>,
+    chunks: impl Iterator<Item = anyhow::Result<SensorChunk>> + 'a,
+) -> impl Iterator<Item = anyhow::Result<(i64, Event)>> + 'a {
+    chunks.flat_map(move |chunk| {
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(e) => return vec![Err(e)],
+        };
+        let values: Vec<f32> = chunk.values().collect();
+        let timestamps = chunk.timestamps_ns().into_iter().enumerate();
+        match sensor_type {
+            Some(sensor_type) => {
+                let n = chunk.values_per_sample as usize;
+                timestamps
+                    .filter_map(|(i, t)| {
+                        match imu_sample(sensor_type, &values[i * n..(i + 1) * n]) {
+                            Some(ImuSample::Accel(a)) => Some(Ok((t, Event::Accel(a)))),
+                            Some(ImuSample::Gyro(w)) => Some(Ok((t, Event::Gyro(w)))),
+                            Some(ImuSample::Mag(b)) => Some(Ok((t, Event::Mag(b)))),
+                            None => None,
+                        }
+                    })
+                    .collect()
+            }
+            None => {
+                let n = (chunk.values_per_sample as usize).max(1);
+                timestamps
+                    .map(|(i, t)| Ok((t, Event::Pressure(f64::from(values[i * n])))))
+                    .collect()
+            }
+        }
+    })
+}
+
+/// Audio as the app reads it: each read arrives when its last frame was recorded.
+/// A chunk whose FLAC doesn't decode is left out, as when reading the stream.
+fn audio_events<'a>(
+    rate: u32,
+    chunks: impl Iterator<Item = anyhow::Result<AudioChunk>> + 'a,
+) -> impl Iterator<Item = anyhow::Result<(i64, Event)>> + 'a {
+    let mut clock: Option<(i64, i64)> = None;
+    chunks.flat_map(move |chunk| {
+        let mut chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(e) => return vec![Err(e)],
+        };
+        let mut events = Vec::new();
+        if !ride_session::audio_flac::restore(&mut chunk) {
+            return events;
+        }
+        let samples: Vec<i16> = chunk
+            .pcm_s16le
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&b| i16::from_le_bytes(b))
+            .collect();
+        let timestamps: Vec<(i64, i64)> = chunk
+            .timestamps
+            .iter()
+            .map(|t| (t.frame_position, t.boottime_ns))
+            .collect();
+        clock = timestamps.last().copied().or(clock);
+        let Some((f0, t0)) = clock else {
+            return events;
+        };
+        for (i, read) in samples.chunks(AUDIO_READ_FRAMES).enumerate() {
+            let first = chunk.first_frame + (i * AUDIO_READ_FRAMES) as i64;
+            let last = first + read.len() as i64;
+            let arrived = t0 + ((last - f0) as f64 / f64::from(rate) * 1e9) as i64;
+            events.push(Ok((
+                arrived,
+                Event::Audio(
+                    rate,
+                    Box::new(AudioSamples {
+                        first_frame: first,
+                        samples: read.to_vec(),
+                        // The app takes one timestamp per read.
+                        timestamps: timestamps.get(i).copied().into_iter().collect(),
+                    }),
+                ),
+            )));
+        }
+        events
     })
 }
