@@ -91,8 +91,44 @@ pub fn map(
         }
     }
 
+    // The replayed path, joined to the track underground (`Replay::positions`), thinned to one point a second.
+    // Each point has the same shape as a fix, with the GPS fields left empty.
+    let utc_offset_ms = fixes[0].time_ms as f64 - fixes[0].elapsed_realtime_ns as f64 * 1e-6;
+    let mut positions = Vec::new();
+    let mut prev: Option<(Option<f64>, Option<f64>)> = None;
+    let mut last_ns: Option<i64> = None;
+    for (i, p) in replayed.positions.iter().enumerate() {
+        let t = p.elapsed_realtime_ns;
+        if last_ns.is_some_and(|l| t - l < 1_000_000_000) && i + 1 < replayed.positions.len() {
+            continue;
+        }
+        last_ns = Some(t);
+        let e = nearest_smoothed(&replayed.smoothed, t);
+        let speed = e.map(|e| e.speed_mps);
+        let accel = e.map(|e| e.accel_mps2);
+        let (edge, edge_a) = prev.map_or((speed, accel), |(s, a)| {
+            (edge_speed(s, speed), edge_accel(a, accel))
+        });
+        prev = Some((speed, accel));
+        positions.push(json!([
+            p.lat,
+            p.lon,
+            (t - start_ns) as f64 * 1e-9,
+            (utc_offset_ms + t as f64 * 1e-6).round() as i64,
+            null,
+            null,
+            p.sigma_m,
+            speed,
+            e.map(|e| e.sigma_mps),
+            SpeedScale::ALL.map(|s| s.band(edge)),
+            accel,
+            accel_band(edge_a),
+        ]));
+    }
+
     let data = json!({
         "session": session.info.session_id,
+        "positions": positions,
         "segments": segments
             .iter()
             .map(|s| {
@@ -129,8 +165,9 @@ pub fn map(
     let html = TEMPLATE.replacen(DATA_PLACEHOLDER, &data, 1);
     std::fs::write(output, html).with_context(|| format!("writing {}", output.display()))?;
     eprintln!(
-        "{}: {points} GPS fixes in {} segments, {} events",
+        "{}: {} fused positions, {points} GPS fixes in {} segments, {} events",
         output.display(),
+        positions.len(),
         segments.len(),
         events.len()
     );
@@ -161,6 +198,17 @@ fn point_json(
         fused.map(|e| e.accel_mps2),
         accel_band(edge_accel),
     ])
+}
+
+/// The smoothed speed nearest in time to `t`, if within 2 s.
+fn nearest_smoothed(smoothed: &[SmoothedSpeed], t: i64) -> Option<&SmoothedSpeed> {
+    let i = smoothed.partition_point(|s| s.elapsed_realtime_ns < t);
+    [i.checked_sub(1), Some(i)]
+        .into_iter()
+        .flatten()
+        .filter_map(|i| smoothed.get(i))
+        .min_by_key(|s| (s.elapsed_realtime_ns - t).abs())
+        .filter(|s| (s.elapsed_realtime_ns - t).abs() <= 2_000_000_000)
 }
 
 fn css_color(argb: u32) -> String {
@@ -303,6 +351,10 @@ mod tests {
         }
         assert_eq!(data["colorBy"], "speed");
         assert_eq!(data["accelRamp"].as_array().unwrap().len(), 9);
+        // The fused path, about one point a second over the 2 minutes, GPS fields empty.
+        let positions = data["positions"].as_array().unwrap();
+        assert!(positions.len() > 60, "{}", positions.len());
+        assert!(positions.iter().all(|p| p[4].is_null() && p[9].is_array()));
         assert_eq!(data["events"][0]["label"], "boarded");
         assert_eq!(data["events"][1]["label"], "note: </script><b>not html</b>");
     }

@@ -63,26 +63,30 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
 }).addTo(map);
 
-// No GPS between segments (tunnels): a dashed line, not a guess at the path.
+// The fused path (`Replay::positions`): GNSS and dead reckoning, joined to the track underground.
+const fused = data.positions;
+const fusedSet = new Set(fused);
+// A white casing so the path reads on any tiles.
+L.polyline(fused.map(p => [p[0], p[1]]), { color: "#ffffff", weight: 8, opacity: 0.9, interactive: false }).addTo(map);
+const path = L.layerGroup().addTo(map);
+// The GPS fixes themselves, as a separate layer: dots, with a dashed line across gaps (tunnels).
+const gps = L.layerGroup().addTo(map);
 for (let i = 1; i < data.segments.length; i++) {
   const a = data.segments[i - 1].at(-1), b = data.segments[i][0];
-  L.polyline([[a[0], a[1]], [b[0], b[1]]], { color: data.unknownColor, weight: 2, dashArray: "6 6", interactive: false }).addTo(map);
+  L.polyline([[a[0], a[1]], [b[0], b[1]]], { color: data.unknownColor, weight: 1, dashArray: "4 6", interactive: false }).addTo(gps);
 }
-for (const seg of data.segments) {
-  // A white casing so the path reads on any tiles.
-  L.polyline(seg.map(p => [p[0], p[1]]), { color: "#ffffff", weight: 8, opacity: 0.9, interactive: false }).addTo(map);
-}
-const path = L.layerGroup().addTo(map);
 function drawPath() {
   path.clearLayers();
-  for (const seg of data.segments) {
-    const latlngs = seg.map(p => [p[0], p[1]]);
-    for (let i = 1; i < seg.length; i++) {
-      L.polyline([latlngs[i - 1], latlngs[i]], { color: colorOf(seg[i]), weight: 4, interactive: false }).addTo(path);
-    }
-    if (seg.length === 1) L.circleMarker(latlngs[0], { radius: 3, color: colorOf(seg[0]), interactive: false }).addTo(path);
+  gps.eachLayer(l => { if (l instanceof L.CircleMarker) gps.removeLayer(l); });
+  const latlngs = fused.map(p => [p[0], p[1]]);
+  for (let i = 1; i < fused.length; i++) {
+    L.polyline([latlngs[i - 1], latlngs[i]], { color: colorOf(fused[i]), weight: 4, interactive: false }).addTo(path);
+  }
+  for (const p of pts) {
+    L.circleMarker([p[0], p[1]], { radius: 2, weight: 1, color: "#1f1f1d", fillColor: colorOf(p), fillOpacity: 1, interactive: false }).addTo(gps);
   }
 }
+L.control.layers(null, { "fused path": path, "GPS fixes": gps }, { position: "bottomright" }).addTo(map);
 for (const e of data.events) {
   L.circleMarker([e.lat, e.lon], { radius: 6, color: "#ffffff", weight: 2, fillColor: "#1f1f1d", fillOpacity: 1 })
     // As text, not HTML: notes are free text.
@@ -91,7 +95,7 @@ for (const e of data.events) {
     }))
     .addTo(map);
 }
-map.fitBounds(L.latLngBounds(pts.map(p => [p[0], p[1]])), { padding: [24, 24] });
+map.fitBounds(L.latLngBounds(pts.concat(fused).map(p => [p[0], p[1]])), { padding: [24, 24] });
 
 const cursor = L.circleMarker([0, 0], { radius: 7, color: "#ffffff", weight: 2, fillColor: "#1f1f1d", fillOpacity: 1, interactive: false });
 const fmt = (v, d) => v == null ? "unknown" : v.toFixed(d);
@@ -101,13 +105,14 @@ function show(p) {
   document.getElementById("info").innerHTML =
     `<div class="speed">${fmt(p[7] == null ? null : p[7] * KMH, 1)} km/h · ${p[10] != null && p[10] >= 0 ? "+" : ""}${fmt(p[10], 2)} m/s²</div>` +
     `<div class="muted">smoothed (IMU and GNSS) ${fmt(p[7] == null ? null : p[7] * KMH, 1)} ± ${fmt(p[8] == null ? null : p[8] * KMH, 1)} km/h, ${fmt(p[10], 2)} m/s²</div>` +
-    `<div class="muted">GPS ${fmt(p[4] == null ? null : p[4] * KMH, 1)} ± ${fmt(p[5] == null ? null : p[5] * KMH, 1)} km/h</div>` +
+    (fusedSet.has(p) ? `<div class="muted">fused path</div>` :
+      `<div class="muted">GPS ${fmt(p[4] == null ? null : p[4] * KMH, 1)} ± ${fmt(p[5] == null ? null : p[5] * KMH, 1)} km/h</div>`) +
     `<div class="muted">${time} · ${fmt(p[2], 0)} s in · position ± ${fmt(p[6], 0)} m</div>`;
 }
 // The fix nearest the pointer, if it's within a finger's width.
 function nearest(e) {
   let best = null, bestD = 30;
-  for (const p of pts) {
+  for (const p of (map.hasLayer(gps) ? pts.concat(fused) : fused)) {
     const d = map.latLngToContainerPoint([p[0], p[1]]).distanceTo(e.containerPoint);
     if (d < bestD) { best = p; bestD = d; }
   }
@@ -126,7 +131,7 @@ legend.innerHTML =
   `</select></label>` +
   `<span id="accel-label" class="muted">· m/s², braking to speeding up</span>` +
   `<div class="bands"></div>` +
-  `<div class="muted"><span class="gap"></span>no GPS · dark gray: no smoothed speed</div>`;
+  `<div class="muted">line: fused path · dots: GPS fixes · <span class="gap"></span>no GPS · dark gray: no smoothed speed</div>`;
 const select = document.getElementById("scale");
 select.value = data.scale == null ? "auto" : String(scale);
 const colorBySelect = document.getElementById("color-by");

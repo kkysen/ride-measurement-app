@@ -76,7 +76,7 @@ plot session stream:
 wav session:
     cargo run -q --bin ride -- wav {{session}} {{session}}/audio.wav
 
-# Write `<session>/map.html`: the GPS path colored by speed, with your manual events marked.
+# Write `<session>/map.html`: the fused path (joined to the track underground) colored by speed, the GPS fixes as dots, with your manual events marked.
 map session:
     cargo run -q --bin ride -- map {{session}}
 
