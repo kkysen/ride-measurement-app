@@ -1,5 +1,8 @@
-//! The subway cars' own Bluetooth beacons: iBeacons with the UUID `e2c56db5-dffb-48d2-b060-d0f5a710xxxx`,
-//! one per car (the last two bytes name the car), on the 7's R188s and B Division cars alike.
+//! The subway cars' own Bluetooth beacons: iBeacon-shaped manufacturer data, but under company ID `0x02fd`,
+//! not Apple's, with the UUID `e2c56db5-dffb-48d2-b060-d0f5a710xxxx`, one per car (the last two bytes name
+//! the car), on the 7's R188s, B Division cars, and the L's alike: the same header, the same 100 byte and 1 m power
+//! (`c5`), and 1 g at rest on `20261020-184134` (7, F) and `20261023-193658` (L). The L's CBTC predates Piper's,
+//! so they aren't Piper's.
 //! Their "major" and "minor" fields carry the car's own accelerometer, 64 counts per g, about twice a second:
 //! major's two bytes and minor's first are x, y, z (signed); minor's second is 100 and the last byte the 1 m power.
 //! (`python/experiments/train_beacons.py`; on `184134` the x axis follows GNSS's acceleration, correlation 0.81.)

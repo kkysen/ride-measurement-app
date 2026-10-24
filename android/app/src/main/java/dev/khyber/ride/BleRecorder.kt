@@ -21,7 +21,7 @@ import dev.khyber.ride.proto.BleScanResults
 
 /**
  * Bluetooth LE advertisements around the phone, into the radio stream: beacons in stations and trains
- * (e.g. Piper beacons on B Division subway cars) are fingerprints for where the phone is, underground too.
+ * (e.g. the subway cars' own beacons, see `crates/fusion/src/car_beacons.rs`) are fingerprints for where the phone is, underground too.
  * Every advertisement is kept whole, so any beacon format can be decoded later.
  * Scanning follows Bluetooth: it starts whenever Bluetooth is turned on, mid-ride too, and ends when it's turned off.
  */
