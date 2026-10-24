@@ -195,7 +195,7 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
         val samples = remember(r) { r.smoothed.map { LiveSeries.Sample(it.elapsedRealtimeNs, it.speedMps, it.accelMps2) } }
         SpeedGraphScreen(samples, r.stops, r.timeline, pastClockOffsetMs = r.clockOffsetMs, onBack, toggle)
     } else {
-        val points = remember(r) {
+        val fixes = remember(r) {
             r.track.map {
                 LiveTrack.Point(
                     it.elapsedRealtimeNs, it.timeMs, it.lat, it.lon,
@@ -209,6 +209,26 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
                 )
             }
         }
-        TrackMapScreen(points, live = false, onBack, toggle)
+        // The fused path (Rust's `Replay::map_path`, joined to the subway track underground), with the GPS fixes
+        // over it; a ride with no fused path shows its fixes alone.
+        val points = remember(r) {
+            r.positions.map {
+                LiveTrack.Point(
+                    it.elapsedRealtimeNs, r.clockOffsetMs + it.elapsedRealtimeNs / 1_000_000, it.lat, it.lon,
+                    fusedSpeedMps = null,
+                    gpsSpeedMps = null,
+                    gpsSpeedAccuracyMps = null,
+                    accuracyM = it.sigmaM,
+                    startsSegment = false,
+                    smoothedSpeedMps = it.speedMps,
+                    smoothedAccelMps2 = it.accelMps2,
+                )
+            }
+        }
+        if (points.isEmpty()) {
+            TrackMapScreen(fixes, live = false, onBack, toggle)
+        } else {
+            TrackMapScreen(points, live = false, onBack, toggle, gpsFixes = fixes)
+        }
     }
 }

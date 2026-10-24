@@ -62,9 +62,17 @@ fun LiveMapScreen(onBack: () -> Unit) {
 /**
  * A GPS path colored by speed or acceleration: the current recording's ([live], following the newest fix),
  * or a past ride's, shown whole.
+ * A past ride's [points] are its fused path (joined to the subway track underground), and [gpsFixes] the GPS fixes
+ * themselves, drawn as a thin dark line over it.
  */
 @Composable
-fun TrackMapScreen(points: List<LiveTrack.Point>, live: Boolean, onBack: () -> Unit, extraButton: @Composable () -> Unit = {}) {
+fun TrackMapScreen(
+    points: List<LiveTrack.Point>,
+    live: Boolean,
+    onBack: () -> Unit,
+    extraButton: @Composable () -> Unit = {},
+    gpsFixes: List<LiveTrack.Point> = emptyList(),
+) {
     var follow by remember { mutableStateOf(live) }
     var selected by remember { mutableStateOf<LiveTrack.Point?>(null) }
     // Null is automatic, from the top speed so far.
@@ -107,7 +115,8 @@ fun TrackMapScreen(points: List<LiveTrack.Point>, live: Boolean, onBack: () -> U
                         scale.bandsKmh.joinToString(", ") { "%.0f".format(Units.speedFromKmh(it.toDouble())) } +
                         "+ ${Units.speedUnit} (${scale.name} scale); "
                 }
-            ) + "dark gray: no live speed; dashed: no GPS (tunnel)",
+            ) + "dark gray: no live speed; dashed: no GPS (tunnel)" +
+                if (gpsFixes.isNotEmpty()) "; thin dark line: GPS fixes" else "",
             style = MaterialTheme.typography.bodySmall,
         )
         // The map view draws past its own bounds (over the text above, and flickering below while tiles load).
@@ -136,6 +145,7 @@ fun TrackMapScreen(points: List<LiveTrack.Point>, live: Boolean, onBack: () -> U
                     if (view !is MapView) return@AndroidView
                     try {
                         track.sync(points, scale.scale, colorByAccel)
+                        track.syncGps(gpsFixes)
                         val last = points.lastOrNull()
                         // Pans only once the newest fix nears the edge, so the map isn't always moving and
                         // cancelling tiles that are still loading.
@@ -212,6 +222,7 @@ private fun newMapView(
     map.overlays.add(track.gaps)
     map.overlays.add(track.casings)
     map.overlays.add(track.colored)
+    map.overlays.add(track.gps)
     return map
 }
 
@@ -220,6 +231,9 @@ private class TrackOverlays {
     val gaps = FolderOverlay()
     val casings = FolderOverlay()
     val colored = FolderOverlay()
+    /** The GPS fixes alone, one thin line per segment, when the path is the fused one. */
+    val gps = FolderOverlay()
+    private var gpsDrawn = emptyList<LiveTrack.Point>()
     private var drawn = emptyList<LiveTrack.Point>()
     /** After each drawn point: how many overlays there were, and how many points the open lines had. */
     private data class Mark(val gaps: Int, val casings: Int, val colored: Int, val casingPoints: Int, val linePoints: Int, val lineColor: Int)
@@ -248,6 +262,17 @@ private class TrackOverlays {
             marks.add(Mark(gaps.items.size, casings.items.size, colored.items.size, casing?.actualPoints?.size ?: 0, line?.actualPoints?.size ?: 0, lineColor))
         }
         drawn = points
+    }
+
+    fun syncGps(fixes: List<LiveTrack.Point>) {
+        if (fixes == gpsDrawn) return
+        gps.items.clear()
+        var line: Polyline? = null
+        for (p in fixes) {
+            if (line == null || p.startsSegment) line = polyline(Color.DKGRAY, 3f).also { gps.add(it) }
+            line.addPoint(GeoPoint(p.lat, p.lon))
+        }
+        gpsDrawn = fixes
     }
 
     /** Back to just after the first `n` points were drawn. */

@@ -96,14 +96,8 @@ pub fn map(
     let utc_offset_ms = fixes[0].time_ms as f64 - fixes[0].elapsed_realtime_ns as f64 * 1e-6;
     let mut positions = Vec::new();
     let mut prev: Option<(Option<f64>, Option<f64>)> = None;
-    let mut last_ns: Option<i64> = None;
-    for (i, p) in replayed.positions.iter().enumerate() {
+    for (p, e) in replayed.map_path(1_000_000_000) {
         let t = p.elapsed_realtime_ns;
-        if last_ns.is_some_and(|l| t - l < 1_000_000_000) && i + 1 < replayed.positions.len() {
-            continue;
-        }
-        last_ns = Some(t);
-        let e = nearest_smoothed(&replayed.smoothed, t);
         let speed = e.map(|e| e.speed_mps);
         let accel = e.map(|e| e.accel_mps2);
         let (edge, edge_a) = prev.map_or((speed, accel), |(s, a)| {
@@ -198,17 +192,6 @@ fn point_json(
         fused.map(|e| e.accel_mps2),
         accel_band(edge_accel),
     ])
-}
-
-/// The smoothed speed nearest in time to `t`, if within 2 s.
-fn nearest_smoothed(smoothed: &[SmoothedSpeed], t: i64) -> Option<&SmoothedSpeed> {
-    let i = smoothed.partition_point(|s| s.elapsed_realtime_ns < t);
-    [i.checked_sub(1), Some(i)]
-        .into_iter()
-        .flatten()
-        .filter_map(|i| smoothed.get(i))
-        .min_by_key(|s| (s.elapsed_realtime_ns - t).abs())
-        .filter(|s| (s.elapsed_realtime_ns - t).abs() <= 2_000_000_000)
 }
 
 fn css_color(argb: u32) -> String {

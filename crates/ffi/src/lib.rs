@@ -682,6 +682,25 @@ pub struct ReplayFix {
     pub accel_mps2: Option<f64>,
 }
 
+/// A point of a past ride's fused path (`ride_fusion::replay::Replay::map_path`):
+/// GNSS and dead reckoning, joined to the subway track underground.
+#[derive(Clone, PartialEq, uniffi::Record, prost::Message)]
+pub struct ReplayPosition {
+    #[prost(int64, tag = "1")]
+    pub elapsed_realtime_ns: i64,
+    #[prost(double, tag = "2")]
+    pub lat: f64,
+    #[prost(double, tag = "3")]
+    pub lon: f64,
+    /// One sigma (m).
+    #[prost(double, tag = "4")]
+    pub sigma_m: f64,
+    #[prost(double, optional, tag = "5")]
+    pub speed_mps: Option<f64>,
+    #[prost(double, optional, tag = "6")]
+    pub accel_mps2: Option<f64>,
+}
+
 /// A past ride replayed and smoothed over all of it (`ride_fusion::replay`), for its map and graph.
 #[derive(Clone, PartialEq, uniffi::Record, prost::Message)]
 pub struct RideReplay {
@@ -699,6 +718,9 @@ pub struct RideReplay {
     /// Unix ms minus elapsed-realtime ms over the ride, from its start, to show times on the clock.
     #[prost(int64, tag = "6")]
     pub clock_offset_ms: i64,
+    /// The fused path, one point a second; [`Self::track`] is the GPS fixes alone.
+    #[prost(message, repeated, tag = "7")]
+    pub positions: Vec<ReplayPosition>,
 }
 
 /// A hash of the Rust that decides what a replay gives (see `build.rs`): app builds that don't change it
@@ -772,7 +794,20 @@ pub fn replay_session(
             })
         })
         .collect();
+    let positions = r
+        .map_path(1_000_000_000)
+        .into_iter()
+        .map(|(p, s)| ReplayPosition {
+            elapsed_realtime_ns: p.elapsed_realtime_ns,
+            lat: p.lat,
+            lon: p.lon,
+            sigma_m: p.sigma_m,
+            speed_mps: s.map(|s| s.speed_mps),
+            accel_mps2: s.map(|s| s.accel_mps2),
+        })
+        .collect();
     let replay = RideReplay {
+        positions,
         smoothed: r.smoothed.into_iter().map(SmoothedSpeed::from).collect(),
         track,
         stops: r.stops.into_iter().map(LiveStop::from).collect(),

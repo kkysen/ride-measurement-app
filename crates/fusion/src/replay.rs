@@ -56,6 +56,38 @@ impl Replay {
             .get(i)
             .filter(|s| s.elapsed_realtime_ns == elapsed_realtime_ns)
     }
+
+    /// The smoothed speed nearest in time, if within 2 s.
+    pub fn nearest(&self, elapsed_realtime_ns: i64) -> Option<&SmoothedSpeed> {
+        let i = self
+            .smoothed
+            .partition_point(|s| s.elapsed_realtime_ns < elapsed_realtime_ns);
+        [i.checked_sub(1), Some(i)]
+            .into_iter()
+            .flatten()
+            .filter_map(|i| self.smoothed.get(i))
+            .min_by_key(|s| (s.elapsed_realtime_ns - elapsed_realtime_ns).abs())
+            .filter(|s| (s.elapsed_realtime_ns - elapsed_realtime_ns).abs() <= 2_000_000_000)
+    }
+
+    /// [`Self::positions`] for a map: at most one every `every_ns` (and the last),
+    /// each with the smoothed speed nearest it (see [`Self::nearest`]).
+    pub fn map_path(
+        &self,
+        every_ns: i64,
+    ) -> Vec<(&crate::position::PositionEstimate, Option<&SmoothedSpeed>)> {
+        let mut out = Vec::new();
+        let mut last_ns: Option<i64> = None;
+        for (i, p) in self.positions.iter().enumerate() {
+            let t = p.elapsed_realtime_ns;
+            if last_ns.is_some_and(|l| t - l < every_ns) && i + 1 < self.positions.len() {
+                continue;
+            }
+            last_ns = Some(t);
+            out.push((p, self.nearest(t)));
+        }
+        out
+    }
 }
 
 enum Event {
