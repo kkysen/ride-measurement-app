@@ -110,6 +110,10 @@ const AXIS_GNSS_MIN_CROSS: f64 = 0.01;
 /// Both GNSS speeds of a change must be at least this (m/s): near a standstill, a speed's magnitude is mostly noise
 /// (on that ride, 2 to 7 km/h jitter at stations), and its changes would turn the axis at every stop.
 const AXIS_GNSS_MIN_SPEED_MPS: f64 = 3.0;
+/// Centripetal acceleration is only taken out while turning slower than this about the vertical (rad/s, about 6 deg/s):
+/// a subway curve of 300 m radius at 25 mph turns at 0.04, and faster is the rider turning the phone, where the
+/// yaw rate times a wrong speed would push the speed further off (35 mph stopped in a cut on `20261023-011209`).
+const CENTRIPETAL_MAX_YAW_RAD_S: f64 = 0.1;
 /// Process noise: unmodeled along-axis acceleration (m/s^2 per sqrt(s)), and bias random walk.
 const ACCEL_NOISE: f64 = 0.3;
 const BIAS_WALK: f64 = 0.005;
@@ -520,10 +524,25 @@ impl LiveSpeedEstimator {
             az - self.gravity[2],
         ];
         let vertical = dot(&l, &g);
+        // On a curve, the vehicle's centripetal acceleration: its turn rate about the vertical crossed with its
+        // velocity, sideways to the travel axis (about 1.5 m/s^2 at 40 mph on a subway curve). Taken out, so it
+        // neither turns the axis learned from the spread nor leaks into the travel direction through the axis's
+        // error (40 to 55 mph on the curve before Jefferson St, `20261024-003357`).
+        let yaw = dot(&self.omega, &g);
+        let centripetal = if self.axis_known
+            && self.initialized
+            && self.axis_sign_known
+            && yaw.abs() < CENTRIPETAL_MAX_YAW_RAD_S
+        {
+            let up_x_axis = cross(&g, &self.axis);
+            up_x_axis.map(|x| yaw * self.v * x)
+        } else {
+            [0.0; 3]
+        };
         let h = [
-            l[0] - vertical * g[0],
-            l[1] - vertical * g[1],
-            l[2] - vertical * g[2],
+            l[0] - vertical * g[0] - centripetal[0],
+            l[1] - vertical * g[1] - centripetal[1],
+            l[2] - vertical * g[2] - centripetal[2],
         ];
         // Once GNSS has given the axis, the gyro carries it: the spread would drift to sway while cruising.
         if !still && !self.axis_from_gnss {
@@ -1222,6 +1241,14 @@ fn rotate_world_fixed(omega: &[f64; 3], v: &mut [f64; 3], dt: f64) {
     for i in 0..3 {
         v[i] -= c[i] * dt;
     }
+}
+
+fn cross(a: &[f64; 3], b: &[f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn dot(a: &[f64; 3], b: &[f64; 3]) -> f64 {
