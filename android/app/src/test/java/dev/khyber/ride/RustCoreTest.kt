@@ -7,6 +7,7 @@ import uniffi.ride_ffi.Fusion
 import uniffi.ride_ffi.Sensor
 import uniffi.ride_ffi.SpeedScale
 import uniffi.ride_ffi.accelEdgeColorArgb
+import uniffi.ride_ffi.coreHash
 import uniffi.ride_ffi.coreVersion
 import uniffi.ride_ffi.speedEdgeColorArgb
 import uniffi.ride_ffi.speedScaleForTopSpeed
@@ -16,7 +17,8 @@ import uniffi.ride_ffi.trackMaxGapNs
 class RustCoreTest {
     @Test
     fun callsIntoRust() {
-        assertEquals("0.1.0", coreVersion())
+        assertEquals(coreHash(), coreVersion())
+        assertTrue(coreVersion().matches(Regex("[0-9a-f]{16}")))
     }
 
     @Test
