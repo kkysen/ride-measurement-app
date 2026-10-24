@@ -758,14 +758,16 @@ impl Fusion {
         }
     }
 
-    /// The train's route: its last few named stops in the subway, the newest within [`ROUTE_STOP_S`],
-    /// matched to the feeds' trips.
-    fn route(&self, t: i64) -> Option<String> {
+    /// The train's route: its last few named stops in the subway since the rider last walked off a train
+    /// (`boarded_after`), the newest within [`ROUTE_STOP_S`], matched to the feeds' trips.
+    fn route(&self, t: i64, boarded_after: i64) -> Option<String> {
         let ago = |at: i64| (t - at) as f64 * 1e-9;
         let stops: Vec<trips::RiderStop> = self
             .train_stops
             .iter()
-            .filter(|(stop, _, in_subway)| *in_subway && ago(stop.t_ns) <= ROUTE_STOPS_S)
+            .filter(|(stop, _, in_subway)| {
+                *in_subway && ago(stop.t_ns) <= ROUTE_STOPS_S && stop.t_ns > boarded_after
+            })
             .filter_map(|(stop, station, _)| {
                 Some(trips::RiderStop {
                     stopped_ns: stop.t_ns,
@@ -863,30 +865,44 @@ impl Fusion {
                     .filter(|&(at, _)| recent(at, 30.0))
                     .and_then(|(_, c)| stations::of_cell(c))
             });
+        // What's known of the rider's train is only from since they last walked off one,
+        // and nothing while between trains: chimes and stops heard then are other trains'.
+        let transfer_s = self.transfer_s(t);
+        let boarded_after = self
+            .stop_records()
+            .into_iter()
+            .rfind(|r| r.rider_left())
+            .and_then(|r| r.alighted_ns)
+            .unwrap_or(i64::MIN);
         let stopped_at = self
             .last_stop
-            .filter(|&(at, _)| recent(at, 60.0))
+            .filter(|&(at, _)| recent(at, 60.0) && at > boarded_after)
             .and_then(|(_, s)| s);
         let riding = self.riding_lines(t);
         let station = stopped_at
             .or(cell_station.filter(|_| self.context.in_subway))
             .map(|s| stations::on_lines(s, &riding))
             .cloned();
-        let aboard = matches!(mode, Mode::Subway { .. });
+        let aboard = matches!(mode, Mode::Subway { .. }) && transfer_s.is_none();
         let cars = self
             .doors
             .as_ref()
             .and_then(DoorDetector::last_chime)
-            .filter(|&(at, _)| recent(at, 900.0))
+            .filter(|&(at, _)| recent(at, 900.0) && at > boarded_after)
             // Only aboard: once walking off, the last train's chime no longer says what the rider is on.
             .filter(|_| aboard)
             .map(|(_, c)| c);
         let car = self.cars.current_at(t);
-        let route = self.route(t).filter(|_| aboard);
-        // The route if the feeds give it, else the lines the train has been on, else the station's.
+        let route = self.route(t, boarded_after).filter(|_| aboard);
+        // The route if the feeds give it, else the lines the train has been on, else the station's:
+        // between trains, all the lines of its complex, any of which the rider may take next.
         let lines = match &route {
             Some(r) => vec![r.clone()],
             None if !riding.is_empty() && aboard => riding,
+            None if transfer_s.is_some() => station
+                .as_ref()
+                .map(stations::complex_lines)
+                .unwrap_or_default(),
             None => station
                 .as_ref()
                 .map(|s| s.lines.clone())
@@ -907,8 +923,8 @@ impl Fusion {
                 .stay
                 .map_or(0.0, |(since, _)| (t - since) as f64 * 1e-9),
             car,
-            dwell: self.transfer_s(t).map_or_else(|| self.dwell(t), |_| None),
-            transfer_s: self.transfer_s(t),
+            dwell: transfer_s.map_or_else(|| self.dwell(t), |_| None),
+            transfer_s,
         }
     }
 
