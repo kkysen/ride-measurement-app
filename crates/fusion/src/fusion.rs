@@ -88,6 +88,9 @@ const TRANSFER_STILL_S: (f64, f64) = (10.0, 5.0);
 /// A car heard as the rider's this long (s) is their train's, not one standing at the platform:
 /// at Jackson Hts on `184134`, 7:21 pm, the trains waited at most 70 s.
 const TRANSFER_CAR_S: f64 = 180.0;
+/// A boarding from the platform stands for a stop this long (s), before its departure or after the new car is
+/// first heard: well within the feeds' [`trips::SLACK_S`].
+const BOARDING_STOP_S: f64 = 30.0;
 /// Step windows ([`WALK_WINDOW_S`] each) between stops that start the rider's line over (see [`Fusion::riding_lines`]).
 const LINE_RESET_WINDOWS: usize = 2;
 /// A GNSS speed over this after a likely stop means the train is moving after all.
@@ -628,6 +631,9 @@ pub struct Fusion {
     cell: Option<(i64, i64)>,
     /// The station nearest Android's own latest location, if close and sure enough, and when.
     network_station: Option<(i64, &'static Station)>,
+    /// Each station the cell or Android's location named, first and last when, in turn: where the rider was
+    /// when (see [`Fusion::boarding`]).
+    station_history: Vec<(i64, i64, &'static Station)>,
     /// The latest door cycle's closing and the station its cell names, if one.
     last_stop: Option<(i64, Option<&'static Station>)>,
     /// Staying put: where the rider has been since when (a good fix's position, or none indoors).
@@ -697,6 +703,7 @@ impl Fusion {
             subway_changes: Vec::new(),
             cell: None,
             network_station: None,
+            station_history: Vec::new(),
             last_stop: None,
             stay: None,
             now_ns: 0,
@@ -760,21 +767,38 @@ impl Fusion {
 
     /// The train's route: its last few named stops in the subway since the rider last walked off a train
     /// (`boarded_after`), the newest within [`ROUTE_STOP_S`], matched to the feeds' trips.
+    /// Boarding from the platform counts as a stop there (see [`Self::boarding`]): no stop is felt aboard,
+    /// so otherwise the boarding station is left out (6 Av on the L, `20261023-193658`).
     fn route(&self, t: i64, boarded_after: i64) -> Option<String> {
         let ago = |at: i64| (t - at) as f64 * 1e-9;
-        let stops: Vec<trips::RiderStop> = self
-            .train_stops
-            .iter()
-            .filter(|(stop, _, in_subway)| {
-                *in_subway && ago(stop.t_ns) <= ROUTE_STOPS_S && stop.t_ns > boarded_after
-            })
-            .filter_map(|(stop, station, _)| {
+        let records = self.stop_records();
+        let boarding = self
+            .boarding(t, &records)
+            .and_then(|(_, b)| b)
+            .and_then(|(stopped, departed)| {
                 Some(trips::RiderStop {
-                    stopped_ns: stop.t_ns,
-                    departed_ns: self.departures.iter().copied().find(|&d| d > stop.t_ns),
-                    station: (*station)?,
+                    stopped_ns: stopped,
+                    departed_ns: Some(departed),
+                    station: self.station_at(stopped)?,
                 })
             })
+            .filter(|b| ago(b.stopped_ns) <= ROUTE_STOPS_S);
+        let stops: Vec<trips::RiderStop> = boarding
+            .into_iter()
+            .chain(
+                self.train_stops
+                    .iter()
+                    .filter(|(stop, _, in_subway)| {
+                        *in_subway && ago(stop.t_ns) <= ROUTE_STOPS_S && stop.t_ns > boarded_after
+                    })
+                    .filter_map(|(stop, station, _)| {
+                        Some(trips::RiderStop {
+                            stopped_ns: stop.t_ns,
+                            departed_ns: self.departures.iter().copied().find(|&d| d > stop.t_ns),
+                            station: (*station)?,
+                        })
+                    }),
+            )
             .collect();
         let recent = &stops[stops.len().saturating_sub(ROUTE_STOPS)..];
         if ago(recent.last()?.stopped_ns) > ROUTE_STOP_S {
@@ -823,6 +847,39 @@ impl Fusion {
         if walked_since { Vec::new() } else { lines }
     }
 
+    /// The station the radio names now: Android's own location first (Google's database), then the rider's
+    /// tagged cells, each within the last 30 s.
+    fn radio_station(&self, t: i64) -> Option<&'static Station> {
+        let recent = |at: i64| (t - at) as f64 * 1e-9 <= 30.0;
+        self.network_station
+            .filter(|&(at, _)| recent(at))
+            .map(|(_, s)| s)
+            .or_else(|| {
+                self.cell
+                    .filter(|&(at, _)| recent(at))
+                    .and_then(|(_, c)| stations::of_cell(c))
+            })
+    }
+
+    fn note_station(&mut self, t: i64) {
+        let Some(s) = self.radio_station(t) else {
+            return;
+        };
+        match self.station_history.last_mut() {
+            Some((_, last, named)) if *named == s => *last = t,
+            _ => self.station_history.push((t, t, s)),
+        }
+    }
+
+    /// The station the radio named at `t` (within 30 s of being named).
+    fn station_at(&self, t: i64) -> Option<&'static Station> {
+        let i = self
+            .station_history
+            .partition_point(|&(first, ..)| first <= t);
+        let &(_, last, s) = self.station_history.get(i.checked_sub(1)?)?;
+        ((t - last) as f64 * 1e-9 <= 30.0).then_some(s)
+    }
+
     /// What the rider is doing and where, as of the settled input, for the app to show.
     pub fn status(&self) -> Status {
         let t = self.now_ns;
@@ -855,16 +912,7 @@ impl Fusion {
                 None => Mode::Unknown,
             },
         };
-        // Android's own location first (Google's database), then the rider's tagged cells.
-        let cell_station = self
-            .network_station
-            .filter(|&(at, _)| recent(at, 30.0))
-            .map(|(_, s)| s)
-            .or_else(|| {
-                self.cell
-                    .filter(|&(at, _)| recent(at, 30.0))
-                    .and_then(|(_, c)| stations::of_cell(c))
-            });
+        let cell_station = self.radio_station(t);
         // What's known of the rider's train is only from since they last walked off one,
         // and nothing while between trains: chimes and stops heard then are other trains'.
         let transfer_s = self.transfer_s(t);
@@ -1137,25 +1185,53 @@ impl Fusion {
             return None;
         }
         let records = self.stop_records();
+        let (alighted, boarded) = self.boarding(t, &records)?;
+        let since_s = (t - alighted) as f64 * 1e-9;
+        (boarded.is_none() && since_s <= TRANSFER_MAX_S).then_some(since_s)
+    }
+
+    /// When the rider last walked off a train, and how they boarded the next, if they have:
+    /// the train's stop at the platform (stopped, departed), as near as known.
+    /// The first departure since with no steps around it, the train leaving with the rider,
+    /// or else the new car heard as theirs for [`TRANSFER_CAR_S`], from when it was first: on the L, whose
+    /// departures are missed, it's heard just as the rider boards, from the platform.
+    fn boarding(&self, t: i64, records: &[StopRecord]) -> Option<(i64, Option<(i64, i64)>)> {
         let left = records.iter().rfind(|r| r.rider_left())?;
         let alighted = left.alighted_ns?;
         let s_ns = |s: f64| (s * 1e9) as i64;
         // The departures found, and those the stop records give (a stop stepped out at, then ridden on from).
         let departed = records.iter().filter_map(|r| r.departed_ns);
-        let boarded = self.departures.iter().copied().chain(departed).any(|d| {
-            d > alighted
-                && !self.step_windows.iter().any(|&(at, steps)| {
-                    steps && at > d - s_ns(TRANSFER_STILL_S.0) && at < d + s_ns(TRANSFER_STILL_S.1)
-                })
-        });
-        let new_car = self.car_since.is_some_and(|(c, since)| {
-            self.cars.current_at(t) == Some(c)
-                && left.car_before != Some(c)
-                && since > alighted
-                && (t - since) as f64 * 1e-9 >= TRANSFER_CAR_S
-        });
-        let since_s = (t - alighted) as f64 * 1e-9;
-        (!boarded && !new_car && since_s <= TRANSFER_MAX_S).then_some(since_s)
+        let departure = self
+            .departures
+            .iter()
+            .copied()
+            .chain(departed)
+            .filter(|&d| {
+                d > alighted
+                    && !self.step_windows.iter().any(|&(at, steps)| {
+                        steps
+                            && at > d - s_ns(TRANSFER_STILL_S.0)
+                            && at < d + s_ns(TRANSFER_STILL_S.1)
+                    })
+            })
+            .min();
+        let new_car = self
+            .car_since
+            .filter(|&(c, since)| {
+                self.cars.current_at(t) == Some(c)
+                    && left.car_before != Some(c)
+                    && since > alighted
+                    && (t - since) as f64 * 1e-9 >= TRANSFER_CAR_S
+            })
+            .map(|(_, since)| since);
+        let platform = s_ns(BOARDING_STOP_S);
+        let boarded = match (departure, new_car) {
+            (Some(d), Some(c)) if c < d => Some((c, c + platform)),
+            (Some(d), _) => Some((d - platform, d)),
+            (None, Some(c)) => Some((c, c + platform)),
+            (None, None) => None,
+        };
+        Some((alighted, boarded))
     }
 
     /// Keeps track of how long the rider has stayed in one place out of the subway (see [`Status::staying_s`]).
@@ -1337,12 +1413,14 @@ impl Fusion {
         }
         if let Pending::Cell(c) = input {
             self.cell = c.map(|c| (t_ns, c));
+            self.note_station(t_ns);
             return;
         }
         if let Pending::NetworkFix(lat, lon, accuracy) = input {
             self.network_station = stations::nearest(lat, lon)
                 .filter(|&(_, d)| accuracy <= NETWORK_FIX_M && d <= NETWORK_STATION_M.max(accuracy))
                 .map(|(s, _)| (t_ns, s));
+            self.note_station(t_ns);
             return;
         }
         if let Pending::Car(r) = input {
