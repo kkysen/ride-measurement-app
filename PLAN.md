@@ -776,7 +776,10 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    train's stop missed); `182135` 6:27 pm is a step out (boarded 2 s later), not a miss; `002914` 1:15 am
    found 26 s before the tap (walking to the doors). The 4 false ones have no taps near (likely untapped ends
    of rides), and `002914` 3:04 am. The car beacon fading wasn't tried.
-10. 86 St on the 1 has no tagged cell; add it from the 2026-10-24 ride.
+10. Done (`fee65f5`): 86 St on the 1 tagged with cell 29639550, from the 2026-10-24 ride (`003357`): no
+    "at station" tap there, so the stop between 79 St and 96 St (tapped stopped 1:15:07 am; `UNTAPPED` in
+    `station_cells.py`); the cell held from 11 s before that stop to 38 s after. On `214427` and `002914` it
+    shows about 70 s before 96 St on the 2 (passing 86 St), and no other station has it.
 11. Done (checked, no code change): LTE service the whole way under the East River on both crossings, no gaps.
     Brooklyn-bound (`193658`): 29205636/29205628 (PCI 246) from 7:58:36 pm, 29448828 (PCI 372) from 7:59:53 pm;
     Manhattan-bound (`003357`): 29448837 (PCI 373) from 12:45:12 am, 29205629 (PCI 247) from 12:46:09 am:
@@ -785,7 +788,10 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
     PCI 501), which could be tagged. The one gap was at Bedford Av, 12:43:46 to 12:44:05 am (0:19).
 12. Done (`1ff3f9d`): the L's car beacons are the same family (header, UUID, the 100 byte, 1 m power `c5`, 1 g
     at rest), under company ID `0x02fd`, not Apple's; `BleRecorder.kt` no longer calls them Piper's.
-13. Taps: drop the mistaken train start at Graham Av if not deleted in the app.
+13. Taps: drop the mistaken train start at Graham Av if not deleted in the app. Checked: not deleted; on
+    `20261023-193658` the "train started" at 8:04:45 pm, 0.9 s before the "train stopped".
+    Dropping it means appending a deletion to the session's `events` (`delete_mark`), which agents don't do:
+    left for the rider to delete in the app (Past rides). The only repo-side fixes are `subway.py`'s own `CORRECTIONS`, not read by the Rust.
 14. Done (`4b14848`, `e300d7a`; 42 s to 5.3 s per replay on the laptop with `ae5a245` and `9a0d57c`): Past rides' "Ride" button replays the ride (`replay_session`), smoothed over
     all of it, on the live map and graph; cached per app build in the app's files. Not while recording, since
     a replay takes 483 MB at its peak on `20261024-003357` (1.4 GB before `9d2f900` boxed the large inputs)
