@@ -35,6 +35,7 @@ import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -165,7 +166,8 @@ private fun DrawScope.plot(
     if (points.isEmpty()) return
     val labelStyle = TextStyle(color = ink, fontSize = 11.sp)
     val left = 36.dp.toPx()
-    val top = (if (labels) 30 else 4).dp.toPx()
+    // Room for a label: a name on two lines, then the dwell and the doors on a line each.
+    val top = (if (labels) 58 else 4).dp.toPx()
     val w = size.width - left
     val h = size.height - top
     var lo = points.minOf { it.second }
@@ -194,7 +196,7 @@ private fun DrawScope.plot(
 
     val dash = PathEffect.dashPathEffect(floatArrayOf(8f, 8f))
     var labelsEnd = left
-    for (s in stops) {
+    for ((i, s) in stops.withIndex()) {
         // Standing until the departure, or the rider walking off, or now.
         val endNs = s.departedNs ?: s.leftNs ?: nowNs
         val sx = x(s.stoppedNs).coerceAtLeast(left)
@@ -208,17 +210,27 @@ private fun DrawScope.plot(
         }
         drawLine(ink.copy(alpha = 0.6f), Offset(sx, top), Offset(sx, size.height), 1.5f, pathEffect = dash)
         if (!labels) continue
-        val dwell = "dwell " + clockDuration((endNs - s.stoppedNs) / 1e9) +
-            (s.doorsClosedNs?.let { c -> open?.let { " · doors " + clockDuration((c - it) / 1e9) } } ?: "")
-        val name = text.measure(s.station ?: "stop", labelStyle)
-        val times = text.measure(dwell, labelStyle)
-        val width = max(name.size.width, times.size.width)
-        // Only where it won't overlap the last label or run off the right.
-        if (sx >= labelsEnd && sx + width <= size.width) {
-            drawText(name, topLeft = Offset(sx, 0f))
-            drawText(times, topLeft = Offset(sx, name.size.height.toFloat()))
-            labelsEnd = sx + width + 4.dp.toPx()
+        if (sx < labelsEnd) continue
+        // A label gets the room up to the next stop's, and never overlaps another or runs off the right.
+        val room = ((stops.getOrNull(i + 1)?.let { x(it.stoppedNs) } ?: size.width).coerceAtMost(size.width) - sx - 4.dp.toPx())
+            .coerceAtMost(140.dp.toPx())
+        if (room < 16.dp.toPx()) continue
+        val constraints = Constraints(maxWidth = room.toInt())
+        fun fits(line: String, maxLines: Int) =
+            text.measure(line, labelStyle, maxLines = maxLines, constraints = constraints).takeIf { !it.hasVisualOverflow }
+        val station = s.station ?: "stop"
+        val name = fits(station, 2) ?: fits(shortName(station), 2) ?: continue
+        val lines = listOfNotNull(
+            name,
+            fits("dwell " + clockDuration((endNs - s.stoppedNs) / 1e9), 1),
+            s.doorsClosedNs?.let { c -> open?.let { fits("doors " + clockDuration((c - it) / 1e9), 1) } },
+        )
+        var y = 0f
+        for (line in lines) {
+            drawText(line, topLeft = Offset(sx, y))
+            y += line.size.height
         }
+        labelsEnd = sx + lines.maxOf { it.size.width } + 4.dp.toPx()
     }
 
     val path = Path()
@@ -245,6 +257,15 @@ private fun DrawScope.strip(text: TextMeasurer, ink: Color, color: Color, segmen
             drawText(label, topLeft = Offset(sx + 2.dp.toPx(), (size.height - label.size.height) / 2))
         }
     }
+}
+
+/**
+ * A station's name without its complex's other part: before the last dash that follows a letter
+ * (`Jackson Hts-Roosevelt Av` is `Jackson Hts`, `47-50 Sts-Rockefeller Ctr` is `47-50 Sts`, `14 St-Union Sq` is `14 St`).
+ */
+private fun shortName(name: String): String {
+    val i = name.indices.lastOrNull { name[it] == '-' && it > 0 && name[it - 1].isLetter() } ?: return name
+    return name.substring(0, i)
 }
 
 /** A round gridline spacing near `raw`: 1, 2, or 5 times a power of ten. */
