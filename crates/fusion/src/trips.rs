@@ -141,17 +141,20 @@ impl Trips {
 
     /// The route of the trip matching the most of the rider's stops (the last of which must match), then the
     /// smallest mean error; none without feed data, or when another route matches as well.
+    /// A trip only matches a stop at a station its line serves: [`stop_ids`] takes in a complex's other
+    /// platforms, so a Q at Union Sq would otherwise match the L stopping there.
     /// `now_ns` stands in for the departure of a stop the train hasn't left.
     pub fn route(&self, stops: &[RiderStop], now_ns: i64) -> Option<String> {
         let offset = self.offset_ns?;
         let unix_s = |ns: i64| (ns + offset).div_euclid(1_000_000_000);
-        let stops: Vec<(Vec<&str>, i64, i64)> = stops
+        let stops: Vec<(Vec<&str>, i64, i64, &[String])> = stops
             .iter()
             .map(|s| {
                 (
                     stop_ids(s.station),
                     unix_s(s.stopped_ns),
                     unix_s(s.departed_ns.unwrap_or(now_ns)),
+                    &s.station.lines[..],
                 )
             })
             .collect();
@@ -159,7 +162,11 @@ impl Trips {
         // Per route: its best trip's (matches, mean error).
         let mut best: HashMap<&str, (usize, f64)> = HashMap::new();
         for trip in self.trips.values() {
-            let error = |(ids, stopped, departed): &(Vec<&str>, i64, i64)| {
+            let line = line_of_route(&trip.route);
+            let error = |(ids, stopped, departed, lines): &(Vec<&str>, i64, i64, &[String])| {
+                if !lines.is_empty() && !lines.contains(&line) {
+                    return None;
+                }
                 ids.iter()
                     .filter_map(|id| trip.stops.get(*id))
                     .filter(|&&(a, d)| a <= departed + SLACK_S && d >= stopped - SLACK_S)
@@ -211,6 +218,29 @@ mod tests {
             arrival: at,
             departure: at + 30,
         }
+    }
+
+    #[test]
+    fn a_trip_only_matches_at_its_own_lines_platform() {
+        // A Q at Union Sq as the rider's L stops there: the Q's platform is near enough to count, its line isn't.
+        let t0 = 1_793_000_000;
+        let offset = 1_000_000_000_000i64;
+        let mut trips = Trips::default();
+        trips.on_poll(offset, t0 * 1000, vec![stop("q", "Q", "R20", t0)]);
+        let union_sq_l = crate::stations::all()
+            .iter()
+            .find(|s| s.name == "14 St-Union Sq" && s.lines == ["L"])
+            .unwrap();
+        assert!(stop_ids(union_sq_l).contains(&"R20"));
+        let at = |s: i64| offset + s * 1_000_000_000;
+        let stops = [RiderStop {
+            stopped_ns: at(0),
+            departed_ns: Some(at(30)),
+            station: union_sq_l,
+        }];
+        assert_eq!(trips.route(&stops, at(40)), None);
+        trips.on_poll(offset, t0 * 1000, vec![stop("l", "L", "L03", t0)]);
+        assert_eq!(trips.route(&stops, at(40)).as_deref(), Some("L"));
     }
 
     #[test]
