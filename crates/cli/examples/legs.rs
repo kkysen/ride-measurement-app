@@ -20,6 +20,15 @@ fn main() -> anyhow::Result<()> {
                 l.track.length_m() / s / 0.44704
             );
         }
+        for st in &r.stops {
+            if let (Some(s), Some((m, v))) = (st.station, st.from_last_station) {
+                println!(
+                    "  at {:<24} {m:5.0} m from the last station, average {:4.1} mph",
+                    s.name,
+                    v / 0.44704
+                );
+            }
+        }
         println!("{dir}: {} legs; {stats:?}", legs.len());
     }
     Ok(())

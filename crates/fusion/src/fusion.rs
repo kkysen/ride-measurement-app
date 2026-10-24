@@ -163,6 +163,9 @@ pub struct StopRecord {
     /// A hold between stations, not a platform stop (see [`Fusion::between_stations`]):
     /// the train stood, but the dwell starts at the platform.
     pub between_stations: bool,
+    /// The track (m) from the station before, on the same train, and the average speed over it (m/s):
+    /// from the departure there to this stop (see [`crate::track::legs`]).
+    pub from_last_station: Option<(f64, f64)>,
 }
 
 /// A walk off was along the car when there are at most [`CARRIED_STEP_WINDOWS`] step windows from
@@ -1684,6 +1687,14 @@ impl Fusion {
                 && r.doors_closed_ns.is_none()
                 && self.between_stations(prev.stopped_ns, r.stopped_ns);
         }
+        let (legs, _) = crate::track::legs(&records, &self.good_fix_ns(), None);
+        for leg in legs {
+            if let Some(r) = records.iter_mut().find(|r| r.stopped_ns == leg.to_ns) {
+                let length = leg.track.length_m();
+                let s = (leg.to_ns - leg.from_ns) as f64 * 1e-9;
+                r.from_last_station = Some((length, length / s));
+            }
+        }
         records
     }
 
@@ -2458,6 +2469,7 @@ fn stop_records(
             car_after: None,
             train_change: false,
             between_stations: false,
+            from_last_station: None,
         });
     }
     out
