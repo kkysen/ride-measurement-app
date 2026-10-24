@@ -704,11 +704,22 @@ pub fn core_hash() -> String {
     env!("RIDE_CORE_HASH").into()
 }
 
+/// Told how far a replay has got (see `ride_fusion::replay::replay_with_progress`).
+#[uniffi::export(with_foreign)]
+pub trait ReplayProgress: Send + Sync {
+    /// The fraction of the ride's inputs fed, every 1%; 0 once the session is read, 1 before smoothing it all.
+    fn on_progress(&self, fraction: f64);
+}
+
 /// Replays a past ride, or reads the replay cached in `cache_dir` if this core ([`core_hash`]) made it.
 /// The cache is per session and never in the session's directory, which is uploaded;
 /// tap edits and recompression don't change what a replay gives, so neither invalidates it.
 #[uniffi::export]
-pub fn replay_session(session_dir: String, cache_dir: String) -> Result<RideReplay, RideError> {
+pub fn replay_session(
+    session_dir: String,
+    cache_dir: String,
+    progress: Arc<dyn ReplayProgress>,
+) -> Result<RideReplay, RideError> {
     let build = core_hash();
     use prost::Message;
     let session = ride_session::read::Session::open(&session_dir)?;
@@ -729,7 +740,9 @@ pub fn replay_session(session_dir: String, cache_dir: String) -> Result<RideRepl
         no_statuses: true,
         ..Default::default()
     };
-    let r = ride_fusion::replay::replay_with(&session, &options)?;
+    let r = ride_fusion::replay::replay_with_progress(&session, &options, &mut |f| {
+        progress.on_progress(f)
+    })?;
     let fixes = if session.stream_path("location").exists() {
         ride_session::track::gps_segments(&session.read_records("location")?.chunks)
     } else {

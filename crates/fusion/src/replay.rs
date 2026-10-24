@@ -108,6 +108,16 @@ impl GnssOutages {
 }
 
 pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Replay> {
+    replay_with_progress(session, options, &mut |_| {})
+}
+
+/// [`replay_with`], telling `progress` the fraction of the ride's inputs fed so far, every 1%:
+/// reading the session comes before the first call, smoothing the whole ride after the last.
+pub fn replay_with_progress(
+    session: &Session,
+    options: &Options,
+    progress: &mut dyn FnMut(f64),
+) -> anyhow::Result<Replay> {
     let mut events: Vec<(i64, Event)> = Vec::new();
     // The recorded streams the app feeds live, preferring uncalibrated (see `RecorderService.kt`).
     for (name, fallback) in [
@@ -283,7 +293,13 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
     }
     let mut statuses = Vec::new();
     let mut next_status = events.first().map_or(0, |e| e.0);
-    for (t, e) in events {
+    let total = events.len().max(1);
+    let every = total.div_ceil(100);
+    progress(0.0);
+    for (i, (t, e)) in events.into_iter().enumerate() {
+        if i % every == 0 && i > 0 {
+            progress(i as f64 / total as f64);
+        }
         if t >= next_status && !options.no_statuses {
             statuses.push((t, fusion.status()));
             next_status = t + STATUS_EVERY_NS;
@@ -306,6 +322,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
             Event::Transit(b) => fusion.on_transit(t, b.1, &b.0),
         }
     }
+    progress(1.0);
     fusion.finish();
     Ok(Replay {
         smoothed: fusion.smoothed(),
