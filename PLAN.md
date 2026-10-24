@@ -643,6 +643,69 @@ Open, roughly in order:
      and M to F on `184134`, nothing ridden through. Without beacons and steps: the chime family can tell the 1
      (R62A) from the 2 (R142), not from the 3 (R62); the recorded GTFS-RT feed is the general answer.
 
+## Session 2026-10-23 to 24: app changes, and what's open
+
+App 0.1.9 (on the phone, installed 2026-10-24 from `120d5ae`), reported live by the rider on the 2026-10-23 rides
+and built the same night:
+- Walking ends the live hold at a likely stop (`5a8177c`): underground it read 0 mph walking after getting off.
+- The "< v + sigma" bound is capped at the subway's 55 mph (`266c174`).
+- `transfer m:ss` from walking off a train until on another, instead of the stop's time (`4b3efcb`).
+  It ends on a departure with no steps around it, or a car heard as the rider's for 3 minutes
+  (trains at the platform are heard steadily too, at most 70 s at Jackson Hts on `184134`).
+  On `184134`: right at Grand Av, Jackson Hts, and leaving at 34 St; briefly wrong at 90 St (walking along the car)
+  and 82 St (stepping out); missed at 74 St, where the walk off isn't found at all.
+- The graph: each stop shaded from its stop to its departure, the doors' opening darker, labeled with the station,
+  dwell, and doors' time (`e2e870c`); labels fit the room to the next stop, on two lines, else a short name
+  (`Jackson Hts`), else none until zoomed (`dac7bc4`); pinch zooms time only (`e2e870c`);
+  a strip across the top of each leg's line and walking (`ff0017b`, `6ad93e1`), from `Fusion::timeline`,
+  each leg's line from all its stops.
+- Speeds under 10 show a decimal (`6dce4e9`).
+- Stairs, and elevators or escalators (one kind: the barometer can't tell them apart), from the barometer and
+  the steps (`3c5a22c`, `crates/fusion/src/vertical.rs`), in the status and the strip. Finds the home elevator
+  and stairs; unchecked: up and down pairs after leaving 34 St on `184134`, rides up or down at 2 to 3 am on `002914`.
+- Past rides show start and end with the date, and the length as h:mm:ss (`56d2a1e`); the end is the last
+  sensor sample, since the files' modification times move when recompression or tap edits rewrite them.
+
+Sessions `20261022-142111` to `20261024-003357` (7) pulled to `data/sessions/` on 2026-10-24, each file's size
+checked against the phone. The L ride is likely `20261023-193658` (7:36 pm), the uptown 1 with the tunnel hold
+`20261024-003357` (12:33 am).
+
+Open, from the rider's reports on those rides (details in item 7a of the 2026-10-21 section):
+1. The live speed underground with nothing holding it: 25 and 55 mph standing on platforms (6 Av, 14 St),
+   `rejected as outliers: stop 4482` (the quiet phone's zero gated out), and the tunnel hold before 96 St
+   (stopped, then not, then 2:28 once moving). Between trains, hold the speed; keep a stop alive while the phone
+   is quiet, ungated underground like door cycles.
+2. Curves read as speeding up (40 to 55 mph before Jefferson St): subtract v times the gyro's yaw rate.
+3. The line shown: 6 Av (1 train), Q at Union Sq and 3 Av, 14 St (L) on the 1's platform.
+   Record the boarding stop (a train stopping while on the platform, then leaving with the rider) for the feeds'
+   match; no line when two tie on one stop's timing; never a line that doesn't serve the station shown;
+   between trains, name the station by all its lines.
+4. The cars shown: R62 on the L (the 1's chime kept 15 minutes, and the L's fleet not in `car_models`, so the
+   chime's family was shown as if a model; say `R62-family chime` then), despite a steady car beacon, which R62s
+   don't have; NTT on the 1 at 96 St; a passing 2's chime taken as the rider's at 14 St.
+   Ignore chimes between trains, and only count chimes since boarding; add the L's R143s and R160s.
+5. Departures on the L found poorly (ATO's gentle starts); check against the car beacons' accelerometers.
+6. Lorimer St: stopped 0:48 on arriving: a hold before the platform or braking taken for a stop.
+7. Stops found between stations: use the cell's station to tell a tunnel hold from a platform stop
+   (keep the zero speed; label it between stations; the dwell starts at the platform). Test the cues against
+   the at-station taps: a station cell at the stop, the cell matching the stop before's, a door cycle heard.
+8. The track between stations (GTFS shapes, embedded like `open_track.bin`): stations joined along the track for
+   the underground path on the map (dead reckoning alone is a median 429 to 2066 m off at stations,
+   `crates/cli/examples/stop_positions.rs`), the average speed between known stations, and the speed integrated
+   between them held to the track distance (a measurement for the smoother).
+9. Walk-off detection: missed at 74 St on `184134` (steps only began 30 s after the tapped alighting), and taken
+   from walking along the car at 90 St; the transfer status and the timeline's legs depend on it.
+10. 86 St on the 1 has no tagged cell; add it from the 2026-10-24 ride.
+11. Cell service under the East River on the L, and which cells serve it.
+12. The L's car beacons: the same family as the others? If so not Piper's (the L's CBTC predates Piper);
+    then fix `BleRecorder.kt`'s comment, which gives Piper beacons as its example.
+13. Taps: drop the mistaken train start at Graham Av if not deleted in the app.
+14. Past rides' map and graph, in the app: an offline analysis of the whole ride (the replay, smoothed over all
+    of it, as `ride_fusion::replay` does, not the live estimates kept from recording), opened from Past rides.
+    Cache the result per session (with the core's version) so a ride isn't replayed each time it's opened.
+15. `cargo clippy -D warnings` fails on three warnings from before this session (`doors.rs` `last()`,
+    `Box<Vec<..>>` in `Pending::Transit`, a collapsible `if` in `fusion.rs`), so `just test-rust` fails.
+
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
   Airliner speed/altitude are within consumer GNSS limits (~1900 km/h, 18 km).
