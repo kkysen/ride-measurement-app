@@ -21,7 +21,7 @@ fn main() -> anyhow::Result<()> {
     let ms: Vec<_> = marks(&s)?.into_iter().filter(|m| !m.deleted).collect();
     let options = Options {
         max_speed_mps: Some(SUBWAY_MAX_SPEED_MPS),
-        no_statuses: true,
+        no_statuses: std::env::var("STATUS").is_err(),
         live_every_ns: Some(1_000_000_000),
         ..Options::default()
     };
@@ -85,6 +85,17 @@ fn main() -> anyhow::Result<()> {
         }
         for d in &r.departures {
             println!("  departure {}", clock(*d));
+        }
+    }
+
+    if std::env::var("STATUS").is_ok() {
+        for (t, st) in &r.statuses {
+            println!(
+                "  status {} dwell {:?} transfer {:?}",
+                clock(*t),
+                st.dwell,
+                st.transfer_s
+            );
         }
     }
 
@@ -192,10 +203,18 @@ fn main() -> anyhow::Result<()> {
     let tapped_any = !kind_at(Kind::TrainStopped).collect::<Vec<_>>().is_empty();
     let mut prev_cell: Option<i64> = None;
     let (mut found, mut matched, mut untapped) = (0, 0, 0);
+    let (mut between_tapped, mut between_untapped) = (0, 0);
     for rec in r.stops.iter().filter(|x| x.in_subway) {
         found += 1;
         let tap = near(Kind::TrainStopped, rec.stopped_ns, 15.0, 15.0);
         let at_station = near(Kind::AtStation, rec.stopped_ns, 60.0, 15.0);
+        if rec.between_stations {
+            if tap.is_some() {
+                between_tapped += 1;
+            } else {
+                between_untapped += 1;
+            }
+        }
         if tap.is_some() {
             matched += 1;
         } else {
@@ -206,7 +225,7 @@ fn main() -> anyhow::Result<()> {
         prev_cell = cell;
         if dump && tapped_any {
             println!(
-                "  stop {} tap {:>5} at-station {:>5} station {:<28} cell {:>10} same {:5} doors {:5} dwell {}",
+                "  stop {} tap {:>5} at-station {:>5} station {:<28} cell {:>10} same {:5} doors {:5} dwell {} between {}",
                 clock(rec.stopped_ns),
                 tap.map_or("-".into(), |m| format!(
                     "{:+.0}",
@@ -225,6 +244,7 @@ fn main() -> anyhow::Result<()> {
                     d as i64 / 60,
                     d as i64 % 60
                 )),
+                rec.between_stations,
             );
         }
     }
@@ -239,7 +259,7 @@ fn main() -> anyhow::Result<()> {
     println!(
         "dwell held {held}/{total} s in {stops} tapped stops, {fast_stops} over 10 mph; \
          between trains {between_fast}/{between} s over 6 mph; moving shown stopped {moving_stopped}/{moving} s; \
-         subway stops found {found}: {matched} tapped, {untapped} not; tapped stops {tapped_stops}, {missed} not found"
+         subway stops found {found}: {matched} tapped, {untapped} not; tapped stops {tapped_stops}, {missed} not found; between stations {between_tapped} tapped, {between_untapped} not"
     );
     Ok(())
 }
