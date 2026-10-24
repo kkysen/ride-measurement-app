@@ -708,7 +708,12 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
 9. Walk-off detection: missed at 74 St on `184134` (steps only began 30 s after the tapped alighting), and taken
    from walking along the car at 90 St; the transfer status and the timeline's legs depend on it.
 10. 86 St on the 1 has no tagged cell; add it from the 2026-10-24 ride.
-11. Cell service under the East River on the L, and which cells serve it.
+11. Done (checked, no code change): LTE service the whole way under the East River on both crossings, no gaps.
+    Brooklyn-bound (`193658`): 29205636/29205628 (PCI 246) from 7:58:36 pm, 29448828 (PCI 372) from 7:59:53 pm;
+    Manhattan-bound (`003357`): 29448837 (PCI 373) from 12:45:12 am, 29205629 (PCI 247) from 12:46:09 am:
+    the same sites, other sectors or carriers each way, all TAC 2434. None is in `station_cells.csv`, so no
+    station is named mid-river; nor are 1 Av (28855173, 28855165; PCI 496) and Bedford Av (29256316, 29256324;
+    PCI 501), which could be tagged. The one gap was at Bedford Av, 12:43:46 to 12:44:05 am (0:19).
 12. Done (`1ff3f9d`): the L's car beacons are the same family (header, UUID, the 100 byte, 1 m power `c5`, 1 g
     at rest), under company ID `0x02fd`, not Apple's; `BleRecorder.kt` no longer calls them Piper's.
 13. Taps: drop the mistaken train start at Graham Av if not deleted in the app.
