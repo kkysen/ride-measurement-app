@@ -98,36 +98,99 @@ pub struct Estimate {
 }
 
 /// A smoothed speed at a fix or a sample time (`ride_fusion::fusion::SmoothedSpeed`).
-#[derive(Clone, Debug, uniffi::Record)]
+/// The `prost` tags are only for [`replay_session`]'s cache.
+#[derive(Clone, PartialEq, uniffi::Record, prost::Message)]
 pub struct SmoothedSpeed {
+    #[prost(int64, tag = "1")]
     pub elapsed_realtime_ns: i64,
+    #[prost(double, tag = "2")]
     pub speed_mps: f64,
+    #[prost(double, tag = "3")]
     pub sigma_mps: f64,
+    #[prost(double, tag = "4")]
     pub accel_mps2: f64,
 }
 
+impl From<ride_fusion::fusion::SmoothedSpeed> for SmoothedSpeed {
+    fn from(s: ride_fusion::fusion::SmoothedSpeed) -> Self {
+        SmoothedSpeed {
+            elapsed_realtime_ns: s.elapsed_realtime_ns,
+            speed_mps: s.speed_mps,
+            sigma_mps: s.sigma_mps,
+            accel_mps2: s.accel_mps2,
+        }
+    }
+}
+
 /// A train stop so far, for the live graph's labels (see `ride_fusion::fusion::StopRecord`).
-#[derive(Clone, Debug, uniffi::Record)]
+#[derive(Clone, PartialEq, uniffi::Record, prost::Message)]
 pub struct LiveStop {
+    #[prost(int64, tag = "1")]
     pub stopped_ns: i64,
+    #[prost(int64, optional, tag = "2")]
     pub departed_ns: Option<i64>,
+    #[prost(string, optional, tag = "3")]
     pub station: Option<String>,
+    #[prost(bool, tag = "4")]
     pub in_subway: bool,
+    #[prost(int64, optional, tag = "5")]
     pub doors_open_ns: Option<i64>,
+    #[prost(int64, optional, tag = "6")]
     pub doors_closed_ns: Option<i64>,
     /// When the rider walked off, if they changed trains or got off here (not stepping out and back on).
+    #[prost(int64, optional, tag = "7")]
     pub left_ns: Option<i64>,
 }
 
+impl From<ride_fusion::fusion::StopRecord> for LiveStop {
+    fn from(r: ride_fusion::fusion::StopRecord) -> Self {
+        LiveStop {
+            stopped_ns: r.stopped_ns,
+            departed_ns: r.departed_ns,
+            station: r.station.map(|s| s.name.clone()),
+            in_subway: r.in_subway,
+            doors_open_ns: r.doors_open_ns,
+            doors_closed_ns: r.doors_closed_ns,
+            left_ns: r.alighted_ns.filter(|_| r.rider_left()),
+        }
+    }
+}
+
 /// A stretch of what the rider did, for the live graph's strip (see `ride_fusion::fusion::Fusion::timeline`).
-#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+#[derive(Clone, PartialEq, uniffi::Record, prost::Message)]
 pub struct TimelineSegment {
+    #[prost(int64, tag = "1")]
     pub start_ns: i64,
+    #[prost(int64, tag = "2")]
     pub end_ns: i64,
     /// `walking`, `stairs up`, `elevator or escalator down`, a line (`7`), or `subway` when the line isn't known.
+    #[prost(string, tag = "3")]
     pub label: String,
     /// Walking, stairs, or an elevator or escalator, rather than a subway leg.
+    #[prost(bool, tag = "4")]
     pub walking: bool,
+}
+
+impl From<ride_fusion::fusion::Segment> for TimelineSegment {
+    fn from(s: ride_fusion::fusion::Segment) -> Self {
+        use ride_fusion::fusion::Doing;
+        TimelineSegment {
+            start_ns: s.start_ns,
+            end_ns: s.end_ns,
+            walking: !matches!(s.doing, Doing::Subway { .. }),
+            label: match s.doing {
+                Doing::Walking => "walking".to_string(),
+                Doing::Stairs { up: true } => "stairs up".to_string(),
+                Doing::Stairs { up: false } => "stairs down".to_string(),
+                Doing::ElevatorOrEscalator { up: true } => "elevator or escalator up".to_string(),
+                Doing::ElevatorOrEscalator { up: false } => {
+                    "elevator or escalator down".to_string()
+                }
+                Doing::Subway { line: Some(l) } => l,
+                Doing::Subway { line: None } => "subway".to_string(),
+            },
+        }
+    }
 }
 
 /// Raw GNSS progress, for the screen.
@@ -299,42 +362,16 @@ impl Fusion {
         self.lock()
             .stop_records()
             .into_iter()
-            .map(|r| LiveStop {
-                stopped_ns: r.stopped_ns,
-                departed_ns: r.departed_ns,
-                station: r.station.map(|s| s.name.clone()),
-                in_subway: r.in_subway,
-                doors_open_ns: r.doors_open_ns,
-                doors_closed_ns: r.doors_closed_ns,
-                left_ns: r.alighted_ns.filter(|_| r.rider_left()),
-            })
+            .map(LiveStop::from)
             .collect()
     }
 
     /// What the rider did over the ride so far, in time order.
     pub fn timeline(&self) -> Vec<TimelineSegment> {
-        use ride_fusion::fusion::Doing;
         self.lock()
             .timeline()
             .into_iter()
-            .map(|s| TimelineSegment {
-                start_ns: s.start_ns,
-                end_ns: s.end_ns,
-                walking: !matches!(s.doing, Doing::Subway { .. }),
-                label: match s.doing {
-                    Doing::Walking => "walking".to_string(),
-                    Doing::Stairs { up: true } => "stairs up".to_string(),
-                    Doing::Stairs { up: false } => "stairs down".to_string(),
-                    Doing::ElevatorOrEscalator { up: true } => {
-                        "elevator or escalator up".to_string()
-                    }
-                    Doing::ElevatorOrEscalator { up: false } => {
-                        "elevator or escalator down".to_string()
-                    }
-                    Doing::Subway { line: Some(l) } => l,
-                    Doing::Subway { line: None } => "subway".to_string(),
-                },
-            })
+            .map(TimelineSegment::from)
             .collect()
     }
 
@@ -412,12 +449,7 @@ impl Fusion {
         self.lock()
             .recent_smoothed()
             .into_iter()
-            .map(|s| SmoothedSpeed {
-                elapsed_realtime_ns: s.elapsed_realtime_ns,
-                speed_mps: s.speed_mps,
-                sigma_mps: s.sigma_mps,
-                accel_mps2: s.accel_mps2,
-            })
+            .map(SmoothedSpeed::from)
             .collect()
     }
 
@@ -616,6 +648,119 @@ pub fn session_span(session_dir: String) -> Result<SessionSpan, RideError> {
         start_unix_ms: session.info.start_unix_ms,
         end_unix_ms: session.end_unix_ms()?,
     })
+}
+
+/// A GPS fix of a past ride, with the replay's smoothed speed there, for the map (see `LiveTrack.Point`).
+#[derive(Clone, PartialEq, uniffi::Record, prost::Message)]
+pub struct ReplayFix {
+    #[prost(int64, tag = "1")]
+    pub elapsed_realtime_ns: i64,
+    #[prost(int64, tag = "2")]
+    pub time_ms: i64,
+    #[prost(double, tag = "3")]
+    pub lat: f64,
+    #[prost(double, tag = "4")]
+    pub lon: f64,
+    #[prost(double, optional, tag = "5")]
+    pub gps_speed_mps: Option<f64>,
+    #[prost(double, optional, tag = "6")]
+    pub gps_speed_accuracy_mps: Option<f64>,
+    #[prost(double, optional, tag = "7")]
+    pub accuracy_m: Option<f64>,
+    /// True if this fix starts a new segment after a gap (a tunnel).
+    #[prost(bool, tag = "8")]
+    pub starts_segment: bool,
+    #[prost(double, optional, tag = "9")]
+    pub speed_mps: Option<f64>,
+    #[prost(double, optional, tag = "10")]
+    pub accel_mps2: Option<f64>,
+}
+
+/// A past ride replayed and smoothed over all of it (`ride_fusion::replay`), for its map and graph.
+#[derive(Clone, PartialEq, uniffi::Record, prost::Message)]
+pub struct RideReplay {
+    #[prost(message, repeated, tag = "1")]
+    pub smoothed: Vec<SmoothedSpeed>,
+    #[prost(message, repeated, tag = "2")]
+    pub track: Vec<ReplayFix>,
+    #[prost(message, repeated, tag = "3")]
+    pub stops: Vec<LiveStop>,
+    #[prost(message, repeated, tag = "4")]
+    pub timeline: Vec<TimelineSegment>,
+    /// What the cache was made by; not for the app.
+    #[prost(string, tag = "5")]
+    pub build: String,
+    /// Unix ms minus elapsed-realtime ms over the ride, from its start, to show times on the clock.
+    #[prost(int64, tag = "6")]
+    pub clock_offset_ms: i64,
+}
+
+/// Replays a past ride, or reads the replay cached in `cache_dir` if `build` (the app's build) made it.
+/// The cache is per session and never in the session's directory, which is uploaded;
+/// tap edits and recompression don't change what a replay gives, so neither invalidates it.
+#[uniffi::export]
+pub fn replay_session(
+    session_dir: String,
+    cache_dir: String,
+    build: String,
+) -> Result<RideReplay, RideError> {
+    use prost::Message;
+    let session = ride_session::read::Session::open(&session_dir)?;
+    let id = session
+        .dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let cache = std::path::Path::new(&cache_dir).join(format!("{id}.pb"));
+    if let Some(cached) = std::fs::read(&cache)
+        .ok()
+        .and_then(|b| RideReplay::decode(&b[..]).ok())
+        .filter(|r| r.build == build)
+    {
+        return Ok(cached);
+    }
+    let r = ride_fusion::replay::replay(&session)?;
+    let fixes = if session.stream_path("location").exists() {
+        ride_session::track::gps_segments(&session.read_records("location")?.chunks)
+    } else {
+        Vec::new()
+    };
+    let track = fixes
+        .iter()
+        .flat_map(|segment| {
+            segment.iter().enumerate().map(|(i, p)| {
+                let s = r.at(p.elapsed_realtime_ns);
+                ReplayFix {
+                    elapsed_realtime_ns: p.elapsed_realtime_ns,
+                    time_ms: p.time_ms,
+                    lat: p.latitude_degrees,
+                    lon: p.longitude_degrees,
+                    gps_speed_mps: p.speed_meters_per_second.map(f64::from),
+                    gps_speed_accuracy_mps: p.speed_accuracy_meters_per_second.map(f64::from),
+                    accuracy_m: p.horizontal_accuracy_meters.map(f64::from),
+                    starts_segment: i == 0,
+                    speed_mps: s.map(|s| s.speed_mps),
+                    accel_mps2: s.map(|s| s.accel_mps2),
+                }
+            })
+        })
+        .collect();
+    let replay = RideReplay {
+        smoothed: r.smoothed.into_iter().map(SmoothedSpeed::from).collect(),
+        track,
+        stops: r.stops.into_iter().map(LiveStop::from).collect(),
+        timeline: r.timeline.into_iter().map(TimelineSegment::from).collect(),
+        build,
+        clock_offset_ms: session.info.start_unix_ms
+            - session.info.start_elapsed_realtime_ns / 1_000_000,
+    };
+    // A failed write only means replaying again next time.
+    let _ = std::fs::create_dir_all(&cache_dir).and_then(|()| {
+        let partial = cache.with_extension("pb.partial");
+        std::fs::write(&partial, replay.encode_to_vec())?;
+        std::fs::rename(&partial, &cache)
+    });
+    Ok(replay)
 }
 
 /// What happened to one stream file.
