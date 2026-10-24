@@ -666,8 +666,10 @@ and built the same night:
 - Past rides show start and end with the date, and the length as h:mm:ss (`56d2a1e`); the end is the last
   sensor sample, since the files' modification times move when recompression or tap edits rewrite them.
 
-App 0.1.11 (on the phone, installed 2026-10-24 from `803e97e`): past rides' map and graph (item 14 below);
-0.1.11 fixes 0.1.10's crash opening a long ride's graph (`851fbaf`).
+App 0.1.12 (on the phone, installed 2026-10-24 from `4d89750`, Rust core 0.1.12): past rides' map and graph
+(item 14 below; 0.1.11 fixed 0.1.10's crash opening a long ride's graph, `851fbaf`), replays 8 times faster
+(`ae5a245`) and cached until the Rust changes (`dd63d1f`), and items 3 and 4 below.
+The Rust core's version is now the app version that last changed it (`just bump`, `6cb7b89`).
 
 Sessions `20261022-142111` to `20261024-003357` (7) pulled to `data/sessions/` on 2026-10-24, each file's size
 checked against the phone. The L ride is likely `20261023-193658` (7:36 pm), the uptown 1 with the tunnel hold
@@ -679,11 +681,17 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    (stopped, then not, then 2:28 once moving). Between trains, hold the speed; keep a stop alive while the phone
    is quiet, ungated underground like door cycles.
 2. Curves read as speeding up (40 to 55 mph before Jefferson St): subtract v times the gyro's yaw rate.
-3. The line shown: 6 Av (1 train), Q at Union Sq and 3 Av, 14 St (L) on the 1's platform.
+3. Mostly done (`b7011be`, `51aa0fb`): the route and stop count only since the last walk off, none between
+   trains, where the station's lines are its complex's; a feed trip only matches its own line's platform.
+   On `193658`: nothing at 6 Av, then the L from Union Sq. Still open: the boarding stop itself (6 Av found no stop).
+   Was: the line shown: 6 Av (1 train), Q at Union Sq and 3 Av, 14 St (L) on the 1's platform.
    Record the boarding stop (a train stopping while on the platform, then leaving with the rider) for the feeds'
    match; no line when two tie on one stop's timing; never a line that doesn't serve the station shown;
    between trains, name the station by all its lines.
-4. The cars shown: R62 on the L (the 1's chime kept 15 minutes, and the L's fleet not in `car_models`, so the
+4. Done (`fe726f0`, `b7011be`, `fbf5648`): chimes only since boarding, none between trains; the L's R143s and
+   R160s; a chime the line's fleet doesn't make dropped; `R62-family chime` when that's all that's known.
+   On `193658` and `003357`: NTT on the L, nothing at the 14 St transfer, R62A at 96 St.
+   Was: the cars shown: R62 on the L (the 1's chime kept 15 minutes, and the L's fleet not in `car_models`, so the
    chime's family was shown as if a model; say `R62-family chime` then), despite a steady car beacon, which R62s
    don't have; NTT on the 1 at 96 St; a passing 2's chime taken as the rider's at 14 St.
    Ignore chimes between trains, and only count chimes since boarding; add the L's R143s and R160s.
@@ -703,7 +711,7 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
 12. The L's car beacons: the same family as the others? If so not Piper's (the L's CBTC predates Piper);
     then fix `BleRecorder.kt`'s comment, which gives Piper beacons as its example.
 13. Taps: drop the mistaken train start at Graham Av if not deleted in the app.
-14. Done (`4b14848`, `e300d7a`): Past rides' "Ride" button replays the ride (`replay_session`), smoothed over
+14. Done (`4b14848`, `e300d7a`; 42 s to 5.3 s per replay on the laptop with `ae5a245` and `9a0d57c`): Past rides' "Ride" button replays the ride (`replay_session`), smoothed over
     all of it, on the live map and graph; cached per app build in the app's files. Not while recording, since
     a replay takes 483 MB at its peak on `20261024-003357` (1.4 GB before `9d2f900` boxed the large inputs)
     and 40 s on the laptop; unmeasured on the phone.
