@@ -19,6 +19,9 @@ from common import ANALYSIS  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 RIDES = ["151449", "154951", "184134", "214427", "135509", "155919", "182135", "215922", "002914"]
 OUT = ROOT / "crates/fusion/data/station_cells.csv"
+# Stations the rider named but didn't tap, by ride and the stop's "train stopped" tap (seconds from the first
+# tap): 86 St on the uptown 1 (`20261024-003357`), the stop between 79 St and 96 St.
+UNTAPPED = {"003357": [(2378.9, "86 St (1)")]}
 
 
 def split(tag):
@@ -29,9 +32,14 @@ def split(tag):
 def main():
     names = defaultdict(Counter)
     lines = defaultdict(set)
-    for r in RIDES:
-        ev = [(int(e["t_ns"]), e["text"]) for e in csv.DictReader(open(ANALYSIS / r / "events.csv"))
-              if e["kind"] == "KIND_AT_STATION" and e["text"].strip()]
+    for r in RIDES + list(UNTAPPED):
+        rows = list(csv.DictReader(open(ANALYSIS / r / "events.csv")))
+        ev = [(int(e["t_ns"]), e["text"]) for e in rows if e["kind"] == "KIND_AT_STATION" and e["text"].strip()]
+        t_first = int(rows[0]["t_ns"])
+        for s, tag in UNTAPPED.get(r, []):
+            stop = min((int(e["t_ns"]) for e in rows if e["kind"] == "KIND_TRAIN_STOPPED"),
+                       key=lambda t: abs((t - t_first) * 1e-9 - s))
+            ev.append((stop, tag))
         cells = [(int(c["t_ns"]), c["cell_id"]) for c in csv.DictReader(open(ANALYSIS / r / "cell.csv"))
                  if c["registered"] == "true" and c["kind"] == "lte" and c["cell_id"]]
         for t, tag in ev:
