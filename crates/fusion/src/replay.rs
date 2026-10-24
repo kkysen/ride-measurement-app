@@ -87,6 +87,8 @@ pub struct Options {
     pub gnss_outages: Option<GnssOutages>,
     /// For comparison only: leave the audio out, as before door cycles were heard.
     pub ignore_audio: bool,
+    /// Leave out [`Replay::statuses`], for what doesn't show them: about a fifth of a replay's time.
+    pub no_statuses: bool,
 }
 
 /// GNSS cut out for the last `outage_s` of every `period_s` from `start_ns`, to score dead reckoning on rides
@@ -282,7 +284,7 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
     let mut statuses = Vec::new();
     let mut next_status = events.first().map_or(0, |e| e.0);
     for (t, e) in events {
-        if t >= next_status {
+        if t >= next_status && !options.no_statuses {
             statuses.push((t, fusion.status()));
             next_status = t + STATUS_EVERY_NS;
         }

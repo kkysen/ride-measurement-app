@@ -724,7 +724,11 @@ pub fn replay_session(session_dir: String, cache_dir: String) -> Result<RideRepl
     {
         return Ok(cached);
     }
-    let r = ride_fusion::replay::replay(&session)?;
+    let options = ride_fusion::replay::Options {
+        no_statuses: true,
+        ..Default::default()
+    };
+    let r = ride_fusion::replay::replay_with(&session, &options)?;
     let fixes = if session.stream_path("location").exists() {
         ride_session::track::gps_segments(&session.read_records("location")?.chunks)
     } else {
