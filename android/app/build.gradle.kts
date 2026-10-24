@@ -16,8 +16,8 @@ android {
         // Android 14: needed for the `specialUse` fallback service type after a background restart.
         minSdk = 34
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.1.13"
+        versionCode = 15
+        versionName = "0.1.14"
         // Azure app registration for OneDrive uploads, set in `local.properties` or the environment.
         val clientId = providers.gradleProperty("ride.onedriveClientId")
             .orElse(providers.environmentVariable("RIDE_ONEDRIVE_CLIENT_ID"))
