@@ -388,6 +388,8 @@ Open, roughly in order:
    (the 1's chime kept 15 min). Also check for cell service under the East River on the L and which cells serve it.
    Car beacons on the L (live: car 9dd8 on the 6 Av platform, 9d94 aboard): confirm they're the same family.
    If so, the family isn't Piper's (the rider: the L's CBTC predates Piper), unless Piper's were added to the L too.
+   Approaching Lorimer St, the live dwell read stopped 0:48 just as the train arrived: a lurch found before the
+   platform (a hold outside it, or braking taken for a stop), and the arrival's lurch not restarting it.
 
 8. The home elevator (`python/experiments/elevator.py`): 12 m in 25 s with the phone still is the elevator,
    with steps (4.9 to 6.4 m/s^2 std) the stairs; marks the start and end of a trip at home.
