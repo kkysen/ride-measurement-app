@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +46,7 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import uniffi.ride_ffi.LiveStop
+import uniffi.ride_ffi.TimelineSegment
 
 /** How much of the ride the graph shows, ending now; null is the whole ride. */
 private val WINDOWS_MIN = listOf(5, 15, 60, null)
@@ -63,6 +65,7 @@ private const val MIN_SPAN_NS = 30_000_000_000L
 fun LiveGraphScreen(onBack: () -> Unit) {
     val samples by LiveSeries.samples.collectAsStateWithLifecycle()
     val stops by LiveSeries.stops.collectAsStateWithLifecycle()
+    val timeline by LiveSeries.timeline.collectAsStateWithLifecycle()
     var window by rememberSaveable { mutableIntStateOf(1) }
     // The zoom (1 shows the whole window), and how far before the window's end the view ends (ns).
     var zoom by rememberSaveable { mutableFloatStateOf(1f) }
@@ -125,6 +128,9 @@ fun LiveGraphScreen(onBack: () -> Unit) {
                 })
             }
 
+        Canvas(Modifier.fillMaxWidth().height(20.dp).then(gestures)) {
+            strip(text, ink, speedColor, timeline, startNs, endNs)
+        }
         Text("Speed (${Units.speedUnit})", color = speedColor)
         Canvas(Modifier.fillMaxWidth().weight(1f).then(gestures)) {
             plot(text, ink, speedColor, shown.map { it.elapsedRealtimeNs to Units.speed(it.speedMps) }, startNs, endNs, shownStops, nowNs, zeroBased = true, labels = true)
@@ -220,6 +226,25 @@ private fun DrawScope.plot(
         if (i == 0) path.moveTo(x(t), y(v)) else path.lineTo(x(t), y(v))
     }
     drawPath(path, color, style = Stroke(width = 2.dp.toPx()))
+}
+
+/** What the rider was doing, as a strip over the graphs' time axis: each line ridden, and walking, labeled where there's room. */
+private fun DrawScope.strip(text: TextMeasurer, ink: Color, color: Color, segments: List<TimelineSegment>, startNs: Long, endNs: Long) {
+    val left = 36.dp.toPx()
+    val w = size.width - left
+    val x = { ns: Long -> left + w * (ns - startNs).toFloat() / max(1L, endNs - startNs).toFloat() }
+    val style = TextStyle(color = ink, fontSize = 11.sp)
+    for (s in segments) {
+        if (s.endNs < startNs || s.startNs > endNs) continue
+        val sx = x(s.startNs).coerceAtLeast(left)
+        val ex = x(s.endNs).coerceAtMost(size.width)
+        val fill = if (s.walking) ink.copy(alpha = 0.15f) else color.copy(alpha = 0.3f)
+        drawRect(fill, Offset(sx, 0f), Size(max(1f, ex - sx - 1f), size.height))
+        val label = text.measure(s.label, style)
+        if (label.size.width + 4.dp.toPx() <= ex - sx) {
+            drawText(label, topLeft = Offset(sx + 2.dp.toPx(), (size.height - label.size.height) / 2))
+        }
+    }
 }
 
 /** A round gridline spacing near `raw`: 1, 2, or 5 times a power of ten. */

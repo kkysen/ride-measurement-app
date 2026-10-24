@@ -74,6 +74,7 @@ object LiveSpeed {
                     LiveSeries.applySmoothed(it)
                 }
                 fusion?.stops()?.let { LiveSeries.setStops(it) }
+                fusion?.timeline()?.let { LiveSeries.setTimeline(it) }
             }
             handler?.postDelayed(this, SMOOTH_MS)
         }

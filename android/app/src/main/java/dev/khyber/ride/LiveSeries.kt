@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import uniffi.ride_ffi.LiveStop
 import uniffi.ride_ffi.SmoothedSpeed
+import uniffi.ride_ffi.TimelineSegment
 
 /**
  * The current recording's speed and acceleration over time, for the live graph, underground too
@@ -24,6 +25,8 @@ object LiveSeries {
     val samples: StateFlow<List<Sample>> = _samples
     private val _stops = MutableStateFlow<List<LiveStop>>(emptyList())
     val stops: StateFlow<List<LiveStop>> = _stops
+    private val _timeline = MutableStateFlow<List<TimelineSegment>>(emptyList())
+    val timeline: StateFlow<List<TimelineSegment>> = _timeline
 
     @Synchronized
     fun reset() {
@@ -31,6 +34,7 @@ object LiveSeries {
         live.clear()
         _samples.value = emptyList()
         _stops.value = emptyList()
+        _timeline.value = emptyList()
     }
 
     @Synchronized
@@ -50,6 +54,10 @@ object LiveSeries {
 
     fun setStops(stops: List<LiveStop>) {
         if (stops != _stops.value) _stops.value = stops
+    }
+
+    fun setTimeline(segments: List<TimelineSegment>) {
+        if (segments != _timeline.value) _timeline.value = segments
     }
 
     /** Smoothed values up to the latest one, then live ones after it. */

@@ -119,6 +119,16 @@ pub struct LiveStop {
     pub left_ns: Option<i64>,
 }
 
+/// A stretch of what the rider did, for the live graph's strip (see `ride_fusion::fusion::Fusion::timeline`).
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct TimelineSegment {
+    pub start_ns: i64,
+    pub end_ns: i64,
+    /// `walking`, a line (`7`), or `subway` when the line isn't known.
+    pub label: String,
+    pub walking: bool,
+}
+
 /// Raw GNSS progress, for the screen.
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct GnssStats {
@@ -296,6 +306,25 @@ impl Fusion {
                 doors_open_ns: r.doors_open_ns,
                 doors_closed_ns: r.doors_closed_ns,
                 left_ns: r.alighted_ns.filter(|_| r.rider_left()),
+            })
+            .collect()
+    }
+
+    /// What the rider did over the ride so far, in time order.
+    pub fn timeline(&self) -> Vec<TimelineSegment> {
+        use ride_fusion::fusion::Doing;
+        self.lock()
+            .timeline()
+            .into_iter()
+            .map(|s| TimelineSegment {
+                start_ns: s.start_ns,
+                end_ns: s.end_ns,
+                walking: s.doing == Doing::Walking,
+                label: match s.doing {
+                    Doing::Walking => "walking".to_string(),
+                    Doing::Subway { line: Some(l) } => l,
+                    Doing::Subway { line: None } => "subway".to_string(),
+                },
             })
             .collect()
     }
