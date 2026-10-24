@@ -96,6 +96,33 @@ impl Session {
     pub fn read_records(&self, name: &str) -> anyhow::Result<StreamContents<RecordChunk>> {
         read_stream_file(&self.stream_path(name))
     }
+
+    /// A stream's chunks, decoded one at a time as they're asked for, so a long ride's stream needn't fit in memory.
+    /// Damage ends it with an error, where [`read_stream_file`] skips past it; on a clean file, they read the same chunks.
+    pub fn stream_chunks<C: Message + Default>(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<impl Iterator<Item = anyhow::Result<C>> + use<C>> {
+        let path = self.stream_path(name);
+        let file =
+            std::fs::File::open(&path).with_context(|| format!("reading {}", path.display()))?;
+        let mut decoder = Some(zstd::stream::read::Decoder::new(file)?);
+        Ok(std::iter::from_fn(move || {
+            let result = match read_message(decoder.as_mut()?) {
+                Ok(Some(bytes)) => C::decode(bytes.as_slice())
+                    .map_err(|e| anyhow::anyhow!("{}: chunk doesn't decode: {e}", path.display())),
+                Ok(None) => {
+                    decoder = None;
+                    return None;
+                }
+                Err(e) => Err(anyhow::anyhow!("{}: {e}", path.display())),
+            };
+            if result.is_err() {
+                decoder = None;
+            }
+            Some(result)
+        }))
+    }
 }
 
 pub struct StreamContents<C = SensorChunk> {
