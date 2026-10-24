@@ -1516,6 +1516,22 @@ impl Fusion {
         {
             let gait = self.walking.last_gait().and_then(|(_, g)| g);
             self.step_windows.push((t_ns, gait.is_some()));
+            // A stop missed at the end of a ride, with no departure after it to find it from: found from the walk
+            // off itself (`20261022-181802`, 6:34 pm).
+            if self.context.in_subway
+                && gait.is_some()
+                && let Some(stop) = missed_stop(
+                    &self.step_windows,
+                    &self.train_stops,
+                    &self.departures,
+                    t_ns,
+                )
+            {
+                let station = self.station_now(stop.t_ns);
+                self.train_stops.push((stop, station, true));
+                let from = stop.standing_ns();
+                self.hold_standing(t_ns, from, from + (STOP_STANDING_S * 1e9) as i64);
+            }
             self.confirm_by_walking_off(t_ns);
             if walking {
                 let running = gait == Some(Gait::Running);
