@@ -115,7 +115,8 @@ fun SpeedGraphScreen(
         val windowStartNs = WINDOWS_MIN[window]?.let { max(windowEndNs - it * 60_000_000_000L, samples.first().elapsedRealtimeNs) }
             ?: samples.first().elapsedRealtimeNs
         val windowSpanNs = max(1L, windowEndNs - windowStartNs)
-        val spanNs = max(min(MIN_SPAN_NS, windowSpanNs), (windowSpanNs / zoom).toLong())
+        // Divided in doubles and capped: a `Float` division rounds an hour in ns past the window, emptying the pan range.
+        val spanNs = min(windowSpanNs, max(min(MIN_SPAN_NS, windowSpanNs), (windowSpanNs / zoom.toDouble()).toLong()))
         // Kept in the window; at its end, the view follows now.
         val endNs = windowEndNs - backNs.coerceIn(0L, windowSpanNs - spanNs)
         val startNs = endNs - spanNs
@@ -132,7 +133,7 @@ fun SpeedGraphScreen(
                     // The time under the fingers stays under them.
                     val anchor = (centroid.x / width).coerceIn(0f, 1f)
                     val newZoom = (zoom * zoomChange).coerceIn(1f, max(1f, windowSpanNs.toFloat() / MIN_SPAN_NS))
-                    val newSpan = (windowSpanNs / newZoom).toLong()
+                    val newSpan = min(windowSpanNs, (windowSpanNs / newZoom.toDouble()).toLong())
                     val anchorNs = startNs + (spanNs * anchor).toLong()
                     val newEnd = anchorNs + (newSpan * (1 - anchor)).toLong() - (pan.x / width * newSpan).toLong()
                     zoom = newZoom
