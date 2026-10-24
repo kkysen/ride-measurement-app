@@ -83,6 +83,8 @@ const DEPART_AFTER_STOP_S: f64 = 5.0;
 const RECORD_MAX_DWELL_S: f64 = 300.0;
 /// A transfer (see [`Fusion::transfer_s`]) is shown for at most this long (s): a late night wait for a train.
 const TRANSFER_MAX_S: f64 = 1_800.0;
+/// Between trains (see [`Fusion::transfer_s`]) the live speed shows at most a run (m/s).
+const BETWEEN_TRAINS_MAX_MPS: f64 = 3.0;
 /// A departure is the rider's new train if no step window ends within this before and after it (s).
 const TRANSFER_STILL_S: (f64, f64) = (10.0, 5.0);
 /// A car heard as the rider's this long (s) is their train's, not one standing at the platform:
@@ -1844,6 +1846,19 @@ impl Fusion {
     /// confirms it, as eased braking at speed also settles (`154951`, the elevated 7).
     pub fn estimate(&self, now_ns: i64) -> Estimate {
         let mut e = self.estimate_unheld(now_ns);
+        // Between trains the rider is on foot: standing on a platform, or walking at most at a run.
+        // The IMU alone ran to the 55 mph cap standing on the platforms at 6 Av and 14 St (`20261023-193658`).
+        if self.transfer_s(now_ns).is_some() {
+            let walking = self.step_windows.last().is_some_and(|&(_, steps)| steps);
+            e.speed_mps = if walking {
+                e.speed_mps.min(BETWEEN_TRAINS_MAX_MPS)
+            } else {
+                0.0
+            };
+            e.accel_mps2 = 0.0;
+            e.stopped = !walking;
+            return e;
+        }
         if self.likely_stop_now(now_ns).is_some() {
             e.speed_mps = 0.0;
             e.accel_mps2 = 0.0;
