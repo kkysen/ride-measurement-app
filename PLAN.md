@@ -716,7 +716,17 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    chime's family was shown as if a model; say `R62-family chime` then), despite a steady car beacon, which R62s
    don't have; NTT on the 1 at 96 St; a passing 2's chime taken as the rider's at 14 St.
    Ignore chimes between trains, and only count chimes since boarding; add the L's R143s and R160s.
-5. Departures on the L found poorly (ATO's gentle starts); check against the car beacons' accelerometers.
+5. Done (checked, no code change; scored with the untracked scratch `crates/cli/examples/departs.rs`, `just sweep departs`,
+   results in `target/cmp/departs-before.txt`): departures on the L are found well since `69b80ca`.
+   Against the "train started" taps, a start surge within 2 s of 100 of 114 taps over 11 rides, all 14 on `193658`
+   (median under 0.5 s); the stop records' departure within 2 s of 81, 10 of 14 on `193658`, the 4 missed for want of
+   a stop before them (boarding at 7:52:49 pm, 7:55:30, 7:58:15, and the hold at 8:04:45), not of a departure.
+   The car beacons' accelerometers can't do better: the rider's car is heard only on 4 tapped rides (`135509`,
+   `155919`, `181802`, `193658`; `003357`'s L stretch had no steady car), about 0.4 readings a second on the L
+   with gaps up to 5 s. The start shows (the long axis from about 0.4 to 1.2 to 1.5 m/s^2 within 1 to 3 s of the tap),
+   but a detector (steady over the 4 s before, then two readings off by over 0.6 m/s^2) found 3 of the L's 10 taps
+   with the car heard, each 1 to 1.5 s late; over 8 s and 2 readings, 4 of 10, 3 of 6 on `135509`, with 10 starts
+   no tap was near. Not committed.
 6. Partly done (`69b80ca`): Lorimer St: stopped 0:48 on arriving. A lurch at 8:02:19 pm, 20 s after leaving
    Bedford Av with no tap (braking taken for a stop, or a slowdown), started the live dwell; the arrival's own
    lurch at 8:03:06 didn't restart it because the L's settling surge 1 s later read as a departure. Now the
