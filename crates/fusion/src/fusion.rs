@@ -2353,7 +2353,18 @@ fn stop_records(
         };
         let alighted = alighted
             .filter(|&a| ridden_departure.is_none_or(|d| a < d))
-            .filter(|&a| !carried_on(a));
+            .filter(|&a| !carried_on(a))
+            .or_else(|| {
+                // Left without a walk off seen (few steps, in a crowd): the next stop is another train's, met on
+                // the platform, and this one left unfelt; off at the first steps (74 St, `20261020-184134`, 7:09 pm).
+                let (next, ..) = stops.get(k + 1)?;
+                let first = after.iter().find(|&&(t, steps)| steps && t < next.t_ns)?.0 - window_ns;
+                (!on_platform
+                    && ridden_departure.is_none()
+                    && on_platform_at(next.t_ns)
+                    && !departures.iter().any(|&d| d > stop.t_ns && d < next.t_ns))
+                .then_some(first)
+            });
         // Boarding: the last steps before a departure, after walking on the platform or off a train.
         let (boarded, departed) = if on_platform || alighted.is_some() {
             let from = alighted.unwrap_or(stop.t_ns);
