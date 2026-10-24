@@ -680,7 +680,17 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    `rejected as outliers: stop 4482` (the quiet phone's zero gated out), and the tunnel hold before 96 St
    (stopped, then not, then 2:28 once moving). Between trains, hold the speed; keep a stop alive while the phone
    is quiet, ungated underground like door cycles.
-2. Curves read as speeding up (40 to 55 mph before Jefferson St): subtract v times the gyro's yaw rate.
+2. Done (`e76cc1b`): the yaw rate times the speed, sideways to the axis, taken out of the IMU's horizontal
+   acceleration while turning slower than 0.1 rad/s (faster, the rider turning the phone, it ran a stop in a
+   GNSS cut on `011209` to 35 mph). Scored with the untracked scratch `crates/cli/examples/curves.rs`
+   (`just sweep curves`; results in `target/cmp/curves-*.txt`): seconds at 50 mph or more with no fix within
+   10 s, 1459 to 1083 in all (`003357` 58 to 38, its Jefferson St stretch 45 to 13 s; `193658` 63 to 48);
+   pooled RMS in simulated 30 s GNSS cuts 5.9 to 5.9 mph, but `160303` 3.6 to 7.4, `155919` 5.7 to 7.5,
+   `193658` 4.0 to 4.6. Holding the spread's axis while turning, alone or with it, regressed both; ungated,
+   the cut RMS on `011209` went 5.5 to 13.5 mph.
+   Also tried: naming each stop's station by the lines its train turned out to be on (`leg_station`, patch in
+   `target/cmp/leg-station.patch`): no stop's station changed on `193658` or six other subway rides
+   (14 St-Union Sq already reads the L), so not committed.
 3. Done (`b7011be`, `51aa0fb`, `0d40f12`): the route and stop count only since the last walk off, none between
    trains, where the station's lines are its complex's; a feed trip only matches its own line's platform.
    Boarding from the platform (a transfer's end) counts as a 30 s stop at the station the radio named then.
