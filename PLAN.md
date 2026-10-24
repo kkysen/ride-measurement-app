@@ -666,7 +666,7 @@ and built the same night:
 - Past rides show start and end with the date, and the length as h:mm:ss (`56d2a1e`); the end is the last
   sensor sample, since the files' modification times move when recompression or tap edits rewrite them.
 
-App 0.1.12 (on the phone, installed 2026-10-24 from `4d89750`, Rust core 0.1.12): past rides' map and graph
+App 0.1.14 (on the phone, installed 2026-10-24 from `88596dc`, Rust core 0.1.14; 0.1.13 added the replay's progress bar, 0.1.14 items 3 and 12). From 0.1.12: past rides' map and graph
 (item 14 below; 0.1.11 fixed 0.1.10's crash opening a long ride's graph, `851fbaf`), replays 8 times faster
 (`ae5a245`) and cached until the Rust changes (`dd63d1f`), and items 3 and 4 below.
 The Rust core's version is now the app version that last changed it (`just bump`, `6cb7b89`).
