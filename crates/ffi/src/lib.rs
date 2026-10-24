@@ -91,6 +91,8 @@ pub struct Estimate {
     pub accel_mps2: f64,
     /// The whole ride's average speed so far, stops included.
     pub average_mps: Option<f64>,
+    /// The fastest the vehicle can go now (55 mph on the subway), if limited.
+    pub max_speed_mps: Option<f64>,
 }
 
 /// A smoothed speed at a fix or a sample time (`ride_fusion::fusion::SmoothedSpeed`).
@@ -339,6 +341,7 @@ impl Fusion {
             sensors: e.sensors.into_iter().map(Sensor::from).collect(),
             stopped: e.stopped,
             since_gnss_s: e.since_gnss_s,
+            max_speed_mps: e.max_speed_mps,
             rejected: e
                 .rejected
                 .into_iter()

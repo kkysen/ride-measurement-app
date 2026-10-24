@@ -74,7 +74,8 @@ class MainActivity : ComponentActivity() {
                     when {
                         estimate.stopped -> "0 $unit"
                         // Within its uncertainty of standing still: a number would suggest motion that may not be there.
-                        v < sigma -> "< %.0f $unit".format(v + sigma)
+                        // No more than the vehicle can go, though: the limit holds the speed, not its sigma.
+                        v < sigma -> "< %.0f $unit".format(minOf(v + sigma, estimate.maxSpeedMps?.let(Units::speed) ?: Double.MAX_VALUE))
                         else -> "%.0f $unit ± %.0f".format(v, sigma)
                     },
                     style = MaterialTheme.typography.displayMedium,

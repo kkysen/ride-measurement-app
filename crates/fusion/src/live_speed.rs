@@ -48,6 +48,9 @@ pub struct Estimate {
     /// Acceleration in the direction of travel (m/s^2, negative when braking): the rate of change of the fused
     /// speed (IMU prediction and GNSS and stop corrections alike), averaged over about [`ACCEL_TAU_S`].
     pub accel_mps2: f64,
+    /// The fastest the vehicle can go now (m/s), if limited (see [`LiveSpeedEstimator::set_max_speed`]):
+    /// the speed is held under it, but its sigma isn't, so the speed and sigma together can exceed it.
+    pub max_speed_mps: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -873,6 +876,7 @@ impl LiveSpeedEstimator {
             rejected: self.rejected.clone(),
             initialized: self.initialized,
             accel_mps2: self.accel,
+            max_speed_mps: self.max_speed_mps,
         }
     }
 
