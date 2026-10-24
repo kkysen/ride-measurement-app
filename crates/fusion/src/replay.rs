@@ -56,16 +56,16 @@ enum Event {
     Gyro([f64; 3]),
     Mag([f64; 3]),
     Pressure(f64),
-    Fix(Fix),
-    Measurements(ride_session::proto::GnssMeasurementsEvent),
-    Navigation(ride_session::proto::GnssNavigationMessage),
+    Fix(Box<Fix>),
+    Measurements(Box<ride_session::proto::GnssMeasurementsEvent>),
+    Navigation(Box<ride_session::proto::GnssNavigationMessage>),
     WifiScan(Vec<String>),
     Cell(Option<i64>),
-    NetworkFix(f64, f64, Option<f64>),
-    Audio(u32, AudioSamples),
-    Ble(Vec<u8>, i32),
+    NetworkFix(Box<(f64, f64, Option<f64>)>),
+    Audio(u32, Box<AudioSamples>),
+    Ble(Box<(Vec<u8>, i32)>),
     /// A GTFS-realtime response body that came back, and when it was requested (unix ms).
-    Transit(Vec<u8>, i64),
+    Transit(Box<(Vec<u8>, i64)>),
 }
 
 /// The app feeds audio to fusion as it reads it, this many frames at a time (`AudioStreamRecorder.kt`).
@@ -164,16 +164,16 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                         speed: l.speed_meters_per_second.map(f64::from),
                         speed_sigma: l.speed_accuracy_meters_per_second.map(f64::from),
                     };
-                    events.push((fix.elapsed_realtime_ns, Event::Fix(fix)));
+                    events.push((fix.elapsed_realtime_ns, Event::Fix(Box::new(fix))));
                 }
                 // Android's own location, as the app passes it on.
                 Some(Payload::Location(l)) if l.provider == "fused" && !l.is_mock => events.push((
                     l.elapsed_realtime_nanos,
-                    Event::NetworkFix(
+                    Event::NetworkFix(Box::new((
                         l.latitude_degrees,
                         l.longitude_degrees,
                         l.horizontal_accuracy_meters.map(f64::from),
-                    ),
+                    ))),
                 )),
                 Some(Payload::GnssMeasurements(m)) => {
                     let t = m
@@ -181,10 +181,10 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                         .as_ref()
                         .and_then(|c| c.elapsed_realtime_nanos)
                         .unwrap_or(received);
-                    events.push((t, Event::Measurements(m)));
+                    events.push((t, Event::Measurements(Box::new(m))));
                 }
                 Some(Payload::GnssNavigationMessage(m)) => {
-                    events.push((received, Event::Navigation(m)))
+                    events.push((received, Event::Navigation(Box::new(m))))
                 }
                 // At the time the app recorded it, which is also when it fed it live.
                 Some(Payload::WifiScan(w)) => events.push((
@@ -196,14 +196,15 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                     for r in b.results {
                         events.push((
                             r.timestamp_elapsed_realtime_ns,
-                            Event::Ble(r.advertising_data, r.rssi),
+                            Event::Ble(Box::new((r.advertising_data, r.rssi))),
                         ));
                     }
                 }
                 // The MTA's feeds, when each response arrived, as the app passes them on.
-                Some(Payload::GtfsRealtime(f)) if f.http_status == 200 => {
-                    events.push((received, Event::Transit(f.body, f.request_unix_ms)))
-                }
+                Some(Payload::GtfsRealtime(f)) if f.http_status == 200 => events.push((
+                    received,
+                    Event::Transit(Box::new((f.body, f.request_unix_ms))),
+                )),
                 // The registered LTE cell, as the app passes it on.
                 Some(Payload::CellInfo(c)) => events.push((
                     received,
@@ -253,12 +254,12 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
                     arrived,
                     Event::Audio(
                         rate,
-                        AudioSamples {
+                        Box::new(AudioSamples {
                             first_frame: first,
                             samples: read.to_vec(),
                             // The app takes one timestamp per read.
                             timestamps: timestamps.get(i).copied().into_iter().collect(),
-                        },
+                        }),
                     ),
                 ));
             }
@@ -290,17 +291,17 @@ pub fn replay_with(session: &Session, options: &Options) -> anyhow::Result<Repla
             Event::Gyro(w) => fusion.on_gyro(t, w),
             Event::Mag(b) => fusion.on_magnetometer(t, b),
             Event::Pressure(p) => fusion.on_pressure(t, p),
-            Event::Fix(fix) => fusion.on_fix(fix),
+            Event::Fix(fix) => fusion.on_fix(*fix),
             Event::Measurements(m) => {
                 fusion.on_gnss_measurements(t, &m);
             }
             Event::Navigation(m) => fusion.on_navigation_message(&m),
             Event::WifiScan(ssids) => fusion.on_wifi_scan(t, ssids),
             Event::Cell(c) => fusion.on_cell(t, c),
-            Event::NetworkFix(lat, lon, acc) => fusion.on_network_fix(t, lat, lon, acc),
-            Event::Audio(rate, audio) => fusion.on_audio(t, rate, audio),
-            Event::Ble(data, rssi) => fusion.on_ble(t, &data, rssi),
-            Event::Transit(body, request_ms) => fusion.on_transit(t, request_ms, &body),
+            Event::NetworkFix(f) => fusion.on_network_fix(t, f.0, f.1, f.2),
+            Event::Audio(rate, audio) => fusion.on_audio(t, rate, *audio),
+            Event::Ble(b) => fusion.on_ble(t, &b.0, b.1),
+            Event::Transit(b) => fusion.on_transit(t, b.1, &b.0),
         }
     }
     fusion.finish();
