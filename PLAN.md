@@ -409,6 +409,11 @@ Open, roughly in order:
    end runaway IMU speeds between known stations. Needs the stations right (tunnel holds, cells shifted at speed).
    86 St on the uptown 1 wasn't named live (the rider): it has no tagged cell yet; add it from this ride's tap,
    or from the stop between 79 St and 96 St.
+   Held in the tunnel between 86 St and 96 St on the uptown 1 for a couple of minutes: live it said stopped
+   at first, then not, then stopped 2:28 once moving again. Likely the lurch's likely stop dropped for want of
+   doors, and the quiet phone's stop rejected by the gate (`rejected as outliers: stop 4482`, samples); a quiet
+   phone should keep a stop alive, ungated underground like door cycles. Then at 96 St, NTT cars on the 1
+   (R62A): a 2 or 3 heard across the platform, or the chime misread; the line should rule out its models.
 
 8. The home elevator (`python/experiments/elevator.py`): 12 m in 25 s with the phone still is the elevator,
    with steps (4.9 to 6.4 m/s^2 std) the stairs; marks the start and end of a trip at home.
