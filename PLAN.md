@@ -666,7 +666,8 @@ and built the same night:
 - Past rides show start and end with the date, and the length as h:mm:ss (`56d2a1e`); the end is the last
   sensor sample, since the files' modification times move when recompression or tap edits rewrite them.
 
-App 0.1.10 (on the phone, installed 2026-10-24 from `49be446`): past rides' map and graph (item 14 below).
+App 0.1.11 (on the phone, installed 2026-10-24 from `803e97e`): past rides' map and graph (item 14 below);
+0.1.11 fixes 0.1.10's crash opening a long ride's graph (`851fbaf`).
 
 Sessions `20261022-142111` to `20261024-003357` (7) pulled to `data/sessions/` on 2026-10-24, each file's size
 checked against the phone. The L ride is likely `20261023-193658` (7:36 pm), the uptown 1 with the tunnel hold
