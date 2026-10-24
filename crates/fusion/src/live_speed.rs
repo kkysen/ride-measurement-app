@@ -586,7 +586,17 @@ impl LiveSpeedEstimator {
         self.stopped =
             self.still_since_ns != 0 && (t_ns - self.still_since_ns) as f64 * 1e-9 >= STILL_S;
         if self.stopped {
-            self.update(0.0, STOP_SIGMA_MPS * STOP_SIGMA_MPS, Sensor::Stop, t_ns);
+            // Like a door cycle, not gated without recent GNSS: underground the speed's sigma grows to a few m/s,
+            // so the gate rejected the quiet phone's zero exactly when the speed had run away
+            // (`rejected as outliers: stop`, standing on the platforms at 6 Av and 14 St on `20261023-193658`).
+            let gnss_recent =
+                self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+            let r = STOP_SIGMA_MPS * STOP_SIGMA_MPS;
+            if gnss_recent {
+                self.update(0.0, r, Sensor::Stop, t_ns);
+            } else {
+                self.update_ungated(0.0, r, Sensor::Stop, t_ns);
+            }
             self.since_stop_along = 0.0;
         } else {
             if was_stopped {
