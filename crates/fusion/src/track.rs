@@ -276,6 +276,38 @@ pub fn join(
     stats
 }
 
+/// Holds the smoothed `speeds` over each of the [`legs`] to its track's length: scaled to cover it
+/// (speed and acceleration, as [`crate::fusion`]'s gap bound does), at most to the subway's top speed;
+/// spread evenly over the leg if they cover nothing. Underground they cover a median 0.46 of the track
+/// (`crates/cli/examples/legs.rs`, 90 legs on 15 rides; a tenth under 0.14).
+/// Only legs the speeds cover whole: live, the smoothing window can start partway through one.
+pub fn hold_to_track(speeds: &mut [SmoothedSpeed], legs: &[Leg]) {
+    let (Some(first), Some(last)) = (speeds.first(), speeds.last()) else {
+        return;
+    };
+    let (first, last) = (first.elapsed_realtime_ns, last.elapsed_realtime_ns);
+    for leg in legs {
+        let (from, to) = (leg.from_ns, leg.to_ns);
+        if from < first || to > last {
+            continue;
+        }
+        let length = leg.track.length_m();
+        let total = covered_m(speeds, from, to);
+        let lo = speeds.partition_point(|s| s.elapsed_realtime_ns < from);
+        let hi = speeds.partition_point(|s| s.elapsed_realtime_ns <= to);
+        for s in &mut speeds[lo..hi] {
+            if total > 0.0 {
+                let k = length / total;
+                s.speed_mps *= k;
+                s.accel_mps2 *= k;
+            } else {
+                s.speed_mps = length / ((to - from) as f64 * 1e-9);
+            }
+            s.speed_mps = s.speed_mps.min(SUBWAY_MAX_SPEED_MPS);
+        }
+    }
+}
+
 /// The distance (m) the smoothed `speeds` cover from `from` to `to`, by the trapezoid rule.
 pub fn covered_m(speeds: &[SmoothedSpeed], from: i64, to: i64) -> f64 {
     let lo = speeds.partition_point(|s| s.elapsed_realtime_ns < from);
@@ -311,6 +343,40 @@ mod tests {
         // Halfway is under the river, not at either end.
         let mid = t.at(t.length_m() / 2.0);
         assert!(meters(mid, t.points[0]) > 500.0 && meters(mid, *t.points.last().unwrap()) > 500.0);
+    }
+
+    fn speeds(from_s: i64, to_s: i64, v: f64) -> Vec<SmoothedSpeed> {
+        (from_s..=to_s)
+            .map(|t| SmoothedSpeed {
+                elapsed_realtime_ns: t * 1_000_000_000,
+                speed_mps: v,
+                sigma_mps: 1.0,
+                forward_mps: v,
+                backward_mps: v,
+                accel_mps2: 0.0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn speeds_are_held_to_the_track_over_whole_legs_only() {
+        let track = between(station("Bedford Av", "L"), station("1 Av", "L")).unwrap();
+        let length = track.length_m();
+        let leg = Leg {
+            from_ns: 100_000_000_000,
+            to_ns: 300_000_000_000,
+            track,
+        };
+        // The whole leg: 5 m/s over 200 s is 1000 m, scaled up to the track's length.
+        let mut whole = speeds(0, 400, 5.0);
+        hold_to_track(&mut whole, std::slice::from_ref(&leg));
+        let held = covered_m(&whole, leg.from_ns, leg.to_ns);
+        assert!((held - length).abs() < 1.0, "{held} {length}");
+        assert_eq!(whole[50].speed_mps, 5.0);
+        // A live window starting partway through the leg leaves it alone.
+        let mut window = speeds(200, 400, 5.0);
+        hold_to_track(&mut window, &[leg]);
+        assert!(window.iter().all(|s| s.speed_mps == 5.0));
     }
 
     #[test]

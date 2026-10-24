@@ -94,6 +94,8 @@ pub struct Options {
     pub gnss_outages: Option<GnssOutages>,
     /// For comparison only: leave the audio out, as before door cycles were heard.
     pub ignore_audio: bool,
+    /// For scoring only: leave the smoothed speeds unheld to the track (see [`Fusion::set_track_hold`]).
+    pub no_track_hold: bool,
     /// Leave out [`Replay::statuses`], for what doesn't show them: about a fifth of a replay's time.
     pub no_statuses: bool,
     /// For scoring: keep [`Replay::live`] this often (ns), if set.
@@ -279,6 +281,7 @@ pub fn replay_with_progress(
 
     let mut fusion = Fusion::whole_ride();
     fusion.set_max_speed(options.max_speed_mps);
+    fusion.set_track_hold(!options.no_track_hold);
     // Downloaded orbits (`just orbits`), for constellations whose navigation messages the phone missed.
     for eph in ride_gnss::orbits::read_session_orbits(&session.dir)? {
         fusion.navigator_mut().add_ephemeris(eph);

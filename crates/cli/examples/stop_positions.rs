@@ -2,8 +2,9 @@
 // dead reckoned (GNSS, the IMU, and the station pins), joined along the track (`ride_fusion::track::join`),
 // which puts a joined stop on its station by construction, and joined with that stop left out as an anchor
 // (its neighbors joined across it, its position from the speeds along the track): the honest score.
+// The speeds are left unheld to the track, which would carry each station's place into the left out one.
 use ride_fusion::position::PositionEstimate;
-use ride_fusion::replay::replay;
+use ride_fusion::replay::{Options, replay_with};
 use ride_fusion::stations::meters;
 use ride_fusion::track::join;
 use ride_session::read::Session;
@@ -28,7 +29,13 @@ fn summary(name: &str, mut e: Vec<f64>) -> String {
 
 fn main() -> anyhow::Result<()> {
     for dir in std::env::args().skip(1) {
-        let r = replay(&Session::open(&dir)?)?;
+        let r = replay_with(
+            &Session::open(&dir)?,
+            &Options {
+                no_track_hold: true,
+                ..Options::default()
+            },
+        )?;
         let stats = join(
             &mut r.dead_reckoned.clone(),
             &r.smoothed,

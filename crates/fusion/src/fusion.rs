@@ -639,6 +639,8 @@ pub struct Fusion {
     trips: trips::Trips,
     /// When the subway detector switched, and to what.
     subway_changes: Vec<(i64, bool)>,
+    /// Whether the smoothed speeds are held to the track between stations (see [`crate::track::hold_to_track`]).
+    track_hold: bool,
     /// The registered LTE cell and when it was last reported.
     cell: Option<(i64, i64)>,
     /// Each change of the registered LTE cell (none when it's lost), for the cell at a stop.
@@ -715,6 +717,7 @@ impl Fusion {
             altimeter: Default::default(),
             trips: trips::Trips::default(),
             subway_changes: Vec::new(),
+            track_hold: true,
             cell: None,
             cells: Vec::new(),
             network_station: None,
@@ -730,6 +733,11 @@ impl Fusion {
     pub fn set_max_speed(&mut self, max_speed_mps: Option<f64>) {
         self.context.base_max_speed_mps = max_speed_mps;
         self.estimator.set_max_speed(self.context.max_speed_mps());
+    }
+
+    /// For scoring only: leave the smoothed speeds unheld to the track (see [`crate::track::hold_to_track`]).
+    pub fn set_track_hold(&mut self, on: bool) {
+        self.track_hold = on;
     }
 
     /// Whether the phone is in the subway as of the settled inputs.
@@ -2182,6 +2190,10 @@ impl Fusion {
             })
             .collect();
         bound_gaps(&mut out, &fixes, &steps, &self.subway_changes);
+        if self.track_hold {
+            let (legs, _) = crate::track::legs(&self.stop_records(), &self.good_fix_ns(), None);
+            crate::track::hold_to_track(&mut out, &legs);
+        }
         out
     }
 }
