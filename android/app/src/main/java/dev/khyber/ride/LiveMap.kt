@@ -35,6 +35,7 @@ import kotlin.math.hypot
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.FolderOverlay
@@ -55,7 +56,16 @@ import uniffi.ride_ffi.speedScaleName
 @Composable
 fun LiveMapScreen(onBack: () -> Unit) {
     val points by LiveTrack.points.collectAsStateWithLifecycle()
-    var follow by remember { mutableStateOf(true) }
+    TrackMapScreen(points, live = true, onBack)
+}
+
+/**
+ * A GPS path colored by speed or acceleration: the current recording's ([live], following the newest fix),
+ * or a past ride's, shown whole.
+ */
+@Composable
+fun TrackMapScreen(points: List<LiveTrack.Point>, live: Boolean, onBack: () -> Unit, extraButton: @Composable () -> Unit = {}) {
+    var follow by remember { mutableStateOf(live) }
     var selected by remember { mutableStateOf<LiveTrack.Point?>(null) }
     // Null is automatic, from the top speed so far.
     var chosenScale by rememberSaveable { mutableStateOf<SpeedScale?>(null) }
@@ -75,7 +85,8 @@ fun LiveMapScreen(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             HapticButton(onClick = onBack) { Text("Back") }
-            HapticButton(onClick = { follow = true }, enabled = !follow) { Text("Follow") }
+            extraButton()
+            if (live) HapticButton(onClick = { follow = true }, enabled = !follow) { Text("Follow") }
             HapticButton(onClick = { colorByAccel = !colorByAccel }) { Text(if (colorByAccel) "Color: accel" else "Color: speed") }
             // Cycles automatic, then each scale.
             if (!colorByAccel) {
@@ -85,7 +96,7 @@ fun LiveMapScreen(onBack: () -> Unit) {
                 }) { Text("Scale: " + if (chosenScale == null) "auto" else scale.name) }
             }
         }
-        Text(describe(selected ?: points.lastOrNull(), latest = selected == null), style = MaterialTheme.typography.bodyMedium)
+        Text(describe(selected ?: points.lastOrNull(), latest = selected == null, live), style = MaterialTheme.typography.bodyMedium)
         Text(
             (
                 if (colorByAccel) {
@@ -108,7 +119,14 @@ fun LiveMapScreen(onBack: () -> Unit) {
                     // A map failure shows as text here; it can't affect recording.
                     try {
                         newMapView(context, track, onDrag = { follow = false }, onTap = { selected = it })
-                            .apply { clipToOutline = true }
+                            .apply {
+                                clipToOutline = true
+                                // A past ride doesn't move: show all of it.
+                                if (!live && points.isNotEmpty()) {
+                                    val box = BoundingBox.fromGeoPoints(points.map { GeoPoint(it.lat, it.lon) })
+                                    addOnFirstLayoutListener { _, _, _, _, _ -> zoomToBoundingBox(box, false, 48) }
+                                }
+                            }
                     } catch (e: Throwable) {
                         Log.e("RideLogger", "map failed", e)
                         TextView(context).apply { text = "Map failed to load:\n${Log.getStackTraceString(e)}" }
@@ -142,11 +160,11 @@ private fun nearCenter(view: MapView, p: LiveTrack.Point): Boolean {
     return x in 0.2..0.8 && y in 0.2..0.8
 }
 
-private fun describe(p: LiveTrack.Point?, latest: Boolean): String {
-    if (p == null) return "No GPS fix yet this recording."
+private fun describe(p: LiveTrack.Point?, latest: Boolean, live: Boolean): String {
+    if (p == null) return if (live) "No GPS fix yet this recording." else "No GPS fixes on this ride."
     fun f(v: Double?, digits: Int) = v?.let { "%.${digits}f".format(it) } ?: "unknown"
     val time = DateFormat.getTimeInstance().format(Date(p.timeMs))
-    return (if (latest) "Now ($time): " else "At $time: ") +
+    return (if (latest) "${if (live) "Now" else "Last fix"} ($time): " else "At $time: ") +
         "${f(p.speedMps?.let(Units::speed), 1)} ${Units.speedUnit} · " +
         "${p.accelMps2?.let { "%+.2f".format(Units.accel(it)) } ?: "unknown"} ${Units.accelUnit}" +
         "\nsmoothed ${f(p.smoothedSpeedMps?.let(Units::speed), 1)} · live ${f(p.fusedSpeedMps?.let(Units::speed), 1)} · " +

@@ -213,15 +213,16 @@ class MainActivity : ComponentActivity() {
                 Surface(Modifier.fillMaxSize()) {
                     var page by remember { mutableStateOf("main") }
                     // The phone's back gesture returns to the main page rather than leaving the app.
-                    BackHandler(enabled = page != "main") { page = "main" }
+                    BackHandler(enabled = page != "main") { page = if (page.startsWith("ride:") || page.startsWith("rideTaps:")) "rides" else "main" }
                     when {
                         page == "map" -> LiveMapScreen(onBack = { page = "main" })
                         page == "graph" -> LiveGraphScreen(onBack = { page = "main" })
                         page == "rides" -> PastRidesScreen(onBack = { page = "main" }, onShowTaps = { id ->
                             // The ride being recorded is still being written: its taps come from the live list.
                             page = if (id == RecorderService.state.value.sessionId) "taps" else "rideTaps:$id"
-                        })
+                        }, onShowRide = { id -> page = "ride:$id" })
                         page == "taps" -> TapsScreen(onBack = { page = "main" })
+                        page.startsWith("ride:") -> PastRideScreen(page.removePrefix("ride:"), onBack = { page = "rides" })
                         page.startsWith("rideTaps:") -> RideTapsScreen(page.removePrefix("rideTaps:"), onBack = { page = "rides" })
                         else -> Screen(onShowMap = { page = "map" }, onShowGraph = { page = "graph" }, onShowRides = { page = "rides" }, onShowTaps = { page = "taps" })
                     }

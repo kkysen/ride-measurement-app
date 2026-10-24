@@ -67,7 +67,23 @@ fun LiveGraphScreen(onBack: () -> Unit) {
     val samples by LiveSeries.samples.collectAsStateWithLifecycle()
     val stops by LiveSeries.stops.collectAsStateWithLifecycle()
     val timeline by LiveSeries.timeline.collectAsStateWithLifecycle()
-    var window by rememberSaveable { mutableIntStateOf(1) }
+    SpeedGraphScreen(samples, stops, timeline, pastClockOffsetMs = null, onBack)
+}
+
+/**
+ * The graphs for the current recording, or for a past ride if [pastClockOffsetMs] (unix ms minus elapsed-realtime ms
+ * over that ride) is given: then the ride's end stands for now, and it's shown whole at first.
+ */
+@Composable
+fun SpeedGraphScreen(
+    samples: List<LiveSeries.Sample>,
+    stops: List<LiveStop>,
+    timeline: List<TimelineSegment>,
+    pastClockOffsetMs: Long?,
+    onBack: () -> Unit,
+    extraButton: @Composable () -> Unit = {},
+) {
+    var window by rememberSaveable { mutableIntStateOf(if (pastClockOffsetMs == null) 1 else WINDOWS_MIN.lastIndex) }
     // The zoom (1 shows the whole window), and how far before the window's end the view ends (ns).
     var zoom by rememberSaveable { mutableFloatStateOf(1f) }
     var backNs by rememberSaveable { mutableLongStateOf(0L) }
@@ -79,6 +95,7 @@ fun LiveGraphScreen(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             HapticButton(onClick = onBack) { Text("Back") }
+            extraButton()
             HapticButton(onClick = {
                 window = (window + 1) % WINDOWS_MIN.size
                 zoom = 1f
@@ -88,12 +105,12 @@ fun LiveGraphScreen(onBack: () -> Unit) {
             }
         }
         if (samples.size < 2) {
-            Text("No speeds yet: they start once a recording does.")
+            Text(if (pastClockOffsetMs == null) "No speeds yet: they start once a recording does." else "No speeds on this ride.")
             return@Column
         }
-        // Elapsed-realtime times, mapped to the clock by the offset now.
-        val nowNs = SystemClock.elapsedRealtimeNanos()
-        val clockOffsetMs = System.currentTimeMillis() - nowNs / 1_000_000
+        // Elapsed-realtime times, mapped to the clock by the offset now, or the past ride's.
+        val nowNs = if (pastClockOffsetMs == null) SystemClock.elapsedRealtimeNanos() else samples.last().elapsedRealtimeNs
+        val clockOffsetMs = pastClockOffsetMs ?: (System.currentTimeMillis() - nowNs / 1_000_000)
         val windowEndNs = max(samples.last().elapsedRealtimeNs, nowNs)
         val windowStartNs = WINDOWS_MIN[window]?.let { max(windowEndNs - it * 60_000_000_000L, samples.first().elapsedRealtimeNs) }
             ?: samples.first().elapsedRealtimeNs
