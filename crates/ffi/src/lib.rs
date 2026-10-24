@@ -113,6 +113,10 @@ pub struct LiveStop {
     pub departed_ns: Option<i64>,
     pub station: Option<String>,
     pub in_subway: bool,
+    pub doors_open_ns: Option<i64>,
+    pub doors_closed_ns: Option<i64>,
+    /// When the rider walked off, if they changed trains or got off here (not stepping out and back on).
+    pub left_ns: Option<i64>,
 }
 
 /// Raw GNSS progress, for the screen.
@@ -289,6 +293,9 @@ impl Fusion {
                 departed_ns: r.departed_ns,
                 station: r.station.map(|s| s.name.clone()),
                 in_subway: r.in_subway,
+                doors_open_ns: r.doors_open_ns,
+                doors_closed_ns: r.doors_closed_ns,
+                left_ns: r.alighted_ns.filter(|_| r.rider_left()),
             })
             .collect()
     }
