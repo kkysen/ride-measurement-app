@@ -165,6 +165,10 @@ pub struct StopRecord {
     pub between_stations: bool,
 }
 
+/// A walk off was along the car when there are at most [`CARRIED_STEP_WINDOWS`] step windows from
+/// [`CARRIED_WALK_S`] after it to the next stop (see `carried_on` in [`stop_records`]).
+const CARRIED_WALK_S: f64 = 24.0;
+const CARRIED_STEP_WINDOWS: usize = 2;
 /// A closing heard after the rider walked off is still their train's if this soon after the stop (s).
 const HEARD_FROM_PLATFORM_S: f64 = 60.0;
 /// Off and back on within this (s) is stepping out of the doors (`20261020-184134`, 7:07 pm, 16 s), not a transfer.
@@ -2295,14 +2299,17 @@ fn stop_records(
     for (k, &&(stop, station, in_subway)) in stops.iter().enumerate() {
         let next = stops.get(k + 1).map_or(i64::MAX, |(s, ..)| s.t_ns);
         let limit = next.min(stop.t_ns + s_ns(RECORD_MAX_DWELL_S));
-        let walked_before = |within: f64| {
+        let walked_before = |at: i64, within: f64| {
             step_windows
                 .iter()
-                .filter(|&&(t, steps)| steps && t > stop.t_ns - s_ns(within) && t <= stop.t_ns)
+                .filter(|&&(t, steps)| steps && t > at - s_ns(within) && t <= at)
                 .count()
         };
-        let on_platform = walked_before(PLATFORM_BEFORE_S) >= PLATFORM_WINDOWS
-            && walked_before(PLATFORM_LAST_S) > 0;
+        let on_platform_at = |at: i64| {
+            walked_before(at, PLATFORM_BEFORE_S) >= PLATFORM_WINDOWS
+                && walked_before(at, PLATFORM_LAST_S) > 0
+        };
+        let on_platform = on_platform_at(stop.t_ns);
         let after: Vec<(i64, bool)> = step_windows
             .iter()
             .copied()
@@ -2329,7 +2336,24 @@ fn stop_records(
                 && alighted.is_none_or(|_| c.close_ns < stop.t_ns + s_ns(HEARD_FROM_PLATFORM_S))
         });
         let ridden_departure = first_departure(cycle.map_or(stop.t_ns, |c| c.close_ns));
-        let alighted = alighted.filter(|&a| ridden_departure.is_none_or(|d| a < d));
+        // Still aboard: a short walk, then standing until the next stop was felt (the rider not walking on the
+        // platform before it), with no departure since the walk: the train carried the rider on, and the walk was
+        // along the car (90 St, `20261020-184134`, 7:06 pm).
+        let carried_on = |a: i64| {
+            stops.get(k + 1).is_some_and(|(next, ..)| {
+                let walked_on = step_windows
+                    .iter()
+                    .filter(|&&(t, steps)| steps && t > a + s_ns(CARRIED_WALK_S) && t <= next.t_ns)
+                    .count();
+                next.t_ns > a + s_ns(CARRIED_WALK_S)
+                    && walked_on <= CARRIED_STEP_WINDOWS
+                    && !on_platform_at(next.t_ns)
+                    && !departures.iter().any(|&d| d > a && d < next.t_ns)
+            })
+        };
+        let alighted = alighted
+            .filter(|&a| ridden_departure.is_none_or(|d| a < d))
+            .filter(|&a| !carried_on(a));
         // Boarding: the last steps before a departure, after walking on the platform or off a train.
         let (boarded, departed) = if on_platform || alighted.is_some() {
             let from = alighted.unwrap_or(stop.t_ns);
