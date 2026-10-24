@@ -794,7 +794,7 @@ impl Fusion {
                     .filter_map(|(stop, station, _)| {
                         Some(trips::RiderStop {
                             stopped_ns: stop.t_ns,
-                            departed_ns: self.departures.iter().copied().find(|&d| d > stop.t_ns),
+                            departed_ns: self.departed_after(stop.t_ns),
                             station: (*station)?,
                         })
                     }),
@@ -994,7 +994,7 @@ impl Fusion {
         let s_ns = |s: f64| (s * 1e9) as i64;
         let since = |from: i64| (t - from) as f64 * 1e-9;
         let stopped_s = since(stop.t_ns);
-        if self.departures.iter().any(|&d| d > stop.t_ns) || stopped_s > RECORD_MAX_DWELL_S {
+        if self.departed_after(stop.t_ns).is_some() || stopped_s > RECORD_MAX_DWELL_S {
             return None;
         }
         let cycle = self
@@ -1154,7 +1154,7 @@ impl Fusion {
             .filter_map(|(stop, station, _)| {
                 Some(trips::RiderStop {
                     stopped_ns: stop.t_ns,
-                    departed_ns: self.departures.iter().copied().find(|&d| d > stop.t_ns),
+                    departed_ns: self.departed_after(stop.t_ns),
                     station: (*station)?,
                 })
             })
@@ -1627,6 +1627,15 @@ impl Fusion {
         departure_fade(stop, &self.door_cycles)
     }
 
+    /// The train's first departure after the stop whose lurch was at `stopped_ns`, as [`stop_records`] finds it:
+    /// a start surge within [`DEPART_AFTER_STOP_S`] of the lurch is the stop's own settling, not a departure.
+    /// On the L, every stop's settling made one about 1 s after it (`20261023-193658`), which ended the live
+    /// hold at once: standing at Bedford Av, the speed ran to the 55 mph cap.
+    fn departed_after(&self, stopped_ns: i64) -> Option<i64> {
+        let after = stopped_ns + (DEPART_AFTER_STOP_S * 1e9) as i64;
+        self.departures.iter().copied().find(|&d| d > after)
+    }
+
     /// The station Android's own location or the registered cell names as of `t_ns`, if any.
     fn station_now(&self, t_ns: i64) -> Option<&'static Station> {
         let network = self
@@ -1851,7 +1860,7 @@ impl Fusion {
             .estimator
             .last_gnss_speed()
             .is_some_and(|(t, v)| t > stop.t_ns && v > LIKELY_STOP_GNSS_MPS);
-        let departed = self.departures.last().is_some_and(|&d| d > stop.t_ns);
+        let departed = self.departed_after(stop.t_ns).is_some();
         let since_s = (now_ns - stop.t_ns) as f64 * 1e-9;
         // Once the decision is due, it must have kept this lurch (on `135509` and `215922`, 3 of 34 weren't).
         let dropped = since_s > LIKELY_DECIDED_BY_S
