@@ -700,11 +700,11 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
 12. The L's car beacons: the same family as the others? If so not Piper's (the L's CBTC predates Piper);
     then fix `BleRecorder.kt`'s comment, which gives Piper beacons as its example.
 13. Taps: drop the mistaken train start at Graham Av if not deleted in the app.
-14. Past rides' map and graph, in the app: an offline analysis of the whole ride (the replay, smoothed over all
-    of it, as `ride_fusion::replay` does, not the live estimates kept from recording), opened from Past rides.
-    Cache the result per session (with the core's version) so a ride isn't replayed each time it's opened.
-15. `cargo clippy -D warnings` fails on three warnings from before this session (`doors.rs` `last()`,
-    `Box<Vec<..>>` in `Pending::Transit`, a collapsible `if` in `fusion.rs`), so `just test-rust` fails.
+14. Done (`4b14848`, `e300d7a`): Past rides' "Ride" button replays the ride (`replay_session`), smoothed over
+    all of it, on the live map and graph; cached per app build in the app's files. Not while recording, since
+    a replay takes 483 MB at its peak on `20261024-003357` (1.4 GB before `9d2f900` boxed the large inputs)
+    and 40 s on the laptop; unmeasured on the phone.
+15. Done (`a96ba38`): `just test-rust` passes again.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
