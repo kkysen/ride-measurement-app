@@ -394,6 +394,12 @@ Open, roughly in order:
    drop the start if the rider hasn't deleted it in the app.
    Departures on the L detected poorly (per the rider): likely ATO's gentle starts under the lurch threshold
    tuned on manually driven lines; check the L's departures against the car beacons' own accelerometers.
+   On the curve approaching Jefferson St, the live speed went from 40 to 55 mph (the cap), likely a curve,
+   not speeding up: centripetal acceleration (v^2/r, about 1.5 m/s^2 at 40 mph) leaking into the travel axis,
+   and underground the axis learned from the horizontal spread, which a long curve turns sideways.
+   Idea (untested): subtract v times the gyro's yaw rate, sideways to the axis, before projecting and before
+   learning the axis, and hold the axis while turning. Test on underground curves (the speed hitting the cap)
+   and on elevated curves with GNSS withheld against GNSS.
 
 8. The home elevator (`python/experiments/elevator.py`): 12 m in 25 s with the phone still is the elevator,
    with steps (4.9 to 6.4 m/s^2 std) the stairs; marks the start and end of a trip at home.
