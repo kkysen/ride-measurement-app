@@ -3,10 +3,12 @@ package dev.khyber.ride
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.os.SystemClock
 import android.util.Log
 import java.io.File
 import java.time.Instant
@@ -29,6 +32,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import uniffi.ride_ffi.ReplayProgress
 import uniffi.ride_ffi.RideReplay
 import uniffi.ride_ffi.SessionSpan
 import uniffi.ride_ffi.replaySession
@@ -131,13 +135,23 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
     var replay by remember { mutableStateOf<RideReplay?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var showGraph by remember { mutableStateOf(false) }
+    // How far the replay has got, once the session is read, and when that was (elapsed realtime ms).
+    var progress by remember { mutableStateOf<Double?>(null) }
+    var progressStartMs by remember { mutableStateOf(0L) }
     LaunchedEffect(id, state.recording) {
         if (state.recording || replay != null) return@LaunchedEffect
+        val listener = object : ReplayProgress {
+            override fun onProgress(fraction: Double) {
+                if (fraction == 0.0) progressStartMs = SystemClock.elapsedRealtime()
+                progress = fraction
+            }
+        }
         withContext(Dispatchers.Default) {
             runCatching {
                 replaySession(
                     File(RecorderService.sessionsDir(), id).path,
                     File(context.filesDir, "replays").path,
+                    listener,
                 )
             }
         }.onSuccess { replay = it }.onFailure {
@@ -149,13 +163,28 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
     if (r == null) {
         Column(Modifier.safeDrawingPadding().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             HapticButton(onClick = onBack) { Text("Back") }
+            val p = progress
             Text(
                 when {
                     error != null -> "The replay failed: $error"
                     state.recording -> "Stop recording to replay this ride: a replay could cost the recording memory."
-                    else -> "Replaying the ride… (a minute or more the first time)"
+                    p == null -> "Reading the ride…"
+                    p >= 1.0 -> "Smoothing the whole ride…"
+                    // From the pace so far, once there's enough of it to go by.
+                    p >= 0.03 -> {
+                        val elapsedS = (SystemClock.elapsedRealtime() - progressStartMs) / 1000.0
+                        "Replaying the ride: %.0f%%, about %s left".format(p * 100, clockDuration(elapsedS / p * (1 - p)))
+                    }
+                    else -> "Replaying the ride: %.0f%%".format(p * 100)
                 },
             )
+            if (error == null && !state.recording) {
+                if (p == null || p >= 1.0) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                } else {
+                    LinearProgressIndicator(progress = { p.toFloat() }, modifier = Modifier.fillMaxWidth())
+                }
+            }
         }
         return
     }
