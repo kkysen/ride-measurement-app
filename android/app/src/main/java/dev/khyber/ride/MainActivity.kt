@@ -75,14 +75,14 @@ class MainActivity : ComponentActivity() {
                         estimate.stopped -> "0 $unit"
                         // Within its uncertainty of standing still: a number would suggest motion that may not be there.
                         // No more than the vehicle can go, though: the limit holds the speed, not its sigma.
-                        v < sigma -> "< %.0f $unit".format(minOf(v + sigma, estimate.maxSpeedMps?.let(Units::speed) ?: Double.MAX_VALUE))
-                        else -> "%.0f $unit ± %.0f".format(v, sigma)
+                        v < sigma -> "< ${Units.speedText(minOf(v + sigma, estimate.maxSpeedMps?.let(Units::speed) ?: Double.MAX_VALUE))} $unit"
+                        else -> "${Units.speedText(v)} $unit ± ${Units.speedText(sigma)}"
                     },
                     style = MaterialTheme.typography.displayMedium,
                 )
                 // The whole ride so far, stops included.
                 estimate.averageMps?.let {
-                    Text("avg %.0f $unit".format(Units.speed(it)), style = MaterialTheme.typography.headlineMedium)
+                    Text("avg ${Units.speedText(Units.speed(it))} $unit", style = MaterialTheme.typography.headlineMedium)
                 }
             }
             // Along the direction of travel: negative is braking.

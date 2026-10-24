@@ -53,6 +53,9 @@ object Units {
     /** A speed (m/s) in the chosen unit. */
     fun speed(mps: Double) = if (mph) mps / MPS_PER_MPH else mps * 3.6
 
+    /** A speed already in the chosen unit, as text: a decimal under 10, where a whole number is too coarse. */
+    fun speedText(v: Double) = if (v < 9.95) "%.1f".format(v) else "%.0f".format(v)
+
     /** A band boundary (km/h, as the color scales define them) in the chosen unit. */
     fun speedFromKmh(kmh: Double) = speed(kmh / 3.6)
 
