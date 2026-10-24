@@ -602,6 +602,22 @@ impl From<anyhow::Error> for RideError {
     }
 }
 
+/// When a past ride started and ended (unix ms), from its data (see `Session::end_unix_ms`).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SessionSpan {
+    pub start_unix_ms: i64,
+    pub end_unix_ms: Option<i64>,
+}
+
+#[uniffi::export]
+pub fn session_span(session_dir: String) -> Result<SessionSpan, RideError> {
+    let session = ride_session::read::Session::open(&session_dir)?;
+    Ok(SessionSpan {
+        start_unix_ms: session.info.start_unix_ms,
+        end_unix_ms: session.end_unix_ms()?,
+    })
+}
+
 /// What happened to one stream file.
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct StreamRecompression {

@@ -37,6 +37,36 @@ impl Session {
         self.dir.join(format!("{name}.{STREAM_EXTENSION}"))
     }
 
+    /// The wall clock (unix ms) of the last sensor sample: the end of the recording, which the files' modification
+    /// times aren't (post-ride recompression and tap edits rewrite them). From the barometer, a small stream,
+    /// else the first other sensor stream that has samples; `None` without any.
+    pub fn end_unix_ms(&self) -> anyhow::Result<Option<i64>> {
+        let mut names: Vec<&str> = self
+            .info
+            .streams
+            .iter()
+            .filter(|s| s.sensor.is_some())
+            .map(|s| s.name.as_str())
+            .collect();
+        names.sort_by_key(|&n| n != "pressure");
+        for name in names {
+            if !self.stream_path(name).exists() {
+                continue;
+            }
+            let last = self
+                .read_stream(name)?
+                .chunks
+                .iter()
+                .filter_map(|c| c.timestamps_ns().last().copied())
+                .max();
+            if let Some(t) = last {
+                let since_start_ms = (t - self.info.start_elapsed_realtime_ns) / 1_000_000;
+                return Ok(Some(self.info.start_unix_ms + since_start_ms));
+            }
+        }
+        Ok(None)
+    }
+
     /// Reads a sensor stream.
     pub fn read_stream(&self, name: &str) -> anyhow::Result<StreamContents> {
         read_stream_file(&self.stream_path(name))
