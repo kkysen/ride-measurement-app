@@ -148,7 +148,11 @@ impl From<ride_fusion::fusion::StopRecord> for LiveStop {
         LiveStop {
             stopped_ns: r.stopped_ns,
             departed_ns: r.departed_ns,
-            station: r.station.map(|s| s.name.clone()),
+            station: if r.between_stations {
+                Some("between stations".into())
+            } else {
+                r.station.map(|s| s.name.clone())
+            },
             in_subway: r.in_subway,
             doors_open_ns: r.doors_open_ns,
             doors_closed_ns: r.doors_closed_ns,

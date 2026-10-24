@@ -160,6 +160,9 @@ pub struct StopRecord {
     /// Every car heard steadily in the [`TRAIN_SPAN_S`] before the stop differs from every car heard after the
     /// departure: another train, boarded across the platform with too few steps to see (see [`trains_differ`]).
     pub train_change: bool,
+    /// A hold between stations, not a platform stop (see [`Fusion::between_stations`]):
+    /// the train stood, but the dwell starts at the platform.
+    pub between_stations: bool,
 }
 
 /// A closing heard after the rider walked off is still their train's if this soon after the stop (s).
@@ -170,7 +173,10 @@ const STEP_OUT_S: f64 = 30.0;
 impl StopRecord {
     /// From the stop to pulling away (s), when the rider rode through it.
     pub fn dwell_s(&self) -> Option<f64> {
-        if self.on_platform || (self.alighted_ns.is_some() && !self.stepped_out()) {
+        if self.between_stations
+            || self.on_platform
+            || (self.alighted_ns.is_some() && !self.stepped_out())
+        {
             return None;
         }
         self.departed_ns
@@ -631,6 +637,8 @@ pub struct Fusion {
     subway_changes: Vec<(i64, bool)>,
     /// The registered LTE cell and when it was last reported.
     cell: Option<(i64, i64)>,
+    /// Each change of the registered LTE cell (none when it's lost), for the cell at a stop.
+    cells: Vec<(i64, Option<i64>)>,
     /// The station nearest Android's own latest location, if close and sure enough, and when.
     network_station: Option<(i64, &'static Station)>,
     /// Each station the cell or Android's location named, first and last when, in turn: where the rider was
@@ -704,6 +712,7 @@ impl Fusion {
             trips: trips::Trips::default(),
             subway_changes: Vec::new(),
             cell: None,
+            cells: Vec::new(),
             network_station: None,
             station_history: Vec::new(),
             last_stop: None,
@@ -994,6 +1003,20 @@ impl Fusion {
             (None, None) => return None,
         };
         let s_ns = |s: f64| (s * 1e9) as i64;
+        // A hold between stations: the train stands (the speed shows it), but the dwell starts at the platform.
+        let prev = self
+            .train_stops
+            .iter()
+            .filter(|(s, _, in_subway)| *in_subway && s.t_ns < stop.t_ns && !self.departure_fade(s))
+            .map(|(s, ..)| s.t_ns)
+            .max();
+        let closed = self
+            .door_cycles
+            .iter()
+            .any(|c| c.close_ns > stop.t_ns + s_ns(DOORS_AFTER_STOP_S.0));
+        if !closed && prev.is_some_and(|p| self.between_stations(p, stop.t_ns)) {
+            return None;
+        }
         let since = |from: i64| (t - from) as f64 * 1e-9;
         let stopped_s = since(stop.t_ns);
         if self.departed_after(stop.t_ns).is_some() || stopped_s > RECORD_MAX_DWELL_S {
@@ -1415,6 +1438,9 @@ impl Fusion {
         }
         if let Pending::Cell(c) = input {
             self.cell = c.map(|c| (t_ns, c));
+            if self.cells.last().is_none_or(|&(_, last)| last != c) {
+                self.cells.push((t_ns, c));
+            }
             self.note_station(t_ns);
             return;
         }
@@ -1621,7 +1647,34 @@ impl Fusion {
                 r.train_change = trains_differ(&self.car_readings, r.stopped_ns, d);
             }
         }
+        for k in 1..records.len() {
+            let (before, after) = records.split_at_mut(k);
+            let (prev, r) = (&before[k - 1], &mut after[0]);
+            r.between_stations = r.in_subway
+                && prev.in_subway
+                && !prev.rider_left()
+                && r.doors_closed_ns.is_none()
+                && self.between_stations(prev.stopped_ns, r.stopped_ns);
+        }
         records
+    }
+
+    /// The registered LTE cell at `t_ns`, if any.
+    fn cell_at(&self, t_ns: i64) -> Option<i64> {
+        let i = self.cells.partition_point(|&(t, _)| t <= t_ns);
+        i.checked_sub(1).and_then(|i| self.cells[i].1)
+    }
+
+    /// Whether a stop at `t_ns` with no closing heard, after one at `prev_ns`, is a hold between stations:
+    /// the registered cell the same at both, so the train hasn't reached the next station's.
+    /// Against the "train stopped" taps over 11 subway rides (`crates/cli/examples/holds.rs`),
+    /// 0 of 87 tapped stops had the same cell as the stop before and no closing, and 9 of 47 untapped stops did
+    /// (the hold before Lorimer St on `20261023-193658`, 8:02 pm, whose lurch started the live dwell 48 s early).
+    /// The same cell alone was 1 of the 87 tapped and 13 of the 47 untapped; a station named by the cell,
+    /// 79 tapped and 39 untapped, tells nothing.
+    fn between_stations(&self, prev_ns: i64, t_ns: i64) -> bool {
+        self.cell_at(t_ns)
+            .is_some_and(|c| self.cell_at(prev_ns) == Some(c))
     }
 
     /// Whether a found stop is the departure's pull fading (see [`FADE_AFTER_CLOSE_S`]).
@@ -2316,6 +2369,7 @@ fn stop_records(
             car_before: None,
             car_after: None,
             train_change: false,
+            between_stations: false,
         });
     }
     out
