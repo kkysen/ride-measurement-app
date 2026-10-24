@@ -400,6 +400,9 @@ Open, roughly in order:
    Idea (untested): subtract v times the gyro's yaw rate, sideways to the axis, before projecting and before
    learning the axis, and hold the axis while turning. Test on underground curves (the speed hitting the cap)
    and on elevated curves with GNSS withheld against GNSS.
+   Back at 14 St, waiting for the 1 after walking from the L: a passing 2's chime was taken as the rider's
+   (NTT cars), the live speed ran to 55 mph standing on the platform, and the station read 14 St (L),
+   from the L just ridden. While between trains: ignore chimes, hold the speed, name the station by all its lines.
 
 8. The home elevator (`python/experiments/elevator.py`): 12 m in 25 s with the phone still is the elevator,
    with steps (4.9 to 6.4 m/s^2 std) the stairs; marks the start and end of a trip at home.
