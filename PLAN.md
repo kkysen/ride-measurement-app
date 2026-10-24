@@ -676,10 +676,20 @@ checked against the phone. The L ride is likely `20261023-193658` (7:36 pm), the
 `20261024-003357` (12:33 am).
 
 Open, from the rider's reports on those rides (details in item 7a of the 2026-10-21 section):
-1. The live speed underground with nothing holding it: 25 and 55 mph standing on platforms (6 Av, 14 St),
-   `rejected as outliers: stop 4482` (the quiet phone's zero gated out), and the tunnel hold before 96 St
-   (stopped, then not, then 2:28 once moving). Between trains, hold the speed; keep a stop alive while the phone
-   is quiet, ungated underground like door cycles.
+1. Done (`69b80ca`, `d28d26e`, `44c806a`; scored with `crates/cli/examples/holds.rs`, `ec8afa9`, over the 11 rides
+   with taps, `just sweep holds`, results in `target/cmp/holds-*.txt`): the live speed underground with nothing
+   holding it. The main cause: on the L every stop's settling made a start surge about 1 s after the lurch, taken
+   for a departure, which ended the live hold and dwell at once (standing at Bedford Av, 55 mph); surges within
+   `DEPART_AFTER_STOP_S` of the lurch are now skipped, as `stop_records` already did. The quiet phone's zero is
+   ungated without recent GNSS (it now holds the tunnel hold before 96 St at 0 to 4 mph; the phone is rarely still
+   enough in hand to move the scores). Between trains (`transfer_s`) the live speed shows 0 without steps, else at
+   most 3 m/s (display only, like the likely stop).
+   Live speed under 2 mph through tapped dwells: 1623 of 3570 s (45%) to 2233 (63%); `193658` 95 to 261 of 442,
+   `003357` 219 to 336 of 420. Over 6 mph from an "alighted" tap to the next "boarded": 3275 to 2742 of 11540 s;
+   the rest is where no walk off was found (item 9). Shown stopped while moving between taps: 1942 to 2258 of
+   9683 s, 187 of the rise the 14 St transfer on `003357` (the metric's span holds it) and the rest false stops
+   now held longer. Still open: 73 of 107 tapped stops reach over 10 mph some second of their dwell
+   (the hold only starts with the likely stop, about 5 s after the lurch, and ends on walking).
 2. Done (`e76cc1b`): the yaw rate times the speed, sideways to the axis, taken out of the IMU's horizontal
    acceleration while turning slower than 0.1 rad/s (faster, the rider turning the phone, it ran a stop in a
    GNSS cut on `011209` to 35 mph). Scored with the untracked scratch `crates/cli/examples/curves.rs`
@@ -707,10 +717,20 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    don't have; NTT on the 1 at 96 St; a passing 2's chime taken as the rider's at 14 St.
    Ignore chimes between trains, and only count chimes since boarding; add the L's R143s and R160s.
 5. Departures on the L found poorly (ATO's gentle starts); check against the car beacons' accelerometers.
-6. Lorimer St: stopped 0:48 on arriving: a hold before the platform or braking taken for a stop.
-7. Stops found between stations: use the cell's station to tell a tunnel hold from a platform stop
-   (keep the zero speed; label it between stations; the dwell starts at the platform). Test the cues against
-   the at-station taps: a station cell at the stop, the cell matching the stop before's, a door cycle heard.
+6. Partly done (`69b80ca`): Lorimer St: stopped 0:48 on arriving. A lurch at 8:02:19 pm, 20 s after leaving
+   Bedford Av with no tap (braking taken for a stop, or a slowdown), started the live dwell; the arrival's own
+   lurch at 8:03:06 didn't restart it because the L's settling surge 1 s later read as a departure. Now the
+   dwell restarts at 8:03:06 (10 s at 8:03:18 in the replay's statuses), but the early one still shows from
+   8:02:28: its cell (29256324) is another sector of Bedford Av's site (29256316), so item 7's cue misses it.
+7. Done (`d56a86b`): stops found between stations. A stop with no closing heard and the same registered cell
+   as the stop before (the rider aboard) is `StopRecord::between_stations`: zero speed kept, no dwell, the live
+   dwell not started there, labeled "between stations" on the graph. Against the "train stopped" taps
+   (an "at station" tap is within 60 s before 15 found stops, none of them labeled):
+   the same cell and no closing, 0 of 87 tapped stops and
+   9 of 47 untapped (5 labeled); the same cell alone, 1 and 13; a station named by the cell, 79 of 87 and 39
+   of 47, no cue; the same site (ID / 256), 73 of 87 tapped, shared by neighboring stations; the time since the
+   stop before overlaps. Untapped stops include real ones the rider didn't tap, so the 47 aren't all false.
+   Next: the time since the departure (Lorimer's was 20 s after it), once more taps check it.
 8. The track between stations (GTFS shapes, embedded like `open_track.bin`): stations joined along the track for
    the underground path on the map (dead reckoning alone is a median 429 to 2066 m off at stations,
    `crates/cli/examples/stop_positions.rs`), the average speed between known stations, and the speed integrated
