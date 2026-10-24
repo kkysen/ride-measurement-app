@@ -97,6 +97,7 @@ fn main() -> anyhow::Result<()> {
             }),
             ignore_audio: std::env::var_os("NO_AUDIO").is_some(),
             no_statuses: std::env::var_os("NO_STATUSES").is_some(),
+            live_every_ns: None,
         },
     )?;
     let mut f = std::fs::File::create(out.join("chimes.csv"))?;

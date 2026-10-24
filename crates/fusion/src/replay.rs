@@ -36,6 +36,8 @@ pub struct Replay {
     pub timeline: Vec<crate::fusion::Segment>,
     /// Stairs, elevators, and escalators (see [`crate::vertical`]).
     pub vertical: Vec<crate::vertical::Move>,
+    /// The live estimate the app would have shown (see [`Fusion::estimate`]), every [`Options::live_every_ns`].
+    pub live: Vec<(i64, crate::live_speed::Estimate)>,
 }
 
 pub const STATUS_EVERY_NS: i64 = 10_000_000_000;
@@ -90,6 +92,8 @@ pub struct Options {
     pub ignore_audio: bool,
     /// Leave out [`Replay::statuses`], for what doesn't show them: about a fifth of a replay's time.
     pub no_statuses: bool,
+    /// For scoring: keep [`Replay::live`] this often (ns), if set.
+    pub live_every_ns: Option<i64>,
 }
 
 /// GNSS cut out for the last `outage_s` of every `period_s` from `start_ns`, to score dead reckoning on rides
@@ -276,8 +280,10 @@ pub fn replay_with_progress(
         fusion.navigator_mut().add_ephemeris(eph);
     }
     let mut statuses = Vec::new();
+    let mut live = Vec::new();
     let mut events = events.peekable();
     let mut next_status = events.peek().map_or(0, |e| e.0);
+    let mut next_live = next_status;
     let every = total.div_ceil(100);
     progress(0.0);
     for (i, (t, e)) in events.enumerate() {
@@ -287,6 +293,12 @@ pub fn replay_with_progress(
         if t >= next_status && !options.no_statuses {
             statuses.push((t, fusion.status()));
             next_status = t + STATUS_EVERY_NS;
+        }
+        if let Some(every) = options.live_every_ns
+            && t >= next_live
+        {
+            live.push((t, fusion.estimate(t)));
+            next_live = t + every;
         }
         match e {
             Event::Accel(a) => fusion.on_accel(t, a),
@@ -321,6 +333,7 @@ pub fn replay_with_progress(
         timeline: fusion.timeline(),
         vertical: fusion.vertical_moves(),
         statuses,
+        live,
     })
 }
 
