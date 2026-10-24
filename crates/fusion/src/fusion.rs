@@ -1904,12 +1904,37 @@ impl Fusion {
         }
     }
 
-    /// Positions at every fix and sample time so far, smoothed over the whole ride.
+    /// Positions at every fix and sample time so far, smoothed over the whole ride,
+    /// and underground joined along the track between stations (see [`crate::track::join`]).
     pub fn positions(&self) -> Vec<PositionEstimate> {
+        let mut positions = self.dead_reckoned();
+        crate::track::join(
+            &mut positions,
+            &self.smoothed(),
+            &self.stop_records(),
+            &self.good_fix_ns(),
+            None,
+        );
+        positions
+    }
+
+    /// [`Self::positions`] before joining stations along the track: GNSS and dead reckoning alone.
+    pub fn dead_reckoned(&self) -> Vec<PositionEstimate> {
         // Settled inputs are in time order, except any that arrived late.
         let mut inputs = self.position_inputs.clone();
         inputs.sort_by_key(|(t, _)| *t);
         smooth(&inputs)
+    }
+
+    /// The times of the phone's fixes within [`GAP_FIX_M`]: where the path is GNSS's own.
+    pub fn good_fix_ns(&self) -> Vec<i64> {
+        self.position_inputs
+            .iter()
+            .filter(|(_, i)| {
+                matches!(i, PositionInput::Fix { accuracy_m, .. } if *accuracy_m <= GAP_FIX_M)
+            })
+            .map(|&(t, _)| t)
+            .collect()
     }
 
     /// The estimate at `now_ns`: the settled forward pass carried on, in a copy, through the inputs still

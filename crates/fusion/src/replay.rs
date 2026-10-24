@@ -18,6 +18,10 @@ pub struct Replay {
     pub gnss: Stats,
     /// Smoothed position at every sample (see [`crate::position`]).
     pub positions: Vec<crate::position::PositionEstimate>,
+    /// The same before joining stations along the track (see [`Fusion::dead_reckoned`]), for scoring.
+    pub dead_reckoned: Vec<crate::position::PositionEstimate>,
+    /// The times of good fixes (see [`Fusion::good_fix_ns`]).
+    pub good_fix_ns: Vec<i64>,
     /// Door cycles heard, if the session has audio.
     pub door_cycles: Vec<DoorCycle>,
     /// Door chimes a closing confirmed, with their pitch family.
@@ -320,13 +324,22 @@ pub fn replay_with_progress(
     }
     progress(1.0);
     fusion.finish();
+    // `Fusion::positions`, keeping the path before joining for scoring.
+    let dead_reckoned = fusion.dead_reckoned();
+    let good_fix_ns = fusion.good_fix_ns();
+    let stops = fusion.stop_records();
+    let smoothed = fusion.smoothed();
+    let mut positions = dead_reckoned.clone();
+    crate::track::join(&mut positions, &smoothed, &stops, &good_fix_ns, None);
     Ok(Replay {
-        smoothed: fusion.smoothed(),
+        smoothed,
         gnss: fusion.navigator().stats.clone(),
-        positions: fusion.positions(),
+        positions,
+        dead_reckoned,
+        good_fix_ns,
         door_cycles: fusion.door_cycles().to_vec(),
         chimes: fusion.chimes().to_vec(),
-        stops: fusion.stop_records(),
+        stops,
         departures: fusion.departures().to_vec(),
         step_windows: fusion.step_windows().to_vec(),
         subway_changes: fusion.subway_changes().to_vec(),
