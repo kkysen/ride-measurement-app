@@ -312,11 +312,11 @@ impl DoorDetector {
         let chime = self
             .chimes
             .iter()
-            .filter(|&&(c, _)| {
+            .rev()
+            .find(|&&(c, _)| {
                 let before = (down - c) as f64 * 1e-9;
                 before > 0.0 && before < CHIME_BEFORE_S
             })
-            .last()
             .copied()?;
         if let (c, Some(cars)) = chime {
             self.last_chime = Some((c, cars));

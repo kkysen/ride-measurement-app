@@ -253,7 +253,7 @@ enum Pending {
     /// A subway car's beacon (see [`crate::car_beacons`]).
     Car(CarReading),
     /// A GTFS-realtime poll's trip stops, and when it was requested (unix ms).
-    Transit(Box<Vec<trips::TripStop>>, i64),
+    Transit(Box<[trips::TripStop]>, i64),
 }
 
 #[derive(Clone, Debug)]
@@ -751,7 +751,10 @@ impl Fusion {
     pub fn on_transit(&mut self, t_ns: i64, request_unix_ms: i64, body: &[u8]) {
         if let Some(feed) = ride_session::transit::decode(body) {
             let stops = trips::trip_stops(&feed);
-            self.arrive(t_ns, Pending::Transit(Box::new(stops), request_unix_ms));
+            self.arrive(
+                t_ns,
+                Pending::Transit(stops.into_boxed_slice(), request_unix_ms),
+            );
         }
     }
 
@@ -1308,7 +1311,7 @@ impl Fusion {
         self.settled_ns = Some(self.settled_ns.map_or(t_ns, |s| s.max(t_ns)));
         self.now_ns = self.now_ns.max(t_ns);
         if let Pending::Transit(stops, request_unix_ms) = input {
-            self.trips.on_poll(t_ns, request_unix_ms, *stops);
+            self.trips.on_poll(t_ns, request_unix_ms, stops.into_vec());
             return;
         }
         if let Pending::Cell(c) = input {
@@ -1336,10 +1339,10 @@ impl Fusion {
         }
         if let (Pending::Audio(a), Some(doors)) = (&input, &mut self.doors) {
             let cycles = doors.on_audio(a.first_frame, &a.samples, &a.timestamps);
-            if let Some(c) = doors.last_chime() {
-                if self.chimes.last() != Some(&c) {
-                    self.chimes.push(c);
-                }
+            if let Some(c) = doors.last_chime()
+                && self.chimes.last() != Some(&c)
+            {
+                self.chimes.push(c);
             }
             for cycle in cycles {
                 self.on_door_cycle(t_ns, cycle);
