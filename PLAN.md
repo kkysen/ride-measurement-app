@@ -741,7 +741,7 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    of 47, no cue; the same site (ID / 256), 73 of 87 tapped, shared by neighboring stations; the time since the
    stop before overlaps. Untapped stops include real ones the rider didn't tap, so the 47 aren't all false.
    Next: the time since the departure (Lorimer's was 20 s after it), once more taps check it.
-8. Partly done (`13ead04`, `dcb8c74`, `ec85c9f`, `ba8a343`, `9610696`, `0df034c`, `3dea235`): the track between stations, from the MTA's GTFS
+8. Partly done (`13ead04`, `dcb8c74`, `ec85c9f`, `ba8a343`, `9610696`, `0df034c`, `3dea235`, `66e043e`, `43aa82f`): the track between stations, from the MTA's GTFS
    shapes (`python/experiments/subway_track.py` to `crates/fusion/data/subway_track.bin`, 182 KB; `crates/fusion/src/track.rs`).
    Legs (`track::legs`): consecutive stops at named stations underground on the same train, no good fix between,
    a shape joining them, and no faster than a train can go (3 mph/s up and down, 55 mph between): 126 pairs
@@ -765,7 +765,14 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
      `20261024-003357`, the fused point within 1.5 s of a fix is a median 1 and 2 m from it (90th 2 and 7 m).
      The path jumps up to 5.5 km in a second (at least 8 and 5 jumps over 700 m on those rides), where a sample placed at a
      station sits next to ones left dead reckoned: `track::join` leaves samples outside legs where they were.
-   Left: those jumps (blend the dead reckoning into the joined ends); the live map still draws GPS fixes; the hold is a scaling after smoothing, not a distance measurement inside the
+   - Done (`66e043e`, `43aa82f`): the jumps. `track::blend` shifts each stretch `track::place` left alone by an
+     offset blended over time between its ends' shifts (none at a good fix). `jumps` (`just sweep jumps`, one point
+     a second): the largest step 5509 to 688 m on `193658`, 4443 to 333 m on `003357`, 7019 to 285 m on
+     `151449`; what's left is the dead reckoning's own jumps (`135509` keeps 3305 m). Steps over 55 mph the dead
+     reckoning doesn't make, all sessions, 523 to 636: a few km of offset spread over minutes reads as a smooth
+     56 to 85 mph (82 more on `135509`); a blend by distance or speed might fix that. At good fixes unchanged.
+     `stop_positions`: the 88 left out stops placed on the track unchanged; all 166 joined, 90th 353 to 40 m.
+   Left: the live map still draws GPS fixes; the hold is a scaling after smoothing, not a distance measurement inside the
    filter's passes (that would fix the speeds' shape too); the live (forward) speed isn't held; the average isn't
    shown in the app; no licensing note for the MTA's data exists in the repo, for this or `open_track.bin`;
    Lorimer St on `193658` (681 m in 47 s, 32 mph) unchecked; legs need both ends' stations right, and a
