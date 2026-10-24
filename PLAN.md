@@ -720,7 +720,12 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
 14. Done (`4b14848`, `e300d7a`; 42 s to 5.3 s per replay on the laptop with `ae5a245` and `9a0d57c`): Past rides' "Ride" button replays the ride (`replay_session`), smoothed over
     all of it, on the live map and graph; cached per app build in the app's files. Not while recording, since
     a replay takes 483 MB at its peak on `20261024-003357` (1.4 GB before `9d2f900` boxed the large inputs)
-    and 40 s on the laptop; unmeasured on the phone.
+    and 40 s on the laptop; unmeasured on the phone. Since `18d424b` the replay streams its inputs:
+    on the 3:14:27 `20261022-002914`, 0.85 GB at its peak instead of 1.6 GB, most of the rest fusion's own.
+
+Laptop memory (2026-10-24): parallel replays over all sessions (about 1.5 GB each on the longest) crashed WSL.
+`just sweep <example>` runs one over every session in turn, each capped at 3 GB,
+and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotfiles).
 15. Done (`a96ba38`): `just test-rust` passes again.
 
 ## Future: flights
