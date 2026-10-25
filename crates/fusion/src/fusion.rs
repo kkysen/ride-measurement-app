@@ -445,7 +445,9 @@ const TIMELINE_WALK_S: f64 = 8.0;
 /// Riding up or down isn't an elevator or escalator with a departure within this (s) before it or during it,
 /// or at an average speed over this (m/s; an escalator moves the rider about 0.5 m/s).
 const VERTICAL_DEPARTED_S: f64 = 60.0;
-const VERTICAL_VEHICLE_MPS: f64 = 2.5;
+/// The live speed drifts to 3 m/s over a ride off the train underground (`20261024-003357`, 12.6 m up after
+/// alighting), and a train just boarded, before any of its stops or departures is felt, rides at 7 m/s or more.
+const VERTICAL_VEHICLE_MPS: f64 = 5.0;
 /// The status shows a move that ended within this (s): about half its 25 s span, the lag in finding it.
 const VERTICAL_RECENT_S: f64 = 15.0;
 /// The subway detector off for at most this (s) is the same subway ride on the timeline.
