@@ -817,6 +817,9 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
     a replay takes 483 MB at its peak on `20261024-003357` (1.4 GB before `9d2f900` boxed the large inputs)
     and 40 s on the laptop; unmeasured on the phone. Since `18d424b` the replay streams its inputs:
     on the 3:14:27 `20261022-002914`, 0.85 GB at its peak instead of 1.6 GB, most of the rest fusion's own.
+    While recording (`8a3fe94`, `4de4cb1`): a cached replay shows as usual (`cached_replay`, no replay);
+    an uncached ride up to 1:00:00 gets a "Replay now" button (about 300 MB by the laptop's peaks), a longer one still says to stop first.
+    Unchecked on the phone.
 
 Laptop memory (2026-10-24): parallel replays over all sessions (about 1.5 GB each on the longest) crashed WSL.
 `just sweep <example>` runs one over every session in turn, each capped at 3 GB,
