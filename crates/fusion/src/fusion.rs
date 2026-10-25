@@ -1362,6 +1362,8 @@ impl Fusion {
         keep: impl Fn(&crate::vertical::Move) -> bool,
     ) -> Vec<crate::vertical::Move> {
         let s_ns = |s: f64| (s * 1e9) as i64;
+        // Only if a ride needs them.
+        let records = std::cell::OnceCell::new();
         crate::vertical::moves(self.altimeter.heights(), &self.step_windows, WALK_WINDOW_S)
             .into_iter()
             .filter(|m| keep(m))
@@ -1376,6 +1378,9 @@ impl Fusion {
                 if departed {
                     return false;
                 }
+                if self.aboard_at(m.start_ns, records.get_or_init(|| self.stop_records())) {
+                    return false;
+                }
                 let from = self.live_speeds.partition_point(|&(t, _)| t < m.start_ns);
                 let to = self.live_speeds.partition_point(|&(t, _)| t <= m.end_ns);
                 let speeds = &self.live_speeds[from..to.max(from)];
@@ -1385,6 +1390,41 @@ impl Fusion {
                 !fast
             })
             .collect()
+    }
+
+    /// Whether the rider was aboard a train at `t`: it departed or stopped with them (no steps around it, as in
+    /// [`Self::boarding`]) since they last walked off one. Aboard, riding up or down is the train: on
+    /// `20261021-215922` and `20261024-085154` the status said "elevator or escalator down" between stations.
+    fn aboard_at(&self, t: i64, records: &[StopRecord]) -> bool {
+        let s_ns = |s: f64| (s * 1e9) as i64;
+        let left = records
+            .iter()
+            .filter(|r| r.rider_left())
+            .filter_map(|r| r.alighted_ns)
+            .filter(|&a| a <= t)
+            .max()
+            .unwrap_or(i64::MIN);
+        let still_around = |d: i64| {
+            let from = self
+                .step_windows
+                .partition_point(|&(at, _)| at <= d - s_ns(TRANSFER_STILL_S.0));
+            !self.step_windows[from..]
+                .iter()
+                .take_while(|&&(at, _)| at < d + s_ns(TRANSFER_STILL_S.1))
+                .any(|&(_, steps)| steps)
+        };
+        // Departures are missed (none on the C/E into Spring St, `20261021-215922`), so a stop felt counts too.
+        let stops = self
+            .train_stops
+            .iter()
+            .filter(|(stop, _, in_subway)| *in_subway && !self.departure_fade(stop))
+            .map(|(stop, ..)| stop.t_ns);
+        self.departures
+            .iter()
+            .copied()
+            .chain(records.iter().filter_map(|r| r.departed_ns))
+            .chain(stops)
+            .any(|d| d > left && d <= t && still_around(d))
     }
 
     /// A barometer reading (hPa), for going up and down (see [`crate::vertical`]).
