@@ -865,11 +865,38 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
     - Open: the backward pass carries state across a whole ride. Cutting any minute (even one near the end of
       `20261024-220437`) changes smoothed speeds 45 min earlier by up to 29 mph, while the forward pass is unchanged
       before the cut. Fixes should anchor the backward pass; something (bias, heading?) doesn't reset at them.
+    Constant cost per status (2026-10-25, `9b1a626` to `b1d8e7b`): `Replay::status_cost_ns` times each status
+    (`crates/cli/examples/statuscost.rs`, scratch). On `20261022-002914` (194 min) a status took 1.2 ms in its
+    first 10 minutes and 48.6 ms in its last; now 8 us and 20 us, and feeding the inputs no longer slows.
+    Each step's output hash (statuses, timeline, vertical moves included) is the same on all 18 sessions,
+    and the stop records and timeline were checked equal to a full rebuild at every status.
+    - `ee2efc9`: the elevator check uses the live speed kept at each sample (`Fusion::live_speeds`), not smoothing: 48.6 to 1.9 ms.
+    - `a04e59f`: stop records settled once the next stop is 15 min old (`RECORDS_SETTLE_S`); only the rest
+      recomputed, once a status (was three times, and at every live estimate): 2.2 to 0.46 ms.
+    - `ffffc06` (`riding_lines`), `b514416` (`vertical::moves_since`, the status's moves from recent heights: 0.13 ms),
+      `864d35e` (each pair of stations' track remembered: 25 us), `036a175` (dwell, route, fades by binary search).
+    - `b1d8e7b`: `Fusion::timeline` (asked at every smoothing tick) keeps its settled segments: 4 to 74 us before,
+      6 to 17 us now (the copy of what's kept).
+    - Left: `stops()` and `smoothed()` still hand the app the whole ride at every smoothing tick (an FFI that
+      sends only what changed would fix it); `Fusion::aboard_at` scans all stops, but only while a ride up or
+      down is recent.
 
 Laptop memory (2026-10-24): parallel replays over all sessions (about 1.5 GB each on the longest) crashed WSL.
 `just sweep <example>` runs one over every session in turn, each capped at 3 GB,
 and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotfiles).
 15. Done (`a96ba38`): `just test-rust` passes again.
+16. Done (`ee2efc9`, `7074047`, `2b458ae`, `93565b5`, `b816883`): elevators and escalators.
+    The rider saw "elevator or escalator down" on trains. Against the taps ("boarded" to the next "alighted"),
+    statuses saying one aboard 5 to 1, rides aboard 4 to 0: none while aboard (`Fusion::aboard_at`, a stop or departure
+    felt with no steps around it since the last walk off), and a ride faster than 5 m/s by the live speed is a train.
+    Only live speeds near GNSS (no GNSS, not judged) let 21 statuses aboard through: just boarded,
+    no stop or departure of that train is felt yet. The one left is 55 s after boarding on `20261022-181802`.
+    The rider labeled all 21 rides found (`crates/cli/examples/score/vertical_labels.csv`, `just score`'s
+    `vertical:`): 11 elevators (7 at home, 2 in Edgewater, 1 in Flushing), 5 station exit stairs, 6 pressure noise;
+    no elevators in the subway, and only one or two escalators in all. A ride under 40 s is stairs now
+    (`VERTICAL_MIN_RIDE_S`): elevators 11/11, rides found 11 (all elevators), exit stairs as stairs 5/5.
+    Left: the 6 noise moves (Edgewater, `002914`, 2:06 to 2:49 am) show as stairs; a rule that a ride in the
+    subway can only be an escalator (the rider's idea) is untried.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
