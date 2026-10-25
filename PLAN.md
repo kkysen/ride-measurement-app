@@ -912,6 +912,17 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     (`VERTICAL_MIN_RIDE_S`): elevators 11/11, rides found 11 (all elevators), exit stairs as stairs 5/5.
     Left: the 6 noise moves (Edgewater, `002914`, 2:06 to 2:49 am) show as stairs; a rule that a ride in the
     subway can only be an escalator (the rider's idea) is untried.
+17. Which entrance the rider used (`70ef373`, prototype; waiting on the rider's check).
+    Data: data.ny.gov "MTA Subway Entrances and Exits: 2024" (`i9wp-a4ja`, data of 2025-12-05, downloaded 2026-10-25)
+    in `data/mta/entrances/` (2,120 entrances: type, entry/exit allowed, location; no street or corner names).
+    Loader `python/experiments/subway_entrances.py`. Scratch: `crates/cli/examples/entrance_export.rs` (export per session)
+    and `target/entrances/match_entrances.py`, report in `target/entrances/report.txt`.
+    Method, sensors only: a GPS gap of 90 s or more while the replay was in the subway;
+    entry is the last fix within 15 m before it, exit the first after it; nearest entrance allowing entry or exit.
+    `subway_changes` alone lags losing GPS by about 30 s and flickers, so its ends were 70 to 120 m off.
+    On `20261024-085154` the exit is Borough Hall's IRT stair (`232`, NE) 8 m away at 9:32:42 am, beside the app's stairs (+5.7 m).
+    Open: entries and exits were found on 13 of 18 sessions; most are 2 to 30 m from the nearest entrance,
+    with the next one often within 15 m, so the corner is unsure; to put in Rust once the rider confirms.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
