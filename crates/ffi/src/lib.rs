@@ -161,6 +161,23 @@ impl From<ride_fusion::fusion::StopRecord> for LiveStop {
     }
 }
 
+/// What changed in the train's stops since a caller's copy (see [`Fusion::stops_since`]):
+/// keep the first `from`, replace the rest with `items`, and ask next time from `settled`.
+#[derive(uniffi::Record)]
+pub struct StopsDelta {
+    pub from: u32,
+    pub settled: u32,
+    pub items: Vec<LiveStop>,
+}
+
+/// What changed in the timeline since a caller's copy (see [`Fusion::timeline_since`]), as [`StopsDelta`].
+#[derive(uniffi::Record)]
+pub struct TimelineDelta {
+    pub from: u32,
+    pub settled: u32,
+    pub items: Vec<TimelineSegment>,
+}
+
 /// A stretch of what the rider did, for the live graph's strip (see `ride_fusion::fusion::Fusion::timeline`).
 #[derive(Clone, PartialEq, uniffi::Record, prost::Message)]
 pub struct TimelineSegment {
@@ -362,22 +379,25 @@ impl Fusion {
         self.lock().on_cell(t_ns, cell_id);
     }
 
-    /// The train's stops so far, oldest first.
-    pub fn stops(&self) -> Vec<LiveStop> {
-        self.lock()
-            .stop_records()
-            .into_iter()
-            .map(LiveStop::from)
-            .collect()
+    /// The train's stops so far, oldest first, from the caller's copy settled up to `settled` (0 at first):
+    /// settled ones never change, so only the rest crosses at each tick, however long the ride.
+    pub fn stops_since(&self, settled: u32) -> StopsDelta {
+        let (from, settled, items) = self.lock().stop_records_since(settled as usize);
+        StopsDelta {
+            from: from as u32,
+            settled: settled as u32,
+            items: items.into_iter().map(LiveStop::from).collect(),
+        }
     }
 
-    /// What the rider did over the ride so far, in time order.
-    pub fn timeline(&self) -> Vec<TimelineSegment> {
-        self.lock()
-            .timeline()
-            .into_iter()
-            .map(TimelineSegment::from)
-            .collect()
+    /// What the rider did over the ride so far, in time order, from the caller's copy as [`Self::stops_since`].
+    pub fn timeline_since(&self, settled: u32) -> TimelineDelta {
+        let (from, settled, items) = self.lock().timeline_since(settled as usize);
+        TimelineDelta {
+            from: from as u32,
+            settled: settled as u32,
+            items: items.into_iter().map(TimelineSegment::from).collect(),
+        }
     }
 
     /// What the rider is on and where, for the main screen, and how long they've stayed put.

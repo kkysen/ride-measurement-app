@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import uniffi.ride_ffi.LiveStop
 import uniffi.ride_ffi.SmoothedSpeed
+import uniffi.ride_ffi.StopsDelta
+import uniffi.ride_ffi.TimelineDelta
 import uniffi.ride_ffi.TimelineSegment
 
 /**
@@ -23,6 +25,8 @@ object LiveSeries {
 
     private val _samples = MutableStateFlow<List<Sample>>(emptyList())
     val samples: StateFlow<List<Sample>> = _samples
+    private val stopsCopy = SettledList<LiveStop>()
+    private val timelineCopy = SettledList<TimelineSegment>()
     private val _stops = MutableStateFlow<List<LiveStop>>(emptyList())
     val stops: StateFlow<List<LiveStop>> = _stops
     private val _timeline = MutableStateFlow<List<TimelineSegment>>(emptyList())
@@ -32,6 +36,8 @@ object LiveSeries {
     fun reset() {
         smoothed.clear()
         live.clear()
+        stopsCopy.clear()
+        timelineCopy.clear()
         _samples.value = emptyList()
         _stops.value = emptyList()
         _timeline.value = emptyList()
@@ -52,12 +58,22 @@ object LiveSeries {
         publish()
     }
 
-    fun setStops(stops: List<LiveStop>) {
-        if (stops != _stops.value) _stops.value = stops
+    /** How many stops are settled in the copy here: what to ask `Fusion.stopsSince` from. */
+    val stopsSettled: UInt
+        @Synchronized get() = stopsCopy.settled
+
+    /** How many timeline segments are settled in the copy here: what to ask `Fusion.timelineSince` from. */
+    val timelineSettled: UInt
+        @Synchronized get() = timelineCopy.settled
+
+    @Synchronized
+    fun applyStops(d: StopsDelta) {
+        if (stopsCopy.apply(d.from, d.settled, d.items)) _stops.value = stopsCopy.snapshot()
     }
 
-    fun setTimeline(segments: List<TimelineSegment>) {
-        if (segments != _timeline.value) _timeline.value = segments
+    @Synchronized
+    fun applyTimeline(d: TimelineDelta) {
+        if (timelineCopy.apply(d.from, d.settled, d.items)) _timeline.value = timelineCopy.snapshot()
     }
 
     /** Smoothed values up to the latest one, then live ones after it. */

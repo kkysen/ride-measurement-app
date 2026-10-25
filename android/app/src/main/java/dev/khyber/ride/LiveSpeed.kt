@@ -73,8 +73,9 @@ object LiveSpeed {
                     LiveTrack.applySmoothed(it)
                     LiveSeries.applySmoothed(it)
                 }
-                fusion?.stops()?.let { LiveSeries.setStops(it) }
-                fusion?.timeline()?.let { LiveSeries.setTimeline(it) }
+                // Only what changed since the copies here: the whole lists grow with the ride.
+                fusion?.stopsSince(LiveSeries.stopsSettled)?.let { LiveSeries.applyStops(it) }
+                fusion?.timelineSince(LiveSeries.timelineSettled)?.let { LiveSeries.applyTimeline(it) }
             }
             handler?.postDelayed(this, SMOOTH_MS)
         }
