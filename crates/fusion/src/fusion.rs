@@ -1162,6 +1162,13 @@ impl Fusion {
     /// leg names the line for the whole leg. Nothing is shown out of the subway when not walking.
     /// The segments up to a settled time are kept (see [`TimelineKept`]), so only those since are made again.
     pub fn timeline(&self) -> Vec<Segment> {
+        self.timeline_since(0).2
+    }
+
+    /// [`Self::timeline`] from segment `from` on, clamped to the settled ones, with that index and how many are
+    /// settled: those never change, so a caller holding the first `from` keeps them and replaces the rest.
+    /// The app asks this at every smoothing tick, so it sends only the open end (see `crates/ffi`).
+    pub fn timeline_since(&self, from: usize) -> (usize, usize, Vec<Segment>) {
         let t = self.now_ns;
         let lag = (RECORDS_SETTLE_S * 1e9) as i64;
         let records = self.records();
@@ -1180,14 +1187,17 @@ impl Fusion {
             join_segments(&mut kept.joined, pieces);
             kept.until = until;
         }
-        let mut out = kept.joined.clone();
-        let from = kept.until;
+        // The last kept segment still grows when what follows joins it.
+        let settled = kept.joined.len().saturating_sub(1);
+        let from = from.min(settled);
+        let mut out = kept.joined[from..].to_vec();
+        let until = kept.until;
         drop(kept);
         join_segments(
             &mut out,
-            self.timeline_between(&records, &periods, from, i64::MAX),
+            self.timeline_between(&records, &periods, until, i64::MAX),
         );
-        out
+        (from, settled, out)
     }
 
     /// The subway's periods (see [`Self::timeline`]): from the detector's switches, back within a minute
@@ -1928,7 +1938,22 @@ impl Fusion {
 
     /// Each stop of the train found so far, with its doors and departure (see [`StopRecord`]).
     pub fn stop_records(&self) -> Vec<StopRecord> {
-        self.records().iter().cloned().collect()
+        self.stop_records_since(0).2
+    }
+
+    /// [`Self::stop_records`] from record `from` on, clamped to the settled ones, with that index and how many
+    /// are settled: those never change, so a caller holding the first `from` keeps them and replaces the rest.
+    /// The app asks this at every smoothing tick, so it sends only the unsettled end (see `crates/ffi`).
+    pub fn stop_records_since(&self, from: usize) -> (usize, usize, Vec<StopRecord>) {
+        let records = self.records();
+        let settled = records.settled.records.len();
+        let from = from.min(settled);
+        let items = records.settled.records[from..]
+            .iter()
+            .chain(&records.tail)
+            .cloned()
+            .collect();
+        (from, settled, items)
     }
 
     /// The stop records (see [`Self::stop_records`]): those settled, kept, and the rest recomputed from the inputs
@@ -2777,10 +2802,6 @@ struct Records<'a> {
 }
 
 impl Records<'_> {
-    fn iter(&self) -> impl DoubleEndedIterator<Item = &StopRecord> {
-        self.settled.records.iter().chain(&self.tail)
-    }
-
     /// The last record the rider left the train at.
     fn last_left(&self) -> Option<&StopRecord> {
         self.tail
@@ -3190,6 +3211,91 @@ mod tests {
             open_ns: open_s * S,
             close_ns: close_s * S,
         }
+    }
+
+    /// A caller's copy of a list, kept by the deltas of [`Fusion::stop_records_since`] or [`Fusion::timeline_since`].
+    struct Mirror<T> {
+        items: Vec<T>,
+        settled: usize,
+    }
+
+    impl<T: Clone + PartialEq + std::fmt::Debug> Mirror<T> {
+        fn apply(&mut self, (from, settled, items): (usize, usize, Vec<T>)) {
+            self.items.truncate(from);
+            self.items.extend(items);
+            self.settled = settled;
+        }
+    }
+
+    #[test]
+    fn deltas_rebuild_the_lists() {
+        // Two hours: rides of ten stops two minutes apart, then a walk of five minutes, again and again;
+        // a tick every 10 s, as the app's smoothing tick asks, and a caller that misses ticks.
+        let mut f = Fusion::whole_ride();
+        let ride_s = 10 * 120 + 300;
+        let mut every = (
+            Mirror {
+                items: Vec::new(),
+                settled: 0,
+            },
+            Mirror {
+                items: Vec::new(),
+                settled: 0,
+            },
+        );
+        let mut sparse = (
+            Mirror {
+                items: Vec::new(),
+                settled: 0,
+            },
+            Mirror {
+                items: Vec::new(),
+                settled: 0,
+            },
+        );
+        for tick in 1..=720i64 {
+            let now = tick * 10;
+            for t in (now - 10..now).filter(|t| t % 4 == 0) {
+                let walking = t % ride_s >= 10 * 120;
+                f.step_windows.push((t * S, walking));
+                if t % ride_s == 0 {
+                    f.subway_changes.push((t * S, true));
+                }
+                if t % ride_s == 10 * 120 {
+                    f.subway_changes.push((t * S, false));
+                }
+            }
+            for t in now - 10..now {
+                let phase = t % ride_s;
+                if phase < 10 * 120 && phase % 120 == 60 {
+                    f.train_stops.push(stop(t));
+                }
+                if phase < 10 * 120 && phase % 120 == 100 {
+                    f.departures.push(t * S);
+                }
+            }
+            f.now_ns = now * S;
+            f.settled_ns = Some(now * S);
+            let stops = f.stop_records();
+            let timeline = f.timeline();
+            every.0.apply(f.stop_records_since(every.0.settled));
+            every.1.apply(f.timeline_since(every.1.settled));
+            assert_eq!(every.0.items, stops, "stops at {now} s");
+            assert_eq!(every.1.items, timeline, "timeline at {now} s");
+            if tick % 7 == 0 {
+                sparse.0.apply(f.stop_records_since(sparse.0.settled));
+                sparse.1.apply(f.timeline_since(sparse.1.settled));
+                assert_eq!(sparse.0.items, stops, "stops at {now} s, every 7th tick");
+                assert_eq!(
+                    sparse.1.items, timeline,
+                    "timeline at {now} s, every 7th tick"
+                );
+            }
+        }
+        // Most of both settled, so the deltas were short.
+        assert!(every.0.settled > 20, "{} stops settled", every.0.settled);
+        assert!(every.1.settled > 4, "{} segments settled", every.1.settled);
+        assert!(f.stop_records_since(every.0.settled).2.len() < 10);
     }
 
     #[test]
