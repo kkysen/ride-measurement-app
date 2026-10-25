@@ -215,6 +215,17 @@ pub fn replay_with_progress(
     options: &Options,
     progress: &mut dyn FnMut(f64),
 ) -> anyhow::Result<Replay> {
+    replay_with_hook(session, options, progress, &mut |_, _| {})
+}
+
+/// [`replay_with_progress`], also handing `on_status` the fusion at each status's time (with statuses on),
+/// right after the status: for checking what the app asks at its ticks.
+pub fn replay_with_hook(
+    session: &Session,
+    options: &Options,
+    progress: &mut dyn FnMut(f64),
+    on_status: &mut dyn FnMut(i64, &Fusion),
+) -> anyhow::Result<Replay> {
     // Every input is merged by time, at equal times in this order: the IMU, pressure, records, audio.
     // The big streams are read a chunk at a time as they're fed:
     // reading a long ride's whole streams and collecting their events first took over a gigabyte.
@@ -413,6 +424,7 @@ pub fn replay_with_progress(
             let start = std::time::Instant::now();
             statuses.push((t, fusion.status()));
             status_cost_ns.push(start.elapsed().as_nanos() as u64);
+            on_status(t, &fusion);
             next_status = t + STATUS_EVERY_NS;
         }
         if let Some(every) = options.live_every_ns
