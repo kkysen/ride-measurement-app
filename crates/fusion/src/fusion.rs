@@ -919,9 +919,8 @@ impl Fusion {
         let underground = estimate.since_gnss_s.is_none_or(|s| s > 10.0);
         // A move is found half its span late (see `vertical::moves`), so one ending just now is still going on.
         let vertical = self
-            .vertical_moves()
-            .into_iter()
-            .rfind(|m| recent(m.end_ns, VERTICAL_RECENT_S));
+            .vertical_moves_where(|m| recent(m.end_ns, VERTICAL_RECENT_S))
+            .pop();
         let mode = match (vertical, gait) {
             (Some(m), _) if m.kind == crate::vertical::Kind::Stairs => Mode::Stairs {
                 up: m.change_m > 0.0,
@@ -1332,11 +1331,21 @@ impl Fusion {
     /// Riding up or down with a train departing around it, or at a vehicle's speed, was the train (boarding is
     /// walking, then its tunnel pressure waves pass for a ride): on `214427` and `182135`, aboard the 2.
     pub fn vertical_moves(&self) -> Vec<crate::vertical::Move> {
+        self.vertical_moves_where(|_| true)
+    }
+
+    /// [`Self::vertical_moves`] of those `keep` keeps: the status keeps only recent ones,
+    /// so the speeds are smoothed only when one of those needs them, not at every status.
+    fn vertical_moves_where(
+        &self,
+        keep: impl Fn(&crate::vertical::Move) -> bool,
+    ) -> Vec<crate::vertical::Move> {
         let s_ns = |s: f64| (s * 1e9) as i64;
         // Smoothed only if needed: over a whole ride, that's smoothing it all again.
         let smoothed = std::cell::OnceCell::new();
         crate::vertical::moves(self.altimeter.heights(), &self.step_windows, WALK_WINDOW_S)
             .into_iter()
+            .filter(|m| keep(m))
             .filter(|m| {
                 if m.kind == crate::vertical::Kind::Stairs {
                     return true;
