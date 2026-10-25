@@ -737,6 +737,31 @@ pub trait ReplayProgress: Send + Sync {
     fn on_progress(&self, fraction: f64);
 }
 
+/// Where [`replay_session`] caches a session's replay: by the session directory's name.
+fn replay_cache_path(session_dir: &str, cache_dir: &str) -> std::path::PathBuf {
+    let id = std::path::Path::new(session_dir)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    std::path::Path::new(cache_dir).join(format!("{id}.pb"))
+}
+
+/// The replay cached at `cache`, if this core ([`core_hash`]) made it.
+fn read_cached_replay(cache: &std::path::Path) -> Option<RideReplay> {
+    use prost::Message;
+    std::fs::read(cache)
+        .ok()
+        .and_then(|b| RideReplay::decode(&b[..]).ok())
+        .filter(|r| r.build == core_hash())
+}
+
+/// The replay [`replay_session`] cached for this session, without replaying it if there's none:
+/// cheap enough to show a past ride while recording.
+#[uniffi::export]
+pub fn cached_replay(session_dir: String, cache_dir: String) -> Option<RideReplay> {
+    read_cached_replay(&replay_cache_path(&session_dir, &cache_dir))
+}
+
 /// Replays a past ride, or reads the replay cached in `cache_dir` if this core ([`core_hash`]) made it.
 /// The cache is per session and never in the session's directory, which is uploaded;
 /// tap edits and recompression don't change what a replay gives, so neither invalidates it.
@@ -749,17 +774,8 @@ pub fn replay_session(
     let build = core_hash();
     use prost::Message;
     let session = ride_session::read::Session::open(&session_dir)?;
-    let id = session
-        .dir
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let cache = std::path::Path::new(&cache_dir).join(format!("{id}.pb"));
-    if let Some(cached) = std::fs::read(&cache)
-        .ok()
-        .and_then(|b| RideReplay::decode(&b[..]).ok())
-        .filter(|r| r.build == build)
-    {
+    let cache = replay_cache_path(&session_dir, &cache_dir);
+    if let Some(cached) = read_cached_replay(&cache) {
         return Ok(cached);
     }
     let options = ride_fusion::replay::Options {
