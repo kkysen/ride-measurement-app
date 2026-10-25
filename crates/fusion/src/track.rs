@@ -145,6 +145,47 @@ pub fn between(a: &Station, b: &Station) -> Option<Track> {
     Some(Track { points, along })
 }
 
+/// The shortest track from `from` to the next station a shape of one of `lines` (any, if none) stops at,
+/// away from `prev` where that shape stops there too (else either way): what a train leaving `from`
+/// must cover before it can stand at a station again.
+pub fn next_station_m(from: &Station, prev: Option<&Station>, lines: &[String]) -> Option<f64> {
+    let ids_from = stop_ids(from);
+    let ids_prev = prev.map(stop_ids).unwrap_or_default();
+    let mut best: Option<f64> = None;
+    for shape in shapes() {
+        if !lines.is_empty() && !lines.contains(&line_of_route(&shape.route)) {
+            continue;
+        }
+        let find = |ids: &[&str]| {
+            shape
+                .stops
+                .iter()
+                .position(|(id, _)| ids.contains(&id.as_str()))
+        };
+        let Some(k) = find(&ids_from) else {
+            continue;
+        };
+        let next: &[Option<usize>] = match find(&ids_prev) {
+            Some(p) if p < k => &[k.checked_add(1)],
+            Some(p) if p > k => &[k.checked_sub(1)],
+            _ => &[k.checked_add(1), k.checked_sub(1)],
+        };
+        let here = shape.along[shape.stops[k].1];
+        for &j in next {
+            if let Some(&(_, i)) = j.and_then(|j| shape.stops.get(j)) {
+                let d = (shape.along[i] - here).abs();
+                best = Some(best.map_or(d, |b| b.min(d)));
+            }
+        }
+    }
+    best
+}
+
+/// The least time (s) a train takes over `length_m` of track from a stand to a stand (see [`fastest_s`]).
+pub fn least_s(length_m: f64) -> f64 {
+    fastest_s(length_m)
+}
+
 /// What [`join`] did.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Joined {

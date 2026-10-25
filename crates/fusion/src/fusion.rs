@@ -89,6 +89,12 @@ const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
 const DOORS_AFTER_STOP_S: (f64, f64) = (1.0, 10.0);
 const DEPART_AFTER_STOP_S: f64 = 5.0;
 const RECORD_MAX_DWELL_S: f64 = 300.0;
+/// How many of the stations named before a departure [`Fusion::before_next_station`] looks back through.
+const PREV_STATIONS: usize = 8;
+/// How soon after a door cycle's closing a departure must come for [`Fusion::before_next_station`] to time from it.
+const DEPART_AFTER_DOORS_S: f64 = 20.0;
+/// A door cycle opening this soon (s) after the last one closed is the doors reopening at the same stop.
+const REOPEN_S: f64 = 15.0;
 /// See [`Fusion::moved_on`].
 const MOVED_ON_AFTER_S: f64 = 20.0;
 /// How long the radio must keep naming the other station: a cell of a neighboring station flickers in at times.
@@ -1812,7 +1818,9 @@ impl Fusion {
                 self.chimes.push(c);
             }
             for cycle in cycles {
-                self.on_door_cycle(t_ns, cycle);
+                if !self.before_next_station(cycle) {
+                    self.on_door_cycle(t_ns, cycle);
+                }
             }
             return;
         }
@@ -1944,6 +1952,56 @@ impl Fusion {
                     Some(t_ns - t_ns.rem_euclid(SMOOTH_EVERY_NS) + SMOOTH_EVERY_NS);
             }
         }
+    }
+
+    /// Whether the train can't yet be at a station by a door cycle's closing (its opening is often heard early),
+    /// by the track: underground, the doors not just reopened, and a departure within [`DEPART_AFTER_DOORS_S`] of
+    /// the last cycle's closing, at a station the radio named, less than the least time a train takes from there
+    /// to the next station ago, timed from that closing (away from the station named before, if one was;
+    /// see [`crate::track::next_station_m`]).
+    /// A door cycle heard then is another sound: mid-river on the L on `20261023-193658`, 7:59:22 pm,
+    /// 67 s after leaving 1 Av, 2 km from Bedford Av.
+    fn before_next_station(&self, cycle: DoorCycle) -> bool {
+        let t_ns = cycle.close_ns;
+        // Doors opening again soon after closing, before the train left: the same stop.
+        let reopened = self
+            .door_cycles
+            .last()
+            .is_some_and(|c| (cycle.open_ns - c.close_ns) as f64 * 1e-9 <= REOPEN_S);
+        if !self.context.in_subway || reopened {
+            return false;
+        }
+        // Departures are found in about time order.
+        let Some(&departed) = self.departures.get(
+            self.departures
+                .partition_point(|&d| d <= t_ns)
+                .wrapping_sub(1),
+        ) else {
+            return false;
+        };
+        // Only a departure right after the doors closed (surges are also found at stops and mid-run),
+        // timed from the closing: a surge is found up to some seconds into the start.
+        let Some(departed) = self.door_cycles.last().map(|c| c.close_ns).filter(|&c| {
+            let s = (departed - c) as f64 * 1e-9;
+            (0.0..=DEPART_AFTER_DOORS_S).contains(&s)
+        }) else {
+            return false;
+        };
+        let Some(from) = self.station_at(departed) else {
+            return false;
+        };
+        // The station named before it, among the last few.
+        let i = self
+            .station_history
+            .partition_point(|&(first, ..)| first <= departed);
+        let prev = self.station_history[i.saturating_sub(PREV_STATIONS)..i]
+            .iter()
+            .rev()
+            .map(|&(_, _, s)| s)
+            .find(|s| !stations::same_complex(from, s));
+        let lines = self.riding_lines(departed);
+        crate::track::next_station_m(from, prev, &lines)
+            .is_some_and(|m| ((t_ns - departed) as f64 * 1e-9) < crate::track::least_s(m))
     }
 
     /// A door cycle found at `t_ns`: the train stood from [`DWELL_SURE_S`] before its closing to the closing.
