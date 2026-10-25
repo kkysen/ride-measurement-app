@@ -2,8 +2,8 @@
 # station, `GTFS Stop ID` in `data/mta/entrances/entrances.csv`, direction (`entry`, `exit` or `both`),
 # the entrance's latitude and longitude there (empty when the dataset has no single point for it), and the rider's words.
 station,stop_id,direction,lat,lon,note
-Cathedral Pkwy (110 St) (1),118,exit,40.8039646,-73.9666339,usually the SW stair
-Cathedral Pkwy (110 St) (1),118,entry,40.8042714,-73.966413,usually the NE stair
+Cathedral Pkwy (110 St) (1),118,exit,40.8039646,-73.9666339,the SE stair: arriving northbound (the NE and SE stairs are the only ones to the northbound platform; no free crossover)
+Cathedral Pkwy (110 St) (1),118,entry,40.8044061,-73.966777,the NW stair: the only one to the southbound platform
 Cathedral Pkwy (110 St) (C B),A17,both,40.8000144,-73.9588852,usually the SW stair on 109 St
 96 St (1 2 3),120,both,40.7943215,-73.9720456,usually the northern end of the station house
 Times Sq-42 St (1 2 3),127,entry,40.754817,-73.9882354,on 40 St just west of 7 Av (the ride on Thu Oct 22 at 3:04 am)
