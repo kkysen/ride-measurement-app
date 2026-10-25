@@ -201,6 +201,11 @@ pub fn complex_lines(station: &Station) -> Vec<String> {
 /// How far apart (m) the parts of one station complex can be (Times Sq to 42 St-Port Authority is about 250).
 const COMPLEX_M: f64 = 350.0;
 
+/// Whether two stations are of one complex (within [`COMPLEX_M`]): a train standing at one may have either named.
+pub fn same_complex(a: &Station, b: &Station) -> bool {
+    meters((a.lat, a.lon), (b.lat, b.lon)) <= COMPLEX_M
+}
+
 /// The station a registered LTE cell serves, if it's one the rider has tagged, by the MTA's name for it.
 pub fn of_cell(cell_id: i64) -> Option<&'static Station> {
     let tagged = table().get(&cell_id)?;

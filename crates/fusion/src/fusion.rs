@@ -89,6 +89,10 @@ const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
 const DOORS_AFTER_STOP_S: (f64, f64) = (1.0, 10.0);
 const DEPART_AFTER_STOP_S: f64 = 5.0;
 const RECORD_MAX_DWELL_S: f64 = 300.0;
+/// See [`Fusion::moved_on`].
+const MOVED_ON_AFTER_S: f64 = 20.0;
+/// How long the radio must keep naming the other station: a cell of a neighboring station flickers in at times.
+const MOVED_ON_HELD_S: f64 = 10.0;
 /// A transfer (see [`Fusion::transfer_s`]) is shown for at most this long (s): a late night wait for a train.
 const TRANSFER_MAX_S: f64 = 1_800.0;
 /// Between trains (see [`Fusion::transfer_s`]) the live speed shows at most a run (m/s).
@@ -997,6 +1001,32 @@ impl Fusion {
         }
     }
 
+    /// Whether the radio has named a station outside the complex of the one it named at `stopped_ns`, since then
+    /// up to `t`: the train has moved on, though no departure was felt. On `20261024-085154` the 3's start from
+    /// 96 St was taken for a stop, and its live hold and dwell ran past 86 St and 79 St to 72 St (1:38 at 79 St).
+    /// Only the stations named since the stop are looked at, and callers ask only within [`RECORD_MAX_DWELL_S`].
+    /// The radio often names the station only some seconds into the dwell (the cell before it lingers),
+    /// so the stop's station is the one named [`MOVED_ON_AFTER_S`] after it, and only stations named after that,
+    /// and for [`MOVED_ON_HELD_S`], count.
+    fn moved_on(&self, stopped_ns: i64, t: i64) -> bool {
+        let settled = stopped_ns + (MOVED_ON_AFTER_S * 1e9) as i64;
+        if t <= settled {
+            return false;
+        }
+        let Some(at) = self.station_at(settled) else {
+            return false;
+        };
+        let from = self
+            .station_history
+            .partition_point(|&(first, ..)| first <= settled);
+        self.station_history[from..]
+            .iter()
+            .take_while(|&&(first, ..)| first <= t)
+            .any(|&(first, last, s)| {
+                !stations::same_complex(at, s) && (last - first) as f64 * 1e-9 >= MOVED_ON_HELD_S
+            })
+    }
+
     /// The station the radio named at `t` (within 30 s of being named).
     fn station_at(&self, t: i64) -> Option<&'static Station> {
         let i = self
@@ -1145,7 +1175,10 @@ impl Fusion {
         }
         let since = |from: i64| (t - from) as f64 * 1e-9;
         let stopped_s = since(stop.t_ns);
-        if self.departed_after(stop.t_ns).is_some() || stopped_s > RECORD_MAX_DWELL_S {
+        if self.departed_after(stop.t_ns).is_some()
+            || stopped_s > RECORD_MAX_DWELL_S
+            || self.moved_on(stop.t_ns, t)
+        {
             return None;
         }
         // A cycle is heard whole at its closing, so live the opening is known only then.
@@ -2404,8 +2437,14 @@ impl Fusion {
             .step_windows
             .last()
             .is_some_and(|&(t, steps)| steps && t > stop.t_ns);
-        (self.context.in_subway && !moving_gnss && !departed && !dropped && !old && !walking)
-            .then_some(stop)
+        (self.context.in_subway
+            && !moving_gnss
+            && !departed
+            && !dropped
+            && !old
+            && !walking
+            && !self.moved_on(stop.t_ns, now_ns))
+        .then_some(stop)
     }
 
     fn estimate_unheld(&self, now_ns: i64) -> Estimate {
