@@ -50,7 +50,7 @@ pub fn meters(a: (f64, f64), b: (f64, f64)) -> f64 {
     dn.hypot(de)
 }
 
-/// A car model: whether its door chime is the NTT one (else the R62 family's), and whether its cars have the
+/// A car model: whether its door chime is the NTT one (else the SMEE fleet's: R46, R62, R62A, R68, R68A), and whether its cars have the
 /// Bluetooth beacons of [`crate::car_beacons`] (CBTC-equipped or ready cars); none when not known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CarModel {
@@ -271,7 +271,7 @@ mod tests {
             car_type(None, true, &lines(&["2", "7"])),
             ct(Some(true), Some("R188"))
         );
-        // On the B: NTT means R211; the R62 family's chime, the R68s.
+        // On the B: NTT means R211; the SMEE chime, the R68s.
         let b = lines(&["B"]);
         assert_eq!(
             car_type(Some(true), false, &b),
