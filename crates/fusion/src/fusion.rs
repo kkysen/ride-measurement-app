@@ -2131,13 +2131,17 @@ impl Fusion {
         self.train_stops.push((stop, station, in_subway));
         if USE_STOPPING_LURCH && in_subway && !self.departure_fade(&stop) {
             self.unconfirmed_stops.push(stop);
-            // What came while the stop was being decided.
-            let since: Vec<i64> = self
+            // What came while the stop was being decided: door cycles (by closing) and departures are in time
+            // order, so found by binary search, not a scan of the ride.
+            let cycles = &self.door_cycles[self
                 .door_cycles
+                .partition_point(|c| c.close_ns <= stop.t_ns)..];
+            let departures =
+                &self.departures[self.departures.partition_point(|&d| d <= stop.t_ns)..];
+            let since: Vec<i64> = cycles
                 .iter()
                 .map(|c| c.close_ns)
-                .chain(self.departures.iter().copied())
-                .filter(|&x| x > stop.t_ns)
+                .chain(departures.iter().copied())
                 .collect();
             for x in since {
                 self.confirm_stops(t_ns, x);
