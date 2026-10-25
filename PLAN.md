@@ -887,7 +887,14 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
       `smoothed()` already sends only the 10-minute window live (flat); `LiveTrack.applySmoothed` now looks only there.
       `Fusion::aboard_at` and the elevator check's departures by binary search and newest first: statuscost hash the same on all 18.
       Unchecked on the phone. Still per tick in Kotlin: copying the lists of references for the `StateFlow`s (one per fix too).
-      Left: `missed_stop` (at each step window while walking in the subway) still scans every step window, departure, and stop.
+      Done (`da9ff08`): `missed_stop` by binary searches (stops by `recent`): 2.2 and 5.4 us a call in the first and last
+      10 minutes of `20261022-002914` before, 1.4 and 0.9 us now (only 102 calls a ride). `f144c62`: `on_train_stop`'s
+      door cycles and departures since the stop by binary search.
+      `607ed02`: the live smoothing tick's track hold built every record, good fix, and leg of the ride;
+      now from a dwell before the window: 4 and 547 us a tick there before, 2 and 21 us now.
+      `statuscost` misses it (replay is whole-ride, one smoothing): measured by replaying with `Fusion::new`.
+      statuscost hash the same on all 18, whole-ride and live.
+      Left, small: `subway_periods` (per timeline call) walks every subway switch.
 
 Laptop memory (2026-10-24): parallel replays over all sessions (about 1.5 GB each on the longest) crashed WSL.
 `just sweep <example>` runs one over every session in turn, each capped at 3 GB,
