@@ -1544,10 +1544,11 @@ impl Fusion {
             if m.kind == crate::vertical::Kind::Stairs {
                 return true;
             }
-            let departed = self
+            // Departures are found in time order.
+            let from = self
                 .departures
-                .iter()
-                .any(|&d| d >= m.start_ns - s_ns(VERTICAL_DEPARTED_S) && d <= m.end_ns);
+                .partition_point(|&d| d < m.start_ns - s_ns(VERTICAL_DEPARTED_S));
+            let departed = self.departures.get(from).is_some_and(|&d| d <= m.end_ns);
             if departed {
                 return false;
             }
@@ -1579,12 +1580,17 @@ impl Fusion {
     /// `20261021-215922` and `20261024-085154` the status said "elevator or escalator down" between stations.
     fn aboard_at(&self, t: i64, records: &Records) -> bool {
         let s_ns = |s: f64| (s * 1e9) as i64;
+        // A record's alighting and departure come in its own dwell, before the next stop, so the records
+        // newest first give them newest first; settled ones after the last left aren't left at.
+        let settled_left = records.settled.last_left.map_or(0, |i| i + 1);
         let left = records
+            .tail
             .iter()
+            .rev()
+            .chain(records.settled.records[..settled_left].iter().rev())
             .filter(|r| r.rider_left())
             .filter_map(|r| r.alighted_ns)
-            .filter(|&a| a <= t)
-            .max()
+            .find(|&a| a <= t)
             .unwrap_or(i64::MIN);
         let still_around = |d: i64| {
             let from = self
@@ -1595,18 +1601,34 @@ impl Fusion {
                 .take_while(|&&(at, _)| at < d + s_ns(TRANSFER_STILL_S.1))
                 .any(|&(_, steps)| steps)
         };
+        let within = |d: i64| d > left && d <= t && still_around(d);
+        // Departures are found in time order.
+        let departures = &self.departures[self.departures.partition_point(|&d| d <= left)
+            ..self.departures.partition_point(|&d| d <= t)];
+        if departures.iter().rev().any(|&d| within(d)) {
+            return true;
+        }
+        // The records' departures: those of stops up to `t`, back to the stop in whose dwell `left` is.
+        for r in records.before(t) {
+            if r.departed_ns.is_some_and(within) {
+                return true;
+            }
+            if r.stopped_ns <= left {
+                break;
+            }
+        }
         // Departures are missed (none on the C/E into Spring St, `20261021-215922`), so a stop felt counts too.
-        let stops = self
-            .train_stops
-            .iter()
-            .filter(|(stop, _, in_subway)| *in_subway && !self.departure_fade(stop))
-            .map(|(stop, ..)| stop.t_ns);
-        self.departures
-            .iter()
-            .copied()
-            .chain(records.iter().filter_map(|r| r.departed_ns))
-            .chain(stops)
-            .any(|d| d > left && d <= t && still_around(d))
+        // Stops are found in about time order (a missed one at the departure after it).
+        recent(
+            &self.train_stops,
+            |x| x.0.t_ns,
+            left,
+            s_ns(RECORDS_SETTLE_S),
+        )
+        .iter()
+        .rev()
+        .filter(|(stop, _, in_subway)| *in_subway && !self.departure_fade(stop))
+        .any(|(stop, ..)| within(stop.t_ns))
     }
 
     /// A barometer reading (hPa), for going up and down (see [`crate::vertical`]).
