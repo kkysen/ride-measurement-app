@@ -772,6 +772,14 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
      reckoning doesn't make, all sessions, 523 to 636: a few km of offset spread over minutes reads as a smooth
      56 to 85 mph (82 more on `135509`); a blend by distance or speed might fix that. At good fixes unchanged.
      `stop_positions`: the 88 left out stops placed on the track unchanged; all 166 joined, 90th 353 to 40 m.
+   - Tried, not committed: blending by distance instead of time. By the distance the unshifted path travels
+     (time under 1 m), steps over 55 mph 1624 to 1551 (those the dead reckoning doesn't make 636 to 635),
+     `135509` 115 to 32 and its largest step 3305 to 1121 m; but the largest step grows on six rides
+     (`182135` 358 to 505 m, `011209` 153 to 220 m, `160303` 119 to 189 m, `214427` 1009 to 1071 m)
+     where the dead reckoning's own jumps take the shift. Capping each step at 55 mph and adding 0.5 m/s
+     for dwells undoes most of that but gets worse overall: 1663 steps (740 not the dead reckoning's).
+     Good fixes and left out stops unchanged in both. Next: weight by the smoothed speed, or fix the
+     dead reckoning's jumps first.
    Left: the live map still draws GPS fixes; the hold is a scaling after smoothing, not a distance measurement inside the
    filter's passes (that would fix the speeds' shape too); the live (forward) speed isn't held; the average isn't
    shown in the app; no licensing note for the MTA's data exists in the repo, for this or `open_track.bin`;
