@@ -448,6 +448,10 @@ const VERTICAL_DEPARTED_S: f64 = 60.0;
 /// The live speed drifts to 3 m/s over a ride off the train underground (`20261024-003357`, 12.6 m up after
 /// alighting), and a train just boarded, before any of its stops or departures is felt, rides at 7 m/s or more.
 const VERTICAL_VEHICLE_MPS: f64 = 5.0;
+/// Riding up or down (an elevator or escalator) takes at least this (s) from start to end, the span included:
+/// the rider's elevators took 53 s to 1:02 (`crates/cli/examples/score/vertical_labels.csv`), and the
+/// station exit stairs found with few steps 24 to 28 s (as did pressure noise).
+const VERTICAL_MIN_RIDE_S: f64 = 40.0;
 /// The status shows a move that ended within this (s): about half its 25 s span, the lag in finding it.
 const VERTICAL_RECENT_S: f64 = 15.0;
 /// The subway detector off for at most this (s) is the same subway ride on the timeline.
@@ -1476,6 +1480,15 @@ impl Fusion {
                 && speeds.iter().map(|&(_, v)| f64::from(v)).sum::<f64>() / speeds.len() as f64
                     > VERTICAL_VEHICLE_MPS;
             !fast
+        })
+        // A short ride is stairs, its steps missed: an elevator's ride takes longer.
+        .map(|mut m| {
+            if m.kind == crate::vertical::Kind::Riding
+                && m.end_ns - m.start_ns < s_ns(VERTICAL_MIN_RIDE_S)
+            {
+                m.kind = crate::vertical::Kind::Stairs;
+            }
+            m
         })
         .collect()
     }
