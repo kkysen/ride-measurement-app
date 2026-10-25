@@ -640,6 +640,10 @@ pub struct Fusion {
     stop_detector: StopDetector,
     train_stops: Vec<(train_stops::Stop, Option<&'static Station>, bool)>,
     departures: Vec<i64>,
+    /// The stop records settled so far (see [`Fusion::records`]), so a status recomputes only the recent ones.
+    settled_records: std::cell::RefCell<SettledRecords>,
+    /// The times of good fixes (see [`Fusion::good_fix_ns`]), in time order.
+    good_fixes: Vec<i64>,
     /// The latest lurch the car settled after, shown live as the stop before it's decided (see [`Fusion::estimate`]).
     likely_stop: Option<train_stops::Stop>,
     /// Stops in the subway waiting for a door closing or a departure to confirm them.
@@ -733,6 +737,8 @@ impl Fusion {
             stop_detector: StopDetector::new(),
             train_stops: Vec::new(),
             departures: Vec::new(),
+            settled_records: Default::default(),
+            good_fixes: Vec::new(),
             likely_stop: None,
             unconfirmed_stops: Vec::new(),
             walking: WalkingDetector::default(),
@@ -817,11 +823,10 @@ impl Fusion {
     /// (`boarded_after`), the newest within [`ROUTE_STOP_S`], matched to the feeds' trips.
     /// Boarding from the platform counts as a stop there (see [`Self::boarding`]): no stop is felt aboard,
     /// so otherwise the boarding station is left out (6 Av on the L, `20261023-193658`).
-    fn route(&self, t: i64, boarded_after: i64) -> Option<String> {
+    fn route(&self, t: i64, boarded_after: i64, records: &Records) -> Option<String> {
         let ago = |at: i64| (t - at) as f64 * 1e-9;
-        let records = self.stop_records();
         let boarding = self
-            .boarding(t, &records)
+            .boarding(t, records)
             .and_then(|(_, b)| b)
             .and_then(|(stopped, departed)| {
                 Some(trips::RiderStop {
@@ -962,11 +967,10 @@ impl Fusion {
         let cell_station = self.radio_station(t);
         // What's known of the rider's train is only from since they last walked off one,
         // and nothing while between trains: chimes and stops heard then are other trains'.
-        let transfer_s = self.transfer_s(t);
-        let boarded_after = self
-            .stop_records()
-            .into_iter()
-            .rfind(|r| r.rider_left())
+        let records = self.records();
+        let transfer_s = self.transfer_s(t, &records);
+        let boarded_after = records
+            .last_left()
             .and_then(|r| r.alighted_ns)
             .unwrap_or(i64::MIN);
         let stopped_at = self
@@ -988,7 +992,7 @@ impl Fusion {
             .filter(|_| aboard)
             .map(|(_, c)| c);
         let car = self.cars.current_at(t);
-        let route = self.route(t, boarded_after).filter(|_| aboard);
+        let route = self.route(t, boarded_after, &records).filter(|_| aboard);
         // The route if the feeds give it, else the lines the train has been on, else the station's:
         // between trains, all the lines of its complex, any of which the rider may take next.
         let lines = match &route {
@@ -1241,12 +1245,11 @@ impl Fusion {
     /// too), or a car beacon heard as the rider's for [`TRANSFER_CAR_S`], other than the train's they left
     /// (departures are missed on the L). Trains at the platform are heard steadily too, but leave sooner.
     /// Stops found meanwhile don't end it: walking through a station makes lurches.
-    fn transfer_s(&self, t: i64) -> Option<f64> {
+    fn transfer_s(&self, t: i64, records: &Records) -> Option<f64> {
         if !self.context.in_subway {
             return None;
         }
-        let records = self.stop_records();
-        let (alighted, boarded) = self.boarding(t, &records)?;
+        let (alighted, boarded) = self.boarding(t, records)?;
         let since_s = (t - alighted) as f64 * 1e-9;
         (boarded.is_none() && since_s <= TRANSFER_MAX_S).then_some(since_s)
     }
@@ -1256,26 +1259,39 @@ impl Fusion {
     /// The first departure since with no steps around it, the train leaving with the rider,
     /// or else the new car heard as theirs for [`TRANSFER_CAR_S`], from when it was first: on the L, whose
     /// departures are missed, it's heard just as the rider boards, from the platform.
-    fn boarding(&self, t: i64, records: &[StopRecord]) -> Option<(i64, Option<(i64, i64)>)> {
-        let left = records.iter().rfind(|r| r.rider_left())?;
+    fn boarding(&self, t: i64, records: &Records) -> Option<(i64, Option<(i64, i64)>)> {
+        let left = records.last_left()?;
         let alighted = left.alighted_ns?;
         let s_ns = |s: f64| (s * 1e9) as i64;
-        // The departures found, and those the stop records give (a stop stepped out at, then ridden on from).
-        let departed = records.iter().filter_map(|r| r.departed_ns);
-        let departure = self
-            .departures
-            .iter()
-            .copied()
-            .chain(departed)
-            .filter(|&d| {
-                d > alighted
-                    && !self.step_windows.iter().any(|&(at, steps)| {
-                        steps
-                            && at > d - s_ns(TRANSFER_STILL_S.0)
-                            && at < d + s_ns(TRANSFER_STILL_S.1)
-                    })
-            })
+        let still = |d: i64| {
+            let from = self
+                .step_windows
+                .partition_point(|&(at, _)| at <= d - s_ns(TRANSFER_STILL_S.0));
+            !self.step_windows[from..]
+                .iter()
+                .take_while(|&&(at, _)| at < d + s_ns(TRANSFER_STILL_S.1))
+                .any(|&(_, steps)| steps)
+        };
+        // The departures found, and those the stop records give (a stop stepped out at, then ridden on from):
+        // a record's departure is within `RECORD_MAX_DWELL_S` of its stop.
+        let departed = records
+            .since(alighted - s_ns(RECORD_MAX_DWELL_S))
+            .filter_map(|r| r.departed_ns)
+            .filter(|&d| d > alighted && still(d))
             .min();
+        // The first, of departures found in about time order: none found later is more than a lag earlier.
+        let lag = s_ns(RECORDS_SETTLE_S);
+        let start = recent_index(&self.departures, |&d| d, alighted, lag);
+        let mut found: Option<i64> = None;
+        for &d in &self.departures[start..] {
+            if found.is_some_and(|f| d > f + lag) {
+                break;
+            }
+            if d > alighted && still(d) {
+                found = Some(found.map_or(d, |f| f.min(d)));
+            }
+        }
+        let departure = found.into_iter().chain(departed).min();
         let new_car = self
             .car_since
             .filter(|&(c, since)| {
@@ -1380,7 +1396,7 @@ impl Fusion {
                 if departed {
                     return false;
                 }
-                if self.aboard_at(m.start_ns, records.get_or_init(|| self.stop_records())) {
+                if self.aboard_at(m.start_ns, records.get_or_init(|| self.records())) {
                     return false;
                 }
                 let from = self.live_speeds.partition_point(|&(t, _)| t < m.start_ns);
@@ -1397,7 +1413,7 @@ impl Fusion {
     /// Whether the rider was aboard a train at `t`: it departed or stopped with them (no steps around it, as in
     /// [`Self::boarding`]) since they last walked off one. Aboard, riding up or down is the train: on
     /// `20261021-215922` and `20261024-085154` the status said "elevator or escalator down" between stations.
-    fn aboard_at(&self, t: i64, records: &[StopRecord]) -> bool {
+    fn aboard_at(&self, t: i64, records: &Records) -> bool {
         let s_ns = |s: f64| (s * 1e9) as i64;
         let left = records
             .iter()
@@ -1726,43 +1742,110 @@ impl Fusion {
 
     /// Each stop of the train found so far, with its doors and departure (see [`StopRecord`]).
     pub fn stop_records(&self) -> Vec<StopRecord> {
-        let mut records = stop_records(
-            &self.train_stops,
-            &self.door_cycles,
-            &self.departures,
-            &self.step_windows,
+        self.records().iter().cloned().collect()
+    }
+
+    /// The stop records (see [`Self::stop_records`]): those settled, kept, and the rest recomputed from the inputs
+    /// since, a slice of each found from its end, so a status costs the same however long the ride.
+    /// A record is settled once the stop after it is [`RECORDS_SETTLE_S`] old: everything it's made from (the next
+    /// stop, the steps, door cycles, departures, and car beacons up to it) is found by then.
+    fn records(&self) -> Records<'_> {
+        let s_ns = |s: f64| (s * 1e9) as i64;
+        let lag = s_ns(RECORDS_SETTLE_S);
+        let mut settled = self.settled_records.borrow_mut();
+        let cut = settled.records.last().map_or(i64::MIN, |r| r.stopped_ns);
+        // Inputs from well before the first stop recomputed: its record looks back at the steps before it.
+        let from = cut.saturating_sub(lag);
+        let stops: Vec<_> = self.train_stops[settled.stops_from..]
+            .iter()
+            .filter(|(stop, ..)| stop.t_ns > cut)
+            .copied()
+            .collect();
+        let mut tail = stop_records(
+            &stops,
+            recent(&self.door_cycles, |c| c.close_ns, from, lag),
+            recent(&self.departures, |&d| d, from, lag),
+            recent(&self.step_windows, |&(t, _)| t, from, lag),
         );
+        let readings = recent(&self.car_readings, |&(t, ..)| t, from, lag);
         let span = (CAR_SPAN_S * 1e9) as i64;
-        for r in &mut records {
+        for r in &mut tail {
             if let (Some(b), Some(d), false) = (r.boarded_ns, r.departed_ns, r.stepped_out()) {
-                r.boarded_ns = Some(stepped_in(&self.car_readings, b, d).unwrap_or(b));
+                r.boarded_ns = Some(stepped_in(readings, b, d).unwrap_or(b));
             }
             if let (Some(a), Some(b)) = (r.alighted_ns, r.boarded_ns) {
-                r.car_before = strongest_car(&self.car_readings, a - span, a);
-                r.car_after = strongest_car(&self.car_readings, b, b + span);
+                r.car_before = strongest_car(readings, a - span, a);
+                r.car_after = strongest_car(readings, b, b + span);
             }
             if let Some(d) = r.departed_ns {
-                r.train_change = trains_differ(&self.car_readings, r.stopped_ns, d);
+                r.train_change = trains_differ(readings, r.stopped_ns, d);
             }
         }
-        for k in 1..records.len() {
-            let (before, after) = records.split_at_mut(k);
-            let (prev, r) = (&before[k - 1], &mut after[0]);
+        for k in 0..tail.len() {
+            let (before, after) = tail.split_at_mut(k);
+            let Some(prev) = before.last().or(settled.records.last()) else {
+                continue;
+            };
+            let r = &mut after[0];
             r.between_stations = r.in_subway
                 && prev.in_subway
                 && !prev.rider_left()
                 && r.doors_closed_ns.is_none()
                 && self.between_stations(prev.stopped_ns, r.stopped_ns);
         }
-        let (legs, _) = crate::track::legs(&records, &self.good_fix_ns(), None);
+        // The legs to the recomputed stops, from the last settled stop a leg can start at, if any.
+        let seed = settled.leg_from.clone();
+        let fixes_from = seed
+            .as_ref()
+            .map_or(cut, |a| a.departed_ns.unwrap_or(a.stopped_ns))
+            .min(cut);
+        let fixes = &self.good_fixes[self.good_fixes.partition_point(|&t| t <= fixes_from)..];
+        let seeded: Vec<StopRecord> = seed.into_iter().chain(tail.iter().cloned()).collect();
+        let (legs, _) = crate::track::legs(&seeded, fixes, None);
         for leg in legs {
-            if let Some(r) = records.iter_mut().find(|r| r.stopped_ns == leg.to_ns) {
+            if let Some(r) = tail.iter_mut().find(|r| r.stopped_ns == leg.to_ns) {
                 let length = leg.track.length_m();
                 let s = (leg.to_ns - leg.from_ns) as f64 * 1e-9;
                 r.from_last_station = Some((length, length / s));
             }
         }
-        records
+        // Settle those whose next stop is old enough.
+        let now = self.settled_ns.unwrap_or(i64::MIN);
+        let n = (0..tail.len())
+            .take_while(|&k| {
+                tail.get(k + 1)
+                    .is_some_and(|next| next.stopped_ns < now - lag)
+            })
+            .count();
+        if n > 0 {
+            for r in tail.drain(..n) {
+                // As `track::legs` goes through them.
+                if r.on_platform {
+                    settled.leg_from = None;
+                }
+                if crate::track::anchor(&r) {
+                    settled.leg_from = Some(r.clone());
+                }
+                if r.alighted_ns.is_some() {
+                    settled.leg_from = None;
+                }
+                if r.rider_left() {
+                    settled.last_left = Some(settled.records.len());
+                }
+                settled.records.push(r);
+            }
+            let cut = settled.records.last().map_or(i64::MIN, |r| r.stopped_ns);
+            let mut i = self.train_stops.len();
+            while i > settled.stops_from && self.train_stops[i - 1].0.t_ns > cut - lag {
+                i -= 1;
+            }
+            settled.stops_from = i;
+        }
+        drop(settled);
+        Records {
+            settled: self.settled_records.borrow(),
+            tail,
+        }
     }
 
     /// The registered LTE cell at `t_ns`, if any.
@@ -1947,14 +2030,20 @@ impl Fusion {
                 }
                 self.last_gyro_ns = Some(t_ns);
             }
-            Pending::Fix(f) => self.position_inputs.push((
-                t_ns,
-                PositionInput::Fix {
-                    lat: f.lat,
-                    lon: f.lon,
-                    accuracy_m: f.accuracy.unwrap_or(DEFAULT_FIX_ACCURACY_M),
-                },
-            )),
+            Pending::Fix(f) => {
+                let accuracy_m = f.accuracy.unwrap_or(DEFAULT_FIX_ACCURACY_M);
+                if accuracy_m <= GAP_FIX_M {
+                    self.good_fixes.push(t_ns);
+                }
+                self.position_inputs.push((
+                    t_ns,
+                    PositionInput::Fix {
+                        lat: f.lat,
+                        lon: f.lon,
+                        accuracy_m,
+                    },
+                ))
+            }
             Pending::Measurements(_) => {
                 let Some(sol) = solution else { return };
                 if !USE_OWN_SOLUTIONS_FOR_POSITION {
@@ -2032,7 +2121,7 @@ impl Fusion {
         let mut e = self.estimate_unheld(now_ns);
         // Between trains the rider is on foot: standing on a platform, or walking at most at a run.
         // The IMU alone ran to the 55 mph cap standing on the platforms at 6 Av and 14 St (`20261023-193658`).
-        if self.transfer_s(now_ns).is_some() {
+        if self.transfer_s(now_ns, &self.records()).is_some() {
             let walking = self.step_windows.last().is_some_and(|&(_, steps)| steps);
             e.speed_mps = if walking {
                 e.speed_mps.min(BETWEEN_TRAINS_MAX_MPS)
@@ -2423,6 +2512,69 @@ fn combine(t: i64, f: &Estimate, b: &Estimate) -> SmoothedSpeed {
         // In reversed time, speeding up is slowing down.
         accel_mps2: (f.accel_mps2 * wf - b.accel_mps2 * wb) / (wf + wb),
     }
+}
+
+/// How old (s) the stop after a stop record must be for the record to be settled (see [`Fusion::records`]):
+/// longer than anything it's made from takes to be found (a missed stop is found at the departure after it,
+/// within [`RECORD_MAX_DWELL_S`]).
+const RECORDS_SETTLE_S: f64 = 900.0;
+
+/// The stop records settled so far, and the bookmarks into the inputs for the rest (see [`Fusion::records`]).
+#[derive(Default)]
+struct SettledRecords {
+    records: Vec<StopRecord>,
+    /// The index of the last of them the rider left the train at.
+    last_left: Option<usize>,
+    /// The last of them a leg between stations can start at, if one can (see [`crate::track::legs`]).
+    leg_from: Option<StopRecord>,
+    /// The train stops before this index are all of settled records' stops, or fades long before them.
+    stops_from: usize,
+}
+
+/// The stop records (see [`Fusion::records`]): those settled, then the rest.
+struct Records<'a> {
+    settled: std::cell::Ref<'a, SettledRecords>,
+    tail: Vec<StopRecord>,
+}
+
+impl Records<'_> {
+    fn iter(&self) -> impl DoubleEndedIterator<Item = &StopRecord> {
+        self.settled.records.iter().chain(&self.tail)
+    }
+
+    /// The last record the rider left the train at.
+    fn last_left(&self) -> Option<&StopRecord> {
+        self.tail
+            .iter()
+            .rfind(|r| r.rider_left())
+            .or_else(|| self.settled.last_left.map(|i| &self.settled.records[i]))
+    }
+
+    /// The records of stops after `t_ns`.
+    fn since(&self, t_ns: i64) -> impl Iterator<Item = &StopRecord> {
+        let i = self
+            .settled
+            .records
+            .partition_point(|r| r.stopped_ns <= t_ns);
+        self.settled.records[i..]
+            .iter()
+            .chain(self.tail.iter().filter(move |r| r.stopped_ns > t_ns))
+    }
+}
+
+/// The index in `v`, in about time order by `time` (none more than `lag` out), from which on are all those after
+/// `from`: found from the end, so it costs what's after it.
+fn recent_index<T>(v: &[T], time: impl Fn(&T) -> i64, from: i64, lag: i64) -> usize {
+    let mut i = v.len();
+    while i > 0 && time(&v[i - 1]) > from.saturating_sub(lag) {
+        i -= 1;
+    }
+    i
+}
+
+/// Those of `v` from [`recent_index`] on.
+fn recent<T>(v: &[T], time: impl Fn(&T) -> i64, from: i64, lag: i64) -> &[T] {
+    &v[recent_index(v, time, from, lag)..]
 }
 
 /// The stops' records from what fusion found: stops (with the station named then, and whether in the subway),

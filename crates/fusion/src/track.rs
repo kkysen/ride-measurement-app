@@ -171,7 +171,7 @@ fn fastest_s(length: f64) -> f64 {
 }
 
 /// Whether a stop anchors the path: underground at a named station, not a hold between stations.
-fn anchor(r: &StopRecord) -> bool {
+pub(crate) fn anchor(r: &StopRecord) -> bool {
     r.in_subway && r.station.is_some() && !r.between_stations
 }
 
