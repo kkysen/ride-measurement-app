@@ -650,6 +650,7 @@ pub struct Fusion {
     /// The timeline's segments kept, and the walks so far (see [`Fusion::timeline`]).
     timeline_kept: std::cell::RefCell<TimelineKept>,
     walks: std::cell::RefCell<Walks>,
+    subway_periods: std::cell::RefCell<SubwayPeriods>,
     /// The lines ridden as of the old enough stops (see [`Fusion::riding_lines`]).
     riding_lines: std::cell::RefCell<RidingLines>,
     /// The track between each pair of stations a leg was looked up for (see [`crate::track::between`]),
@@ -759,6 +760,7 @@ impl Fusion {
                 until: i64::MIN,
             }),
             walks: Default::default(),
+            subway_periods: Default::default(),
             riding_lines: std::cell::RefCell::new(RidingLines {
                 lines: Vec::new(),
                 prev: i64::MIN,
@@ -1175,10 +1177,11 @@ impl Fusion {
         let t = self.now_ns;
         let lag = (RECORDS_SETTLE_S * 1e9) as i64;
         let records = self.records();
-        let periods = self.subway_periods(t);
         let mut kept = self.timeline_kept.borrow_mut();
         // Keep up to a settled time, or the start of the leg it's in: a leg's line is from all its stops.
         let settled = self.settled_ns.unwrap_or(i64::MIN).saturating_sub(lag);
+        // Only the periods ending after both are used below.
+        let periods = self.subway_periods(t, kept.until.min(settled));
         let until = periods
             .iter()
             .find(|&&(from, to)| from < settled && settled < to)
@@ -1203,34 +1206,42 @@ impl Fusion {
         (from, settled, out)
     }
 
-    /// The subway's periods (see [`Self::timeline`]): from the detector's switches, back within a minute
-    /// the same, the last still open at `t`.
-    fn subway_periods(&self, t: i64) -> Vec<(i64, i64)> {
+    /// The subway's periods (see [`Self::timeline`]) ending after `after`: from the detector's switches,
+    /// back within a minute the same, the last still open at `t`.
+    /// Only the switches since the last call are read, onto the periods kept from them.
+    fn subway_periods(&self, t: i64, after: i64) -> Vec<(i64, i64)> {
         let s_ns = |s: f64| (s * 1e9) as i64;
-        let mut periods: Vec<(i64, i64)> = Vec::new();
-        let mut since = None;
-        for &(at, on) in &self.subway_changes {
-            match (on, since) {
+        let mut kept = self.subway_periods.borrow_mut();
+        let SubwayPeriods {
+            closed: periods,
+            since,
+            upto,
+        } = &mut *kept;
+        for &(at, on) in &self.subway_changes[*upto..] {
+            match (on, *since) {
                 // Back within a minute: the detector flickering (or an elevated stretch), the same ride.
                 (true, None)
                     if periods
                         .last()
                         .is_some_and(|p| at - p.1 <= s_ns(TIMELINE_SUBWAY_GAP_S)) =>
                 {
-                    since = periods.pop().map(|p| p.0);
+                    *since = periods.pop().map(|p| p.0);
                 }
-                (true, None) => since = Some(at),
+                (true, None) => *since = Some(at),
                 (false, Some(s)) => {
                     periods.push((s, at));
-                    since = None;
+                    *since = None;
                 }
                 _ => {}
             }
         }
-        if let Some(s) = since {
-            periods.push((s, t));
+        *upto = self.subway_changes.len();
+        let first = periods.partition_point(|p| p.1 <= after);
+        let mut out = periods[first..].to_vec();
+        if let Some(s) = *since {
+            out.push((s, t));
         }
-        periods
+        out
     }
 
     /// The last walk off a train in the subway period from `from`, at or before `at`.
@@ -2777,6 +2788,15 @@ struct SettledRecords {
 struct TimelineKept {
     joined: Vec<Segment>,
     until: i64,
+}
+
+/// The subway's periods (see [`Fusion::subway_periods`]) from the detector's switches before `upto`:
+/// those closed, and the start of the open one. The last closed one reopens when the detector is back within a minute.
+#[derive(Default)]
+struct SubwayPeriods {
+    closed: Vec<(i64, i64)>,
+    since: Option<i64>,
+    upto: usize,
 }
 
 /// The walks (start, end) from the step windows before `upto` (see [`Fusion::timeline`]).
