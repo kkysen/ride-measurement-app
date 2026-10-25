@@ -132,6 +132,58 @@ pub struct Options {
     pub no_statuses: bool,
     /// For scoring: keep [`Replay::live`] this often (ns), if set.
     pub live_every_ns: Option<i64>,
+    /// For scoring: leave out where the phone sat still (see [`still_cuts`]), as a gap in the recording.
+    pub skip_still: bool,
+}
+
+/// How long the GPS fixes must stay within [`STILL_RADIUS_M`] of a stretch's first for it to be still.
+pub const STILL_MIN_NS: i64 = 600_000_000_000;
+pub const STILL_RADIUS_M: f64 = 100.0;
+/// How much of each end of a still stretch is kept.
+pub const STILL_KEEP_NS: i64 = 60_000_000_000;
+
+/// Where the phone sat still: stretches of [`STILL_MIN_NS`] or more whose GPS fixes all stay within
+/// [`STILL_RADIUS_M`] of the stretch's first, each less its first and last [`STILL_KEEP_NS`], as (start, end) ns.
+/// Nothing happens there, and leaving it out speeds up scoring: an hour and a half on `20261022-002914`.
+pub fn still_cuts(session: &Session) -> anyhow::Result<Vec<(i64, i64)>> {
+    if !session.stream_path("location").exists() {
+        return Ok(Vec::new());
+    }
+    let fixes: Vec<_> =
+        ride_session::track::gps_segments(&session.read_records("location")?.chunks)
+            .into_iter()
+            .flatten()
+            .collect();
+    let mut cuts = Vec::new();
+    let mut i = 0;
+    while i < fixes.len() {
+        let a = &fixes[i];
+        let mut j = i;
+        while j + 1 < fixes.len() {
+            let b = &fixes[j + 1];
+            let m_per_deg = 111_320.0;
+            let dx = (b.longitude_degrees - a.longitude_degrees)
+                * m_per_deg
+                * a.latitude_degrees.to_radians().cos();
+            let dy = (b.latitude_degrees - a.latitude_degrees) * m_per_deg;
+            if dx.hypot(dy) > STILL_RADIUS_M {
+                break;
+            }
+            j += 1;
+        }
+        let (start, end) = (a.elapsed_realtime_ns, fixes[j].elapsed_realtime_ns);
+        if end - start >= STILL_MIN_NS {
+            cuts.push((start + STILL_KEEP_NS, end - STILL_KEEP_NS));
+        }
+        i = j + 1;
+    }
+    Ok(cuts)
+}
+
+/// Whether `t_ns` falls in one of `cuts` (sorted, disjoint).
+fn in_cuts(cuts: &[(i64, i64)], t_ns: i64) -> bool {
+    let i = cuts.partition_point(|c| c.1 < t_ns);
+    cuts.get(i).is_some_and(|c| c.0 <= t_ns)
 }
 
 /// GNSS cut out for the last `outage_s` of every `period_s` from `start_ns`, to score dead reckoning on rides
@@ -273,6 +325,12 @@ pub fn replay_with_progress(
         .map(|a| a.sample_rate_hz as u32);
     // Stable, like the merge: records at equal times stay in the order read.
     records.sort_by_key(|(t, _)| *t);
+    let cuts = if options.skip_still {
+        still_cuts(session)?
+    } else {
+        Vec::new()
+    };
+    records.retain(|(t, _)| !in_cuts(&cuts, *t));
     if let Some(cut) = options.gnss_outages {
         records.retain(|(t, e)| {
             !(matches!(e, Event::Fix(_) | Event::Measurements(_)) && cut.covers(*t))
@@ -283,12 +341,16 @@ pub fn replay_with_progress(
     for &(sensor_type, name) in &sensors {
         sources.push(in_order(
             || {
-                Ok(Box::new(sensor_events(
-                    sensor_type,
-                    session.stream_chunks(name)?,
-                )))
+                Ok(Box::new(
+                    sensor_events(sensor_type, session.stream_chunks(name)?)
+                        .filter(|e| e.as_ref().map_or(true, |(t, _)| !in_cuts(&cuts, *t))),
+                ))
             },
-            || sensor_events(sensor_type, chunks_of(session.read_stream(name)?)).collect(),
+            || {
+                sensor_events(sensor_type, chunks_of(session.read_stream(name)?))
+                    .filter(|e| e.as_ref().map_or(true, |(t, _)| !in_cuts(&cuts, *t)))
+                    .collect()
+            },
         )?);
     }
     let records_len = records.len();
@@ -303,9 +365,10 @@ pub fn replay_with_progress(
                 Ok(Box::new(audio_events(
                     rate,
                     session.stream_chunks("audio")?,
+                    &cuts,
                 )))
             },
-            || audio_events(rate, chunks_of(read_stream_file(&path)?)).collect(),
+            || audio_events(rate, chunks_of(read_stream_file(&path)?), &cuts).collect(),
         )?);
     }
     let total = sources.iter().map(|s| s.0).sum::<usize>().max(1);
@@ -489,6 +552,7 @@ fn sensor_events<'a>(
 fn audio_events<'a>(
     rate: u32,
     chunks: impl Iterator<Item = anyhow::Result<AudioChunk>> + 'a,
+    cuts: &'a [(i64, i64)],
 ) -> impl Iterator<Item = anyhow::Result<(i64, Event)>> + 'a {
     let mut clock: Option<(i64, i64)> = None;
     chunks.flat_map(move |chunk| {
@@ -497,6 +561,16 @@ fn audio_events<'a>(
             Err(e) => return vec![Err(e)],
         };
         let mut events = Vec::new();
+        // A chunk wholly in a cut isn't decoded: its timestamps say so (a few seconds each).
+        let times = || chunk.timestamps.iter().map(|t| t.boottime_ns);
+        if times().next().is_some() && times().all(|t| in_cuts(cuts, t)) {
+            clock = chunk
+                .timestamps
+                .last()
+                .map(|t| (t.frame_position, t.boottime_ns))
+                .or(clock);
+            return events;
+        }
         if !ride_session::audio_flac::restore(&mut chunk) {
             return events;
         }
@@ -520,6 +594,9 @@ fn audio_events<'a>(
             let first = chunk.first_frame + (i * AUDIO_READ_FRAMES) as i64;
             let last = first + read.len() as i64;
             let arrived = t0 + ((last - f0) as f64 / f64::from(rate) * 1e9) as i64;
+            if in_cuts(cuts, arrived) {
+                continue;
+            }
             events.push(Ok((
                 arrived,
                 Event::Audio(
