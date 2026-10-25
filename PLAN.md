@@ -849,6 +849,22 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
     While recording (`8a3fe94`, `4de4cb1`): a cached replay shows as usual (`cached_replay`, no replay);
     an uncached ride up to 1:00:00 gets a "Replay now" button (about 300 MB by the laptop's peaks), a longer one still says to stop first.
     Unchecked on the phone.
+    Faster scoring (2026-10-25, `f3032eb`, `e25983d`, `9e68286`, `ad48d6c`, `710b438`, `31296ca`):
+    - Why the laptop was slow: `Replay::statuses` (on unless `no_statuses`, which the app sets) re-smoothed the
+      whole ride at every status, through `vertical_moves`: 87% of the time. Now it smooths only while a recent
+      elevator or escalator move needs it (`9e68286`): `20261021-215922` 6.1 s instead of 37 s, all sessions 2:22
+      instead of 11:39 with statuses; without them, the 3 h ride took 19.5 s and the 51 min ride 4.7 s.
+      Live, the status no longer slows as a recording grows.
+    - Memory (`ad48d6c`): `Input` is 16 bytes (`f32` IMU samples, exact; rare inputs boxed), the buffer is
+      reserved up front, and smoothing makes no sorted copy: the 3 h ride 0.53 GB at its peak instead of 0.81 GB.
+      `position_inputs`, `forward`, and `dead_reckoned` are each under 4 MB even on it: not worth shrinking.
+    - Still parts (`f3032eb`): `Options::skip_still` leaves out where GPS stays within 100 m for 10 min, but each
+      end's minute; it finds exactly the four known stretches. Accidental sessions are in `scripts/sweep-skip.txt`.
+    - `just score` (`710b438`, `31296ca`): every score of eight examples, five replays a session, 4 sessions at once
+      capped at 1200M each: 2:12 for all 18 sessions (7:12 one at a time), each session's in `target/score/`.
+    - Open: the backward pass carries state across a whole ride. Cutting any minute (even one near the end of
+      `20261024-220437`) changes smoothed speeds 45 min earlier by up to 29 mph, while the forward pass is unchanged
+      before the cut. Fixes should anchor the backward pass; something (bias, heading?) doesn't reset at them.
 
 Laptop memory (2026-10-24): parallel replays over all sessions (about 1.5 GB each on the longest) crashed WSL.
 `just sweep <example>` runs one over every session in turn, each capped at 3 GB,
