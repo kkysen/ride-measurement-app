@@ -35,6 +35,7 @@ import kotlinx.coroutines.withContext
 import uniffi.ride_ffi.ReplayProgress
 import uniffi.ride_ffi.RideReplay
 import uniffi.ride_ffi.SessionSpan
+import uniffi.ride_ffi.cachedReplay
 import uniffi.ride_ffi.replaySession
 import uniffi.ride_ffi.sessionSpan
 
@@ -126,8 +127,16 @@ fun PastRidesScreen(onBack: () -> Unit, onShowTaps: (String) -> Unit, onShowRide
 /**
  * A past ride's map and graph, from an offline replay of the whole ride (`replay_session` in `crates/ffi`),
  * smoothed over all of it, not the live estimates from recording. Cached until the Rust core changes.
- * Not while recording: a replay takes hundreds of MB and a minute or more, which could cost the recording.
+ * While recording, a cached replay is shown as usual, but an uncached ride is only replayed on request,
+ * and only if it's at most [MAX_REPLAY_WHILE_RECORDING_S] long: a replay's memory grows with the ride.
  */
+/**
+ * The longest ride (s) to offer to replay while recording: 1:00:00. A replay's peak memory on the laptop grows
+ * with the ride, about 230 MB on a typical 45 min one and 0.85 GB on the 3:14:27 one (since `18d424b`),
+ * so an hour stays near 300 MB.
+ */
+private const val MAX_REPLAY_WHILE_RECORDING_S = 3600L
+
 @Composable
 fun PastRideScreen(id: String, onBack: () -> Unit) {
     val context = LocalContext.current
@@ -138,8 +147,27 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
     // How far the replay has got, once the session is read, and when that was (elapsed realtime ms).
     var progress by remember { mutableStateOf<Double?>(null) }
     var progressStartMs by remember { mutableStateOf(0L) }
-    LaunchedEffect(id, state.recording) {
-        if (state.recording || replay != null) return@LaunchedEffect
+    // While recording: whether there's no cached replay, the ride's length (s) once read, and whether the rider asked to replay it.
+    var uncached by remember { mutableStateOf(false) }
+    var durationS by remember { mutableStateOf<Long?>(null) }
+    var replayAnyway by remember { mutableStateOf(false) }
+    val replaysDir = File(context.filesDir, "replays").path
+    LaunchedEffect(id, state.recording, replayAnyway) {
+        if (replay != null) return@LaunchedEffect
+        if (state.recording && !replayAnyway) {
+            val sessionDir = File(RecorderService.sessionsDir(), id).path
+            val cached = withContext(Dispatchers.IO) { runCatching { cachedReplay(sessionDir, replaysDir) }.getOrNull() }
+            if (cached != null) {
+                replay = cached
+                return@LaunchedEffect
+            }
+            uncached = true
+            durationS = withContext(Dispatchers.IO) {
+                runCatching { sessionSpan(sessionDir) }.getOrNull()
+                    ?.let { s -> s.endUnixMs?.let { (it - s.startUnixMs) / 1000 } }
+            }
+            return@LaunchedEffect
+        }
         val listener = object : ReplayProgress {
             override fun onProgress(fraction: Double) {
                 if (fraction == 0.0) progressStartMs = SystemClock.elapsedRealtime()
@@ -150,7 +178,7 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
             runCatching {
                 replaySession(
                     File(RecorderService.sessionsDir(), id).path,
-                    File(context.filesDir, "replays").path,
+                    replaysDir,
                     listener,
                 )
             }
@@ -167,7 +195,14 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
             Text(
                 when {
                     error != null -> "The replay failed: $error"
-                    state.recording -> "Stop recording to replay this ride: a replay could cost the recording memory."
+                    state.recording && !replayAnyway -> when {
+                        !uncached -> "Looking for this ride's saved replay…"
+                        durationS.let { it != null && it <= MAX_REPLAY_WHILE_RECORDING_S } ->
+                            "This ride hasn't been replayed yet. It's short enough (${clockDuration(durationS!!.toDouble())}) " +
+                                "to replay while recording, but it takes memory the recording also needs."
+                        else -> "Stop recording to replay this ride: it's over " +
+                            "${clockDuration(MAX_REPLAY_WHILE_RECORDING_S.toDouble())} long, and its replay could cost the recording memory."
+                    }
                     p == null -> "Reading the ride…"
                     p >= 1.0 -> "Smoothing the whole ride…"
                     // From the pace so far, once there's enough of it to go by.
@@ -178,7 +213,10 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
                     else -> "Replaying the ride: %.0f%%".format(p * 100)
                 },
             )
-            if (error == null && !state.recording) {
+            if (state.recording && !replayAnyway && uncached && durationS.let { it != null && it <= MAX_REPLAY_WHILE_RECORDING_S }) {
+                HapticOutlinedButton(onClick = { replayAnyway = true }) { Text("Replay now") }
+            }
+            if (error == null && (!state.recording || replayAnyway)) {
                 if (p == null || p >= 1.0) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                 } else {
