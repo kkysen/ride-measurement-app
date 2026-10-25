@@ -732,6 +732,21 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    lurch at 8:03:06 didn't restart it because the L's settling surge 1 s later read as a departure. Now the
    dwell restarts at 8:03:06 (10 s at 8:03:18 in the replay's statuses), but the early one still shows from
    8:02:28: its cell (29256324) is another sector of Bedford Av's site (29256316), so item 7's cue misses it.
+   The travel axis's sign braking into Bedford Av (checked, no code change; scored with the untracked scratch
+   `crates/cli/examples/signs.rs`, `just sweep signs`, results in `target/cmp/signs-*.txt`):
+   the live speed should fall over the 10 s before each "train stopped" tap. Over all tapped rides it falls before 43,
+   rises before 25, and stays within 1 mph before 40. Of the 25, 7 rise from under 5 mph, which any axis would.
+   At Bedford Av on `193658` (8:01:11 pm, 33 to 55 mph), two causes stack:
+   a door cycle heard mid-river at 8:00:10 pm zeroed the speed at 47 mph (a false `Doors`, worth its own look);
+   and while cruising, the spread axis wanders through sideways and round to backward within seconds,
+   because the covariance is centered, so a departure's steady push goes into the mean and only sway is left.
+   From the zero, that sideways axis drove the speed negative, and braking along the axis (back to forward by then)
+   took it to the limit. Tried, all worse or no better, not committed (patches in `target/cmp/`):
+   holding the sign by an anchor carried from when it was learned (`sign-anchor.patch`), braking falls 37, rises 30;
+   that plus signing again at each departure, on `193658` 4 and 5 (was 5 and 3);
+   freezing the spread axis once its sign is known, on `193658`, `011209` and `003357` 19 and 14 (was 24 and 13);
+   updating the axis only when one direction holds 3 times the rest of the spread (`axis-gate.patch`), 19 and 13.
+   Starts can't score the sign: from rest, the speed rises either way.
 7. Done (`d56a86b`): stops found between stations. A stop with no closing heard and the same registered cell
    as the stop before (the rider aboard) is `StopRecord::between_stations`: zero speed kept, no dwell, the live
    dwell not started there, labeled "between stations" on the graph. Against the "train stopped" taps
