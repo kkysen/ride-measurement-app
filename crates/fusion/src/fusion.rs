@@ -851,18 +851,23 @@ impl Fusion {
         let stops: Vec<trips::RiderStop> = boarding
             .into_iter()
             .chain(
-                self.train_stops
-                    .iter()
-                    .filter(|(stop, _, in_subway)| {
-                        *in_subway && ago(stop.t_ns) <= ROUTE_STOPS_S && stop.t_ns > boarded_after
+                recent(
+                    &self.train_stops,
+                    |x| x.0.t_ns,
+                    t - (ROUTE_STOPS_S * 1e9) as i64 - 1,
+                    (RECORDS_SETTLE_S * 1e9) as i64,
+                )
+                .iter()
+                .filter(|(stop, _, in_subway)| {
+                    *in_subway && ago(stop.t_ns) <= ROUTE_STOPS_S && stop.t_ns > boarded_after
+                })
+                .filter_map(|(stop, station, _)| {
+                    Some(trips::RiderStop {
+                        stopped_ns: stop.t_ns,
+                        departed_ns: self.departed_after(stop.t_ns),
+                        station: (*station)?,
                     })
-                    .filter_map(|(stop, station, _)| {
-                        Some(trips::RiderStop {
-                            stopped_ns: stop.t_ns,
-                            departed_ns: self.departed_after(stop.t_ns),
-                            station: (*station)?,
-                        })
-                    }),
+                }),
             )
             .collect();
         let recent = &stops[stops.len().saturating_sub(ROUTE_STOPS)..];
@@ -1097,16 +1102,25 @@ impl Fusion {
         };
         let s_ns = |s: f64| (s * 1e9) as i64;
         // A hold between stations: the train stands (the speed shows it), but the dwell starts at the platform.
-        let prev = self
-            .train_stops
-            .iter()
-            .filter(|(s, _, in_subway)| *in_subway && s.t_ns < stop.t_ns && !self.departure_fade(s))
-            .map(|(s, ..)| s.t_ns)
-            .max();
-        let closed = self
-            .door_cycles
-            .iter()
-            .any(|c| c.close_ns > stop.t_ns + s_ns(DOORS_AFTER_STOP_S.0));
+        // The stop before, from the recent stops (found in about time order) if there's one, else from all.
+        let prev_in = |stops: &[(train_stops::Stop, Option<&'static Station>, bool)]| {
+            stops
+                .iter()
+                .filter(|(s, _, in_subway)| {
+                    *in_subway && s.t_ns < stop.t_ns && !self.departure_fade(s)
+                })
+                .map(|(s, ..)| s.t_ns)
+                .max()
+        };
+        let lag = s_ns(RECORDS_SETTLE_S);
+        let prev = prev_in(recent(&self.train_stops, |x| x.0.t_ns, stop.t_ns, lag))
+            .or_else(|| prev_in(&self.train_stops));
+        // Door cycles are found at their closings, in time order.
+        let cycle = self.door_cycles.get(
+            self.door_cycles
+                .partition_point(|c| c.close_ns <= stop.t_ns + s_ns(DOORS_AFTER_STOP_S.0)),
+        );
+        let closed = cycle.is_some();
         if !closed && prev.is_some_and(|p| self.between_stations(p, stop.t_ns)) {
             return None;
         }
@@ -1115,10 +1129,6 @@ impl Fusion {
         if self.departed_after(stop.t_ns).is_some() || stopped_s > RECORD_MAX_DWELL_S {
             return None;
         }
-        let cycle = self
-            .door_cycles
-            .iter()
-            .find(|c| c.close_ns > stop.t_ns + s_ns(DOORS_AFTER_STOP_S.0));
         // A cycle is heard whole at its closing, so live the opening is known only then.
         let opened = cycle
             .map(|c| c.open_ns)
@@ -1947,7 +1957,10 @@ impl Fusion {
     /// hold at once: standing at Bedford Av, the speed ran to the 55 mph cap.
     fn departed_after(&self, stopped_ns: i64) -> Option<i64> {
         let after = stopped_ns + (DEPART_AFTER_STOP_S * 1e9) as i64;
-        self.departures.iter().copied().find(|&d| d > after)
+        // Departures are found in time order.
+        self.departures
+            .get(self.departures.partition_point(|&d| d <= after))
+            .copied()
     }
 
     /// The station Android's own location or the registered cell names as of `t_ns`, if any.
@@ -2221,8 +2234,11 @@ impl Fusion {
         let departed = self.departed_after(stop.t_ns).is_some();
         let since_s = (now_ns - stop.t_ns) as f64 * 1e-9;
         // Once the decision is due, it must have kept this lurch (on `135509` and `215922`, 3 of 34 weren't).
+        let lag = (RECORDS_SETTLE_S * 1e9) as i64;
         let dropped = since_s > LIKELY_DECIDED_BY_S
-            && !self.train_stops.iter().any(|(s, ..)| s.t_ns == stop.t_ns);
+            && !recent(&self.train_stops, |x| x.0.t_ns, stop.t_ns, lag)
+                .iter()
+                .any(|(s, ..)| s.t_ns == stop.t_ns);
         let old = since_s > RECORD_MAX_DWELL_S;
         // Walking since the stop: the rider is moving (off the train, or along it), so the walking pace shows.
         let walking = self
@@ -2912,11 +2928,18 @@ fn stepped_in(readings: &[(i64, u16, i32)], from: i64, until: i64) -> Option<i64
 /// Whether a found stop is the departure's pull fading (see [`FADE_AFTER_CLOSE_S`]).
 fn departure_fade(stop: &train_stops::Stop, door_cycles: &[DoorCycle]) -> bool {
     let braking_s = (stop.t_ns - stop.braking_since_ns) as f64 * 1e-9;
+    // Door cycles are found at their closings, in time order: those closing just before the braking.
+    let s_ns = |s: f64| (s * 1e9) as i64;
+    let from = stop.braking_since_ns - s_ns(FADE_AFTER_CLOSE_S.1) - 1;
+    let until = stop.braking_since_ns - s_ns(FADE_AFTER_CLOSE_S.0) + 1;
     braking_s >= FADE_MIN_S
-        && door_cycles.iter().any(|c| {
-            let after = (stop.braking_since_ns - c.close_ns) as f64 * 1e-9;
-            after >= FADE_AFTER_CLOSE_S.0 && after <= FADE_AFTER_CLOSE_S.1
-        })
+        && door_cycles[door_cycles.partition_point(|c| c.close_ns < from)..]
+            .iter()
+            .take_while(|c| c.close_ns <= until)
+            .any(|c| {
+                let after = (stop.braking_since_ns - c.close_ns) as f64 * 1e-9;
+                after >= FADE_AFTER_CLOSE_S.0 && after <= FADE_AFTER_CLOSE_S.1
+            })
 }
 
 #[cfg(test)]
