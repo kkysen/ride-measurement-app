@@ -192,6 +192,16 @@ pub fn legs(
     good_fix_ns: &[i64],
     skip: Option<usize>,
 ) -> (Vec<Leg>, Joined) {
+    legs_by(records, good_fix_ns, skip, between)
+}
+
+/// [`legs`], with the track between two stations from `between` (see [`between`]): one that remembers them.
+pub(crate) fn legs_by(
+    records: &[StopRecord],
+    good_fix_ns: &[i64],
+    skip: Option<usize>,
+    mut between: impl FnMut(&'static Station, &'static Station) -> Option<Track>,
+) -> (Vec<Leg>, Joined) {
     let mut out = Vec::new();
     let mut stats = Joined::default();
     let mut last: Option<&StopRecord> = None;

@@ -642,6 +642,9 @@ pub struct Fusion {
     departures: Vec<i64>,
     /// The lines ridden as of the old enough stops (see [`Fusion::riding_lines`]).
     riding_lines: std::cell::RefCell<RidingLines>,
+    /// The track between each pair of stations a leg was looked up for (see [`crate::track::between`]),
+    /// by their addresses: a status looks up the same recent legs again.
+    tracks: std::cell::RefCell<HashMap<(usize, usize), Option<crate::track::Track>>>,
     /// The stop records settled so far (see [`Fusion::records`]), so a status recomputes only the recent ones.
     settled_records: std::cell::RefCell<SettledRecords>,
     /// The times of good fixes (see [`Fusion::good_fix_ns`]), in time order.
@@ -740,6 +743,7 @@ impl Fusion {
             train_stops: Vec::new(),
             departures: Vec::new(),
             settled_records: Default::default(),
+            tracks: Default::default(),
             riding_lines: std::cell::RefCell::new(RidingLines {
                 lines: Vec::new(),
                 prev: i64::MIN,
@@ -1857,7 +1861,17 @@ impl Fusion {
             .min(cut);
         let fixes = &self.good_fixes[self.good_fixes.partition_point(|&t| t <= fixes_from)..];
         let seeded: Vec<StopRecord> = seed.into_iter().chain(tail.iter().cloned()).collect();
-        let (legs, _) = crate::track::legs(&seeded, fixes, None);
+        let mut tracks = self.tracks.borrow_mut();
+        let (legs, _) = crate::track::legs_by(&seeded, fixes, None, |a, b| {
+            tracks
+                .entry((
+                    std::ptr::from_ref(a) as usize,
+                    std::ptr::from_ref(b) as usize,
+                ))
+                .or_insert_with(|| crate::track::between(a, b))
+                .clone()
+        });
+        drop(tracks);
         for leg in legs {
             if let Some(r) = tail.iter_mut().find(|r| r.stopped_ns == leg.to_ns) {
                 let length = leg.track.length_m();
