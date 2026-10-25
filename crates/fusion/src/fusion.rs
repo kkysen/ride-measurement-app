@@ -644,6 +644,9 @@ pub struct Fusion {
     stop_detector: StopDetector,
     train_stops: Vec<(train_stops::Stop, Option<&'static Station>, bool)>,
     departures: Vec<i64>,
+    /// The timeline's segments kept, and the walks so far (see [`Fusion::timeline`]).
+    timeline_kept: std::cell::RefCell<TimelineKept>,
+    walks: std::cell::RefCell<Walks>,
     /// The lines ridden as of the old enough stops (see [`Fusion::riding_lines`]).
     riding_lines: std::cell::RefCell<RidingLines>,
     /// The track between each pair of stations a leg was looked up for (see [`crate::track::between`]),
@@ -748,6 +751,11 @@ impl Fusion {
             departures: Vec::new(),
             settled_records: Default::default(),
             tracks: Default::default(),
+            timeline_kept: std::cell::RefCell::new(TimelineKept {
+                joined: Vec::new(),
+                until: i64::MIN,
+            }),
+            walks: Default::default(),
             riding_lines: std::cell::RefCell::new(RidingLines {
                 lines: Vec::new(),
                 prev: i64::MIN,
@@ -1005,10 +1013,13 @@ impl Fusion {
         let estimate = self.estimator.estimate(t);
         let underground = estimate.since_gnss_s.is_none_or(|s| s > 10.0);
         // A move is found half its span late (see `vertical::moves`), so one ending just now is still going on.
+        let records = self.records();
         let vertical = self
-            .vertical_moves_where(t - ((VERTICAL_RECENT_S + 1.0) * 1e9) as i64, |m| {
-                recent(m.end_ns, VERTICAL_RECENT_S)
-            })
+            .vertical_moves_where(
+                &records,
+                t - ((VERTICAL_RECENT_S + 1.0) * 1e9) as i64,
+                |m| recent(m.end_ns, VERTICAL_RECENT_S),
+            )
             .pop();
         let mode = match (vertical, gait) {
             (Some(m), _) if m.kind == crate::vertical::Kind::Stairs => Mode::Stairs {
@@ -1029,7 +1040,6 @@ impl Fusion {
         let cell_station = self.radio_station(t);
         // What's known of the rider's train is only from since they last walked off one,
         // and nothing while between trains: chimes and stops heard then are other trains'.
-        let records = self.records();
         let transfer_s = self.transfer_s(t, &records);
         let boarded_after = records
             .last_left()
@@ -1150,21 +1160,40 @@ impl Fusion {
     /// which each walk off a train ends. Each leg's line is from all its stops: the feeds' trip matching the most
     /// of them (see [`trips::Trips::route`]), else the one line serving every one of them, so a stop later in a
     /// leg names the line for the whole leg. Nothing is shown out of the subway when not walking.
+    /// The segments up to a settled time are kept (see [`TimelineKept`]), so only those since are made again.
     pub fn timeline(&self) -> Vec<Segment> {
         let t = self.now_ns;
-        let s_ns = |s: f64| (s * 1e9) as i64;
-        let mut walks: Vec<(i64, i64)> = Vec::new();
-        for &(at, steps) in &self.step_windows {
-            if !steps {
-                continue;
-            }
-            let start = at - s_ns(WALK_WINDOW_S);
-            match walks.last_mut() {
-                Some(w) if start <= w.1 + s_ns(WALK_WINDOW_S) => w.1 = at,
-                _ => walks.push((start, at)),
-            }
+        let lag = (RECORDS_SETTLE_S * 1e9) as i64;
+        let records = self.records();
+        let periods = self.subway_periods(t);
+        let mut kept = self.timeline_kept.borrow_mut();
+        // Keep up to a settled time, or the start of the leg it's in: a leg's line is from all its stops.
+        let settled = self.settled_ns.unwrap_or(i64::MIN).saturating_sub(lag);
+        let until = periods
+            .iter()
+            .find(|&&(from, to)| from < settled && settled < to)
+            .map_or(settled, |&(from, _)| {
+                self.cut_before(&records, from, settled).unwrap_or(from)
+            });
+        if until > kept.until {
+            let pieces = self.timeline_between(&records, &periods, kept.until, until);
+            join_segments(&mut kept.joined, pieces);
+            kept.until = until;
         }
-        walks.retain(|&(a, b)| b - a >= s_ns(TIMELINE_WALK_S));
+        let mut out = kept.joined.clone();
+        let from = kept.until;
+        drop(kept);
+        join_segments(
+            &mut out,
+            self.timeline_between(&records, &periods, from, i64::MAX),
+        );
+        out
+    }
+
+    /// The subway's periods (see [`Self::timeline`]): from the detector's switches, back within a minute
+    /// the same, the last still open at `t`.
+    fn subway_periods(&self, t: i64) -> Vec<(i64, i64)> {
+        let s_ns = |s: f64| (s * 1e9) as i64;
         let mut periods: Vec<(i64, i64)> = Vec::new();
         let mut since = None;
         for &(at, on) in &self.subway_changes {
@@ -1188,18 +1217,75 @@ impl Fusion {
         if let Some(s) = since {
             periods.push((s, t));
         }
-        let records = self.stop_records();
-        let mut segments: Vec<Segment> = Vec::new();
-        for (from, to) in periods {
-            let mut cuts: Vec<i64> = records
+        periods
+    }
+
+    /// The last walk off a train in the subway period from `from`, at or before `at`.
+    fn cut_before(&self, records: &Records, from: i64, at: i64) -> Option<i64> {
+        // A walk off is within `RECORD_MAX_DWELL_S` after its stop.
+        let dwell = (RECORD_MAX_DWELL_S * 1e9) as i64;
+        records
+            .before(at)
+            .take_while(|r| r.stopped_ns > from - dwell)
+            .filter(|r| r.rider_left())
+            .filter_map(|r| r.alighted_ns)
+            .find(|&a| a > from && a <= at)
+    }
+
+    /// The timeline's segments (see [`Self::timeline`]) cut to after `lo`, up to `hi`, in time order, before
+    /// those next to each other are joined. Its segments don't overlap, so cut at any time and joined again
+    /// they're the same.
+    fn timeline_between(
+        &self,
+        records: &Records,
+        periods: &[(i64, i64)],
+        lo: i64,
+        hi: i64,
+    ) -> Vec<Segment> {
+        let s_ns = |s: f64| (s * 1e9) as i64;
+        let overlaps = |a: i64, b: i64| b > lo && a < hi;
+        let walks: Vec<(i64, i64)> = {
+            let mut kept = self.walks.borrow_mut();
+            for &(at, steps) in &self.step_windows[kept.upto..] {
+                if !steps {
+                    continue;
+                }
+                let start = at - s_ns(WALK_WINDOW_S);
+                match kept.walks.last_mut() {
+                    Some(w) if start <= w.1 + s_ns(WALK_WINDOW_S) => w.1 = at,
+                    _ => kept.walks.push((start, at)),
+                }
+            }
+            kept.upto = self.step_windows.len();
+            let first = kept.walks.partition_point(|w| w.1 <= lo);
+            kept.walks[first..]
                 .iter()
+                .copied()
+                .take_while(|&(a, _)| a < hi)
+                .filter(|&(a, b)| b - a >= s_ns(TIMELINE_WALK_S))
+                .collect()
+        };
+        let mut segments: Vec<Segment> = Vec::new();
+        for &(from, to) in periods.iter().filter(|&&(a, b)| overlaps(a, b)) {
+            // The legs, which each walk off a train ends: from the last before `lo`.
+            let first = self.cut_before(records, from, lo).unwrap_or(from).max(from);
+            let dwell = s_ns(RECORD_MAX_DWELL_S);
+            let mut cuts: Vec<i64> = records
+                .since(first - dwell)
                 .filter(|r| r.rider_left())
                 .filter_map(|r| r.alighted_ns)
-                .filter(|&a| a > from && a < to)
+                .filter(|&a| a > first && a < to)
                 .collect();
             cuts.push(to);
-            let mut start = from;
+            let mut start = first;
             for end in cuts {
+                if start >= hi {
+                    break;
+                }
+                if end <= lo {
+                    start = end;
+                    continue;
+                }
                 let line = self.leg_line(start, end);
                 // The leg, less the walks in it.
                 let mut at = start;
@@ -1229,7 +1315,7 @@ impl Fusion {
             doing: Doing::Walking,
         }));
         // Going up or down replaces what was there then (walking, mostly).
-        for m in self.vertical_moves() {
+        for m in self.vertical_moves_where(records, lo, |m| m.start_ns < hi) {
             let mut cut = Vec::with_capacity(segments.len() + 2);
             for s in segments {
                 if s.end_ns <= m.start_ns || s.start_ns >= m.end_ns {
@@ -1260,27 +1346,23 @@ impl Fusion {
             });
             segments = cut;
         }
-        segments.sort_by_key(|s| s.start_ns);
-        // Pieces left by a walk too short to show, or a flicker, join up.
-        let mut joined: Vec<Segment> = Vec::new();
-        for s in segments {
-            match joined.last_mut() {
-                Some(last)
-                    if last.doing == s.doing
-                        && s.start_ns - last.end_ns <= s_ns(TIMELINE_SUBWAY_GAP_S) =>
-                {
-                    last.end_ns = last.end_ns.max(s.end_ns);
-                }
-                _ => joined.push(s),
-            }
-        }
-        joined
+        let mut out: Vec<Segment> = segments
+            .into_iter()
+            .filter(|s| overlaps(s.start_ns, s.end_ns))
+            .map(|s| Segment {
+                start_ns: s.start_ns.max(lo),
+                end_ns: s.end_ns.min(hi),
+                ..s
+            })
+            .collect();
+        out.sort_by_key(|s| s.start_ns);
+        out
     }
 
     /// The line of a subway leg from its stops (see [`Self::timeline`]).
     fn leg_line(&self, from: i64, to: i64) -> Option<String> {
-        let stops: Vec<trips::RiderStop> = self
-            .train_stops
+        let lag = (RECORDS_SETTLE_S * 1e9) as i64;
+        let stops: Vec<trips::RiderStop> = recent(&self.train_stops, |x| x.0.t_ns, from - 1, lag)
             .iter()
             .filter(|(stop, _, in_subway)| *in_subway && stop.t_ns >= from && stop.t_ns <= to)
             .filter_map(|(stop, station, _)| {
@@ -1436,7 +1518,7 @@ impl Fusion {
     /// Riding up or down with a train departing around it, or at a vehicle's speed, was the train (boarding is
     /// walking, then its tunnel pressure waves pass for a ride): on `214427` and `182135`, aboard the 2.
     pub fn vertical_moves(&self) -> Vec<crate::vertical::Move> {
-        self.vertical_moves_where(i64::MIN, |_| true)
+        self.vertical_moves_where(&self.records(), i64::MIN, |_| true)
     }
 
     /// [`Self::vertical_moves`] ending after `since_ns` of those `keep` keeps: the status keeps only recent ones,
@@ -1445,12 +1527,11 @@ impl Fusion {
     /// a slice of it found by time, so the check costs the same however long the ride.
     fn vertical_moves_where(
         &self,
+        records: &Records,
         since_ns: i64,
         keep: impl Fn(&crate::vertical::Move) -> bool,
     ) -> Vec<crate::vertical::Move> {
         let s_ns = |s: f64| (s * 1e9) as i64;
-        // Only if a ride needs them.
-        let records = std::cell::OnceCell::new();
         crate::vertical::moves_since(
             self.altimeter.heights(),
             &self.step_windows,
@@ -1470,7 +1551,7 @@ impl Fusion {
             if departed {
                 return false;
             }
-            if self.aboard_at(m.start_ns, records.get_or_init(|| self.records())) {
+            if self.aboard_at(m.start_ns, records) {
                 return false;
             }
             let from = self.live_speeds.partition_point(|&(t, _)| t < m.start_ns);
@@ -2630,6 +2711,34 @@ struct SettledRecords {
     stops_from: usize,
 }
 
+/// The timeline (see [`Fusion::timeline`]) up to `until`, its segments joined: settled, but for the last,
+/// which those after may join.
+struct TimelineKept {
+    joined: Vec<Segment>,
+    until: i64,
+}
+
+/// The walks (start, end) from the step windows before `upto` (see [`Fusion::timeline`]).
+#[derive(Default)]
+struct Walks {
+    walks: Vec<(i64, i64)>,
+    upto: usize,
+}
+
+/// Joins `pieces`, in time order, onto `joined` (see [`Fusion::timeline`]): pieces left by a walk too short to
+/// show, or a flicker, join up.
+fn join_segments(joined: &mut Vec<Segment>, pieces: Vec<Segment>) {
+    let gap = (TIMELINE_SUBWAY_GAP_S * 1e9) as i64;
+    for s in pieces {
+        match joined.last_mut() {
+            Some(last) if last.doing == s.doing && s.start_ns - last.end_ns <= gap => {
+                last.end_ns = last.end_ns.max(s.end_ns);
+            }
+            _ => joined.push(s),
+        }
+    }
+}
+
 /// The lines ridden (see [`Fusion::riding_lines`]) as of the train stops before `upto`, the last of them
 /// with a station at `prev`, and the latest of their times.
 struct RidingLines {
@@ -2656,6 +2765,19 @@ impl Records<'_> {
             .iter()
             .rfind(|r| r.rider_left())
             .or_else(|| self.settled.last_left.map(|i| &self.settled.records[i]))
+    }
+
+    /// The records of stops at or before `t_ns`, newest first.
+    fn before(&self, t_ns: i64) -> impl Iterator<Item = &StopRecord> {
+        let i = self
+            .settled
+            .records
+            .partition_point(|r| r.stopped_ns <= t_ns);
+        self.tail
+            .iter()
+            .rev()
+            .filter(move |r| r.stopped_ns <= t_ns)
+            .chain(self.settled.records[..i].iter().rev())
     }
 
     /// The records of stops after `t_ns`.
