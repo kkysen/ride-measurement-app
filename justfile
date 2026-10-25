@@ -98,10 +98,13 @@ gnss session *flags:
 # Run an analysis example on every session in `data/sessions/`, one at a time, each capped at 3 GB:
 # the big sessions take about 1.5 GB each, and running several at once crashed WSL.
 # A session that goes over the cap is killed and reported, and the sweep goes on.
+# Sessions in `scripts/sweep-skip.txt` are left out.
 sweep example *args:
     cargo build -q --release -p ride-cli --example {{example}}
     for s in data/sessions/*/; do \
-        s=${s%/}; echo "== $(basename "$s")"; \
+        s=${s%/}; \
+        if rg -qx "$(basename "$s")" scripts/sweep-skip.txt; then continue; fi; \
+        echo "== $(basename "$s")"; \
         systemd-run --user --scope --quiet --collect -p MemoryMax=3G -p MemorySwapMax=0 \
             target/release/examples/{{example}} "$s" {{args}} \
             || echo "!! $(basename "$s") failed (exit $?; 137 means over the 3 GB cap)"; \
