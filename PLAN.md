@@ -894,7 +894,28 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
       now from a dwell before the window: 4 and 547 us a tick there before, 2 and 21 us now.
       `statuscost` misses it (replay is whole-ride, one smoothing): measured by replaying with `Fusion::new`.
       statuscost hash the same on all 18, whole-ride and live.
-      Left, small: `subway_periods` (per timeline call) walks every subway switch.
+      Done (`8447edf`): `subway_periods` keeps its periods and reads only the switches since its last call;
+      every replay hash in `just score` the same on all 18.
+      Permanent check (`f16e582`): `just score` (`ONLY=cost`) replays live (`Fusion::new`) with every status and
+      smoothing tick (`fusion.recent_smoothed`, `stops_since`, `timeline_since`, as `LiveSpeed.kt`), reports the
+      first and last 10 minutes, flags growth over 3x, and hashes every replay.
+      On `20261022-002914` (194 min), first and last 10 minutes: status 6 and 15 us, tick 8 and 32 us
+      (7 and 48 us before, timing `smoothed()`, which the FFI doesn't send), feeding 58 and 259 ms per 10 s.
+      Open, the rider's call: live feeding is 95% the windowed backward smoothing pass (`smooth_window`),
+      which re-runs every second with new GNSS over the whole window: up to 10 min after a measurement,
+      or 1 h without one (`MAX_UNMEASURED_NS`). Bounded, not by ride length, but its last 10 minutes feed at
+      1.27 s per 10 s on `20261021-215922` (12 ms in its first), 0.64 s on `20261021-155919`, 0.74 s on `20261024-003357`.
+      - Re-sorting: once one input arrives late, every re-run sorts a copy of the window (10% of live time).
+        Inserting it in place, as over a whole ride, changes the live output on 8 of 18 (it leaves the window sooner); not committed.
+      - Prototype (not committed, `target/livewin/prototype.diff`, scratch `crates/cli/examples/livewin.rs`):
+        redo only the last N min each re-run, older values keeping their last smoothing.
+        Feeding in the last 10 min, base / N=2 / 5 / 10 min (ms per 10 s): `20261022-002914` 252 / 72 / 135 / 242;
+        `20261021-215922` 1272 / 227 / 288 / 396; `20261021-155919` 638 / 129 / 236 / 431; `20261024-003357` 739 / 174 / 205 / 256.
+        The rest still grows: the prototype still walks (and sorts) the whole window to skip the old part.
+        The live estimate (`signs`'s input) is unchanged, as are all `just score` numbers (those replays are whole-ride).
+        The final live smoothed speeds change badly: median 0 to 0.05 mph but p99 13 to 43 mph, max 20 to 106 mph,
+        12 to 39% of values over 1 mph: a fix after a tunnel can no longer correct the tunnel before the last N min,
+        which is what the window is for. Not worth it as is.
 
 Laptop memory (2026-10-24): parallel replays over all sessions (about 1.5 GB each on the longest) crashed WSL.
 `just sweep <example>` runs one over every session in turn, each capped at 3 GB,
