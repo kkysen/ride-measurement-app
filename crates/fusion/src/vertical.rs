@@ -77,9 +77,7 @@ pub fn moves(heights: &[(i64, f64)], step_windows: &[(i64, bool)], window_s: f64
     let half = (SPAN_S / 2) as usize;
     let mut runs: Vec<(usize, usize)> = Vec::new();
     for i in half..heights.len().saturating_sub(half) {
-        // Seconds can be missing; only a full span counts.
-        let (a, b) = (heights[i - half], heights[i + half]);
-        if b.0 - a.0 > (SPAN_S + 2) * 1_000_000_000 || (b.1 - a.1).abs() < MIN_CHANGE_M {
+        if !moving(heights, i) {
             continue;
         }
         match runs.last_mut() {
@@ -93,17 +91,25 @@ pub fn moves(heights: &[(i64, f64)], step_windows: &[(i64, bool)], window_s: f64
         .filter_map(|(i, j)| {
             let (start_ns, from) = heights[i - half];
             let (end_ns, to) = heights[j + half];
-            let during: Vec<bool> = step_windows
+            // Step windows are in time order: those ending from the move's start on, then those within it.
+            let first = step_windows.partition_point(|&(at, _)| at < start_ns);
+            let during: Vec<bool> = step_windows[first..]
                 .iter()
-                .filter(|&&(at, _)| at - window_ns >= start_ns && at <= end_ns)
+                .take_while(|&&(at, _)| at <= end_ns)
+                .filter(|&&(at, _)| at - window_ns >= start_ns)
                 .map(|&(_, steps)| steps)
                 .collect();
             let stepping = !during.is_empty()
                 && during.iter().filter(|&&s| s).count() as f64
                     >= STAIRS_SHARE * during.len() as f64;
-            let walked_before = step_windows.iter().any(|&(at, steps)| {
+            let lo = step_windows
+                .partition_point(|&(at, _)| at < start_ns - (WALKED_BEFORE_S * 1e9) as i64 - 1);
+            let walked_before = step_windows[lo..first].iter().any(|&(at, steps)| {
                 steps && at <= start_ns && (start_ns - at) as f64 * 1e-9 <= WALKED_BEFORE_S
-            });
+            }) || step_windows[first..]
+                .iter()
+                .take_while(|&&(at, _)| at <= start_ns)
+                .any(|&(_, steps)| steps);
             let kind = if stepping {
                 Kind::Stairs
             } else if walked_before {
@@ -129,13 +135,11 @@ pub fn moves(heights: &[(i64, f64)], step_windows: &[(i64, bool)], window_s: f64
                     && last.change_m.signum() == m.change_m.signum() =>
             {
                 let end = heights
-                    .iter()
-                    .rev()
-                    .find(|h| h.0 <= m.end_ns)
-                    .map_or(0.0, |h| h.1);
+                    .partition_point(|h| h.0 <= m.end_ns)
+                    .checked_sub(1)
+                    .map_or(0.0, |i| heights[i].1);
                 let start = heights
-                    .iter()
-                    .find(|h| h.0 >= last.start_ns)
+                    .get(heights.partition_point(|h| h.0 < last.start_ns))
                     .map_or(0.0, |h| h.1);
                 last.end_ns = m.end_ns;
                 last.change_m = end - start;
@@ -147,6 +151,42 @@ pub fn moves(heights: &[(i64, f64)], step_windows: &[(i64, bool)], window_s: f64
     // are about 55 m), are the weather or ventilation moving the pressure.
     joined.retain(|m| m.change_m.abs() >= MIN_CHANGE_M && m.change_m.abs() <= MAX_CHANGE_M);
     joined
+}
+
+/// Whether the second at `i` is moving: the height changed by [`MIN_CHANGE_M`] over the [`SPAN_S`] centered on it.
+fn moving(heights: &[(i64, f64)], i: usize) -> bool {
+    let half = (SPAN_S / 2) as usize;
+    // Seconds can be missing; only a full span counts.
+    let (a, b) = (heights[i - half], heights[i + half]);
+    b.0 - a.0 <= (SPAN_S + 2) * 1_000_000_000 && (b.1 - a.1).abs() >= MIN_CHANGE_M
+}
+
+/// The [`moves`] that end after `since_ns`, from the heights since a still stretch before it:
+/// none of them joins one before that, so they're found the same, at a cost that doesn't grow with the ride.
+pub fn moves_since(
+    heights: &[(i64, f64)],
+    step_windows: &[(i64, bool)],
+    window_s: f64,
+    since_ns: i64,
+) -> Vec<Move> {
+    let half = (SPAN_S / 2) as usize;
+    // A move ends half a span after its last moving second.
+    let mut i = heights.partition_point(|h| h.0 < since_ns.saturating_sub(SPAN_S * 1_000_000_000));
+    i = i.min(heights.len().saturating_sub(half));
+    // Back to a stretch still for longer than two spans: no move before it reaches past it.
+    let mut still = 0;
+    while i > half && still <= 2 * SPAN_S as usize + 2 {
+        i -= 1;
+        if moving(heights, i) {
+            still = 0;
+        } else {
+            still += 1;
+        }
+    }
+    let from = i.saturating_sub(half);
+    let mut found = moves(&heights[from..], step_windows, window_s);
+    found.retain(|m| m.end_ns > since_ns);
+    found
 }
 
 #[cfg(test)]
@@ -190,6 +230,26 @@ mod tests {
     #[test]
     fn small_changes_are_noise() {
         assert!(moves(&climb(0.1, 25), &windows(|_| true), 4.0).is_empty());
+    }
+
+    #[test]
+    fn recent_moves_are_found_the_same() {
+        // Two climbs, the second joined from two runs around a landing.
+        let heights: Vec<(i64, f64)> = (0..600)
+            .map(|t| {
+                let h = 0.5 * (t.clamp(100, 125) - 100) as f64
+                    + 0.5 * (t.clamp(400, 420) - 400) as f64
+                    + 0.5 * (t.clamp(424, 444) - 424) as f64;
+                (t * S, h)
+            })
+            .collect();
+        let w: Vec<(i64, bool)> = (1..150).map(|k| (k * 4 * S, k % 3 == 0)).collect();
+        let all = moves(&heights, &w, 4.0);
+        assert_eq!(all.len(), 2);
+        for since in [0, 200 * S, 430 * S, 460 * S] {
+            let want: Vec<Move> = all.iter().copied().filter(|m| m.end_ns > since).collect();
+            assert_eq!(moves_since(&heights, &w, 4.0, since), want);
+        }
     }
 
     #[test]
