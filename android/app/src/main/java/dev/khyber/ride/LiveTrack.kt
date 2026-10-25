@@ -66,23 +66,28 @@ object LiveTrack {
         }
     }
 
-    /** Replaces recent points' speeds and accelerations with smoothed ones at the same fix times. */
+    /**
+     * Replaces recent points' speeds and accelerations with smoothed ones at the same fix times.
+     * Smoothing covers only the recent window, so only the points from its start are looked at
+     * (fixes are added in time order).
+     */
     @Synchronized
     fun applySmoothed(smoothed: List<SmoothedSpeed>) {
         if (smoothed.isEmpty()) return
         val byTime = smoothed.associateBy { it.elapsedRealtimeNs }
         val points = _points.value
-        var changed = false
-        val updated = points.map { p ->
-            val s = byTime[p.elapsedRealtimeNs]
-            if (s != null && (s.speedMps != p.smoothedSpeedMps || s.accelMps2 != p.smoothedAccelMps2)) {
-                changed = true
-                p.copy(smoothedSpeedMps = s.speedMps, smoothedAccelMps2 = s.accelMps2)
-            } else {
-                p
+        val first = smoothed.minOf { it.elapsedRealtimeNs }
+        val from = points.binarySearch { it.elapsedRealtimeNs.compareTo(first) }.let { if (it < 0) -it - 1 else it }
+        var updated: ArrayList<Point>? = null
+        for (i in from until points.size) {
+            val p = points[i]
+            val s = byTime[p.elapsedRealtimeNs] ?: continue
+            if (s.speedMps != p.smoothedSpeedMps || s.accelMps2 != p.smoothedAccelMps2) {
+                val u = updated ?: ArrayList(points).also { updated = it }
+                u[i] = p.copy(smoothedSpeedMps = s.speedMps, smoothedAccelMps2 = s.accelMps2)
             }
         }
-        if (changed) _points.value = updated
+        updated?.let { _points.value = it }
     }
 
     @Synchronized
