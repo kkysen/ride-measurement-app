@@ -59,6 +59,7 @@ bump version:
 
 # Install over wireless debugging (`just adb-server`, `adb pair` and `adb connect` first; see README).
 install: apk
+    @unzip -l {{apk}} | rg -q 'lib/arm64-v8a/libride_ffi.so' || (echo "the APK has no Rust core (libride_ffi.so); not installing" && exit 1)
     adb install -r {{apk}}
 
 # Copy sessions off the phone into `data/sessions/`; never deletes anything on the phone.
