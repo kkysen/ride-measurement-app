@@ -38,6 +38,12 @@ pub struct Replay {
     pub statuses: Vec<(i64, crate::fusion::Status)>,
     /// How long each of [`Self::statuses`] took to make (ns), for checking its cost stays the same over a ride.
     pub status_cost_ns: Vec<u64>,
+    /// How long feeding the inputs since the status before each of [`Self::statuses`] took (ns),
+    /// smoothing included: for checking the cost per input stays the same over a ride.
+    pub feed_cost_ns: Vec<u64>,
+    /// Each smoothing tick's time and how long it took (ns), every [`Options::tick_every_ns`]:
+    /// what the app asks then (see `LiveSpeed.kt`), holding the settled counts as it does.
+    pub tick_cost_ns: Vec<(i64, u64)>,
     /// What the rider did over the ride (see [`Fusion::timeline`]), as of its end.
     pub timeline: Vec<crate::fusion::Segment>,
     /// Stairs, elevators, and escalators (see [`crate::vertical`]).
@@ -136,6 +142,11 @@ pub struct Options {
     pub live_every_ns: Option<i64>,
     /// For scoring: leave out where the phone sat still (see [`still_cuts`]), as a gap in the recording.
     pub skip_still: bool,
+    /// Replay as the phone does ([`Fusion::new`]), smoothing only a recent window as input arrives,
+    /// instead of the whole ride at once.
+    pub live: bool,
+    /// For checking costs: ask what the app asks at each smoothing tick this often (ns), timing each.
+    pub tick_every_ns: Option<i64>,
 }
 
 /// How long the GPS fixes must stay within [`STILL_RADIUS_M`] of a stretch's first for it to be still.
@@ -400,7 +411,11 @@ pub fn replay_with_hook(
         + records_len;
     let events = merge(sources.into_iter().map(|s| s.1).collect());
 
-    let mut fusion = Fusion::whole_ride();
+    let mut fusion = if options.live {
+        Fusion::new()
+    } else {
+        Fusion::whole_ride()
+    };
     fusion.reserve_inputs(buffered);
     fusion.set_max_speed(options.max_speed_mps);
     fusion.set_track_hold(!options.no_track_hold);
@@ -410,10 +425,17 @@ pub fn replay_with_hook(
     }
     let mut statuses = Vec::new();
     let mut status_cost_ns = Vec::new();
+    let mut feed_cost_ns = Vec::new();
+    let mut tick_cost_ns = Vec::new();
     let mut live = Vec::new();
     let mut events = events.peekable();
     let mut next_status = events.peek().map_or(0, |e| e.0);
     let mut next_live = next_status;
+    let mut next_tick = next_status;
+    // The app's copies' settled counts (see [`Fusion::stop_records_since`], [`Fusion::timeline_since`]).
+    let mut stops_settled = 0;
+    let mut timeline_settled = 0;
+    let mut fed = std::time::Instant::now();
     let every = total.div_ceil(100);
     progress(0.0);
     for (i, (t, e)) in events.enumerate() {
@@ -421,11 +443,24 @@ pub fn replay_with_hook(
             progress(i as f64 / total as f64);
         }
         if t >= next_status && !options.no_statuses {
+            feed_cost_ns.push(fed.elapsed().as_nanos() as u64);
             let start = std::time::Instant::now();
             statuses.push((t, fusion.status()));
             status_cost_ns.push(start.elapsed().as_nanos() as u64);
             on_status(t, &fusion);
             next_status = t + STATUS_EVERY_NS;
+            fed = std::time::Instant::now();
+        }
+        if let Some(every) = options.tick_every_ns
+            && t >= next_tick
+        {
+            let start = std::time::Instant::now();
+            std::hint::black_box(fusion.recent_smoothed());
+            stops_settled = fusion.stop_records_since(stops_settled).1;
+            timeline_settled = fusion.timeline_since(timeline_settled).1;
+            tick_cost_ns.push((t, start.elapsed().as_nanos() as u64));
+            next_tick = t + every;
+            fed = fed.checked_add(start.elapsed()).unwrap_or(fed);
         }
         if let Some(every) = options.live_every_ns
             && t >= next_live
@@ -476,6 +511,8 @@ pub fn replay_with_hook(
         vertical: fusion.vertical_moves(),
         statuses,
         status_cost_ns,
+        feed_cost_ns,
+        tick_cost_ns,
         live,
     })
 }

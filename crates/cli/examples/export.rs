@@ -100,6 +100,7 @@ fn main() -> anyhow::Result<()> {
             no_statuses: std::env::var_os("NO_STATUSES").is_some(),
             live_every_ns: None,
             skip_still: std::env::var_os("SKIP_STILL").is_some(),
+            ..Options::default()
         },
     )?;
     let mut f = std::fs::File::create(out.join("chimes.csv"))?;

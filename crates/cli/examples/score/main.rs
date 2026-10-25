@@ -1,8 +1,9 @@
 // Every score of the examples `signs`, `holds`, `doorscore`, `curves`, `legs_gnss`, `jumps`, `legs`,
-// `stop_positions`, and `vertical` for one session, each replay done once and shared by the scores that use the same options,
+// `stop_positions`, and `vertical` for one session, and `cost` (see `cost.rs`), each replay done once and shared by the scores that use the same options,
 // and only one replay held at a time.
 // Writes everything to `target/score/<session>.txt` and prints each score's summary line.
 // Leaves out where the phone sat still (`Options::skip_still`) unless `WHOLE=1`.
+// Each replay's output is hashed, so a change meant to keep it the same can be checked.
 // `ONLY=signs,holds` runs only those scores (and only the replays they need); `DUMP=1` as in each example.
 use ride_fusion::live_speed::SUBWAY_MAX_SPEED_MPS;
 use ride_fusion::replay::{Options, Replay, replay_with};
@@ -16,6 +17,7 @@ macro_rules! out {
     }};
 }
 
+mod cost;
 mod curves;
 mod doorscore;
 mod holds;
@@ -36,10 +38,12 @@ fn main() -> anyhow::Result<()> {
     let wants = |score: &str| only.as_ref().is_none_or(|o| o.iter().any(|x| x == score));
     let skip_still = std::env::var_os("WHOLE").is_none();
     let mut out = String::new();
+    let hashes = std::cell::RefCell::new(String::new());
     let timed = |what: &str, options: &Options| -> anyhow::Result<Replay> {
         let start = Instant::now();
         let r = replay_with(&s, options)?;
         eprintln!("{name}: replay {what} {:.1?}", start.elapsed());
+        out!(hashes.borrow_mut(), "hash {what}: {:016x}", hash(&r));
         Ok(r)
     };
     // The live speed's scores, the door cycles', and the subway's speed bound: what the app does on a train.
@@ -123,6 +127,19 @@ fn main() -> anyhow::Result<()> {
         )?;
         stop_positions::run(&dir, &e, &mut out)?;
     }
+    // The app's costs over the ride, replayed live with every status and smoothing tick.
+    if wants("cost") {
+        let r = timed(
+            "live",
+            &Options {
+                live: true,
+                tick_every_ns: Some(ride_fusion::fusion::SMOOTH_EVERY_NS),
+                ..Options::default()
+            },
+        )?;
+        cost::run(&r, &mut out)?;
+    }
+    out += &hashes.into_inner();
     let path = std::path::Path::new("target/score").join(format!("{name}.txt"));
     std::fs::create_dir_all(path.parent().unwrap())?;
     std::fs::write(&path, &out)?;
@@ -137,6 +154,8 @@ fn main() -> anyhow::Result<()> {
         "legs:",
         "stop_positions:",
         "vertical:",
+        "cost",
+        "hash ",
     ];
     for line in out
         .lines()
@@ -145,4 +164,25 @@ fn main() -> anyhow::Result<()> {
         println!("{name} {line}");
     }
     Ok(())
+}
+
+/// A hash of what a replay produced: the same before and after a change means it changed nothing.
+/// Each part's `Debug` text is hashed as it's written, never held whole.
+fn hash(r: &Replay) -> u64 {
+    use std::fmt::Write as _;
+    use std::hash::Hasher;
+    struct H(std::collections::hash_map::DefaultHasher);
+    impl std::fmt::Write for H {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
+    let mut h = H(Default::default());
+    let _ = write!(
+        h,
+        "{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
+        r.smoothed, r.positions, r.stops, r.statuses, r.timeline, r.vertical, r.live
+    );
+    h.0.finish()
 }
