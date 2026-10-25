@@ -372,9 +372,23 @@ pub fn replay_with_progress(
         )?);
     }
     let total = sources.iter().map(|s| s.0).sum::<usize>().max(1);
+    // Fusion keeps every accelerometer and gyro sample (the first sources), and some records.
+    let buffered: usize = sources
+        .iter()
+        .zip(&sensors)
+        .filter(|(_, (sensor_type, _))| {
+            matches!(
+                sensor_type.and_then(|t| imu_sample(t, &[0.0; 6])),
+                Some(ImuSample::Accel(_) | ImuSample::Gyro(_))
+            )
+        })
+        .map(|(s, _)| s.0)
+        .sum::<usize>()
+        + records_len;
     let events = merge(sources.into_iter().map(|s| s.1).collect());
 
     let mut fusion = Fusion::whole_ride();
+    fusion.reserve_inputs(buffered);
     fusion.set_max_speed(options.max_speed_mps);
     fusion.set_track_hold(!options.no_track_hold);
     // Downloaded orbits (`just orbits`), for constellations whose navigation messages the phone missed.

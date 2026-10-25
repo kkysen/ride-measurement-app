@@ -49,24 +49,32 @@ const DEFAULT_FIX_ACCURACY_M: f64 = 20.0;
 const OWN_SOLUTION_HOLD_NS: i64 = 3_000_000_000;
 
 /// One buffered input, for re-running the estimator.
+/// Kept small: the IMU samples are most of them, every one of a whole ride's for the replay.
+/// They're `f32` as the sensors report them (see [`imu_sample`]), so that's exact, and the rare inputs are boxed.
 #[derive(Clone, Debug)]
 enum Input {
-    Accel([f64; 3]),
-    Gyro([f64; 3]),
-    /// A fix, with its speed only if it was used. Boxed: fixes are rare, and IMU samples (most of the window,
-    /// which on the phone is about half a million inputs) stay small.
+    Accel([f32; 3]),
+    Gyro([f32; 3]),
+    /// A fix, with its speed only if it was used.
     Fix(Box<Fix>),
     /// Our own velocity solution's speed and standard deviation.
-    Speed(f64, f64),
+    Speed(Box<(f64, f64)>),
     /// Entering or leaving the subway changed the speed's upper bound from this,
     /// which the backward pass goes back to.
-    MaxSpeedBefore(Option<f64>),
+    MaxSpeedBefore(Box<Option<f64>>),
     /// At a door cycle's closing: the train stood still from this time to here (see [`DWELL_SURE_S`]).
     StandingSince(i64),
     /// The rider has been walking, or running if true (see [`crate::walking`]).
     Walking(bool),
     /// The rider's car's accelerometer reading (see [`LiveSpeedEstimator::on_car_accel`]).
-    Car(u16, [f64; 3]),
+    Car(Box<(u16, [f64; 3])>),
+}
+
+const _: () = assert!(std::mem::size_of::<Input>() == 16);
+
+/// An IMU sample as kept: the `f32` it came from, exactly.
+fn imu_f32(v: [f64; 3]) -> [f32; 3] {
+    v.map(|x| x as f32)
 }
 
 /// How long before a door cycle's closing the train surely stood (s): the chime comes in the 8 s before it,
@@ -367,11 +375,11 @@ fn step_estimator(
         | Pending::Transit(..) => None,
         Pending::Accel(a) => {
             estimator.on_accel(t_ns, a[0], a[1], a[2]);
-            Some(Input::Accel(*a))
+            Some(Input::Accel(imu_f32(*a)))
         }
         Pending::Gyro(w) => {
             estimator.on_gyro(w[0], w[1], w[2]);
-            Some(Input::Gyro(*w))
+            Some(Input::Gyro(imu_f32(*w)))
         }
         Pending::Fix(fix) => {
             let own_recent =
@@ -392,7 +400,7 @@ fn step_estimator(
             let (speed, sigma) = own?;
             estimator.on_gnss_speed(t_ns, speed, sigma);
             *last_own_solution_ns = Some(t_ns);
-            Some(Input::Speed(speed, sigma))
+            Some(Input::Speed(Box::new((speed, sigma))))
         }
     }
 }
@@ -676,6 +684,14 @@ impl Fusion {
     /// Offline: everything is kept and smoothed at once, when asked, so every tunnel gets the fix after it.
     pub fn whole_ride() -> Self {
         Self::with_window(None)
+    }
+
+    /// Over a whole ride, room for this many more IMU samples (accelerometer and gyro) and other inputs:
+    /// growing the buffer as they come briefly holds it twice, and leaves it up to twice as big as needed.
+    pub fn reserve_inputs(&mut self, additional: usize) {
+        if self.window_ns.is_none() {
+            self.inputs.reserve_exact(additional);
+        }
     }
 
     /// `window_ns`: how long values stay unfrozen once a GNSS measurement after them has been smoothed;
@@ -1484,7 +1500,7 @@ impl Fusion {
             self.car_readings.push((t_ns, r.car, r.rssi));
             if self.cars.steady(t_ns, r.car) {
                 self.estimator.on_car_accel(t_ns, r.car, r.accel);
-                self.buffer(t_ns, Input::Car(r.car, r.accel));
+                self.buffer(t_ns, Input::Car(Box::new((r.car, r.accel))));
             }
             return;
         }
@@ -1525,7 +1541,7 @@ impl Fusion {
             own,
         );
         if let Some(before) = bound_before {
-            self.buffer(t_ns, Input::MaxSpeedBefore(before));
+            self.buffer(t_ns, Input::MaxSpeedBefore(Box::new(before)));
             self.subway_changes.push((t_ns, self.context.in_subway));
         }
         self.track_stay(t_ns, &input);
@@ -2039,6 +2055,13 @@ impl Fusion {
     }
 
     fn buffer(&mut self, t_ns: i64, input: Input) {
+        // Over a whole ride, a late input goes in its place, after any at the same time, as a stable sort would
+        // put it: smoothing then needs no sorted copy of every input.
+        if self.window_ns.is_none() && self.inputs.back().is_some_and(|&(t, _)| t > t_ns) {
+            let i = self.inputs.partition_point(|&(t, _)| t <= t_ns);
+            self.inputs.insert(i, (t_ns, input));
+            return;
+        }
         self.inputs.push_back((t_ns, input));
         if let Some(window) = self.window_ns {
             // Smoothed with a window's worth of GNSS after it, or too old to wait any longer.
@@ -2125,8 +2148,19 @@ impl Fusion {
             return Vec::new();
         };
         // Settled inputs are in time order, except any that arrived late; sort a copy for those.
-        let mut inputs: Vec<&(i64, Input)> = self.inputs.iter().collect();
-        inputs.sort_by_key(|(t, _)| *t);
+        // Copied only then: over a whole ride, a copy is a pointer per IMU sample.
+        let sorted: Option<Vec<&(i64, Input)>> =
+            (!self.inputs.iter().is_sorted_by_key(|(t, _)| *t)).then(|| {
+                let mut inputs: Vec<_> = self.inputs.iter().collect();
+                inputs.sort_by_key(|(t, _)| *t);
+                inputs
+            });
+        let inputs = || -> Box<dyn DoubleEndedIterator<Item = &(i64, Input)> + '_> {
+            match &sorted {
+                Some(sorted) => Box::new(sorted.iter().copied()),
+                None => Box::new(self.inputs.iter()),
+            }
+        };
         let mut backward = self.estimator.reversed();
         // Forward samples from the latest back, each paired with the backward estimate once the pass reaches it.
         let mut pending = self.forward.iter().rev().peekable();
@@ -2135,12 +2169,13 @@ impl Fusion {
         let mut standing_since: Option<i64> = None;
         // The last (earliest so far) time a measurement set the backward speed, and the first pair after it.
         let mut anchor: Option<(i64, usize)> = None;
-        for &&(t, ref input) in inputs.iter().rev() {
+        for &(t, ref input) in inputs().rev() {
             // Reversed time runs forward from the end; rotation changes sign, acceleration doesn't
             // (see `LiveSpeedEstimator::reversed`).
             let tr = end - t + 1;
             match *input {
                 Input::Accel(a) => {
+                    let a = a.map(f64::from);
                     backward.on_accel(tr, a[0], a[1], a[2]);
                     match standing_since {
                         Some(from) if t >= from => backward.on_known_stop(tr),
@@ -2169,14 +2204,17 @@ impl Fusion {
                     anchor = None;
                     standing_since = Some(from);
                 }
-                Input::Gyro(w) => backward.on_gyro(-w[0], -w[1], -w[2]),
-                Input::Car(car, a) => backward.on_car_accel(tr, car, a),
-                Input::Speed(speed, sigma) => {
-                    backward.on_gnss_speed(tr, speed, sigma);
+                Input::Gyro(w) => {
+                    let w = w.map(f64::from);
+                    backward.on_gyro(-w[0], -w[1], -w[2])
+                }
+                Input::Car(ref c) => backward.on_car_accel(tr, c.0, c.1),
+                Input::Speed(ref v) => {
+                    backward.on_gnss_speed(tr, v.0, v.1);
                     anchor = Some((t, pairs.len()));
                 }
                 // Going back past a switch, the bound is the one before it.
-                Input::MaxSpeedBefore(before) => backward.set_max_speed(before),
+                Input::MaxSpeedBefore(ref before) => backward.set_max_speed(**before),
                 Input::Fix(ref f) => {
                     backward.on_gnss_fix(tr, f.lat, f.lon, f.accuracy, f.speed, f.speed_sigma);
                     if f.speed.is_some() {
@@ -2195,16 +2233,14 @@ impl Fusion {
         let mut out: Vec<SmoothedSpeed> =
             pairs.iter().map(|(ts, f, b)| combine(*ts, f, b)).collect();
         out.reverse();
-        let fixes: Vec<&Fix> = inputs
-            .iter()
+        let fixes: Vec<&Fix> = inputs()
             .filter_map(|(_, input)| match input {
                 Input::Fix(f) if f.accuracy.is_some_and(|a| a <= GAP_FIX_M) => Some(&**f),
                 _ => None,
             })
             .collect();
-        let steps: Vec<(i64, bool)> = inputs
-            .iter()
-            .filter_map(|&&(t, ref input)| match *input {
+        let steps: Vec<(i64, bool)> = inputs()
+            .filter_map(|&(t, ref input)| match *input {
                 Input::Walking(running) => Some((t, running)),
                 _ => None,
             })
