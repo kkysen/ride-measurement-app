@@ -2612,7 +2612,14 @@ impl Fusion {
             .collect();
         bound_gaps(&mut out, &fixes, &steps, &self.subway_changes);
         if self.track_hold {
-            let (legs, _) = crate::track::legs(&self.stop_records(), &self.good_fix_ns(), None);
+            // Only legs within the window are held, and a leg starts within a dwell of its first stop: the records
+            // and good fixes from a dwell before the window, so a tick costs the same however long the ride.
+            let from = out.first().map_or(i64::MAX, |s| s.elapsed_realtime_ns)
+                - (RECORD_MAX_DWELL_S * 1e9) as i64
+                - 1;
+            let records: Vec<StopRecord> = self.records().since(from).cloned().collect();
+            let fixes = &self.good_fixes[self.good_fixes.partition_point(|&t| t <= from)..];
+            let (legs, _) = crate::track::legs(&records, fixes, None);
             crate::track::hold_to_track(&mut out, &legs);
         }
         out
