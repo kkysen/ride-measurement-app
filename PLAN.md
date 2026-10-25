@@ -916,6 +916,19 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
         The final live smoothed speeds change badly: median 0 to 0.05 mph but p99 13 to 43 mph, max 20 to 106 mph,
         12 to 39% of values over 1 mph: a fix after a tunnel can no longer correct the tunnel before the last N min,
         which is what the window is for. Not worth it as is.
+      - Prototype (not committed, `target/livewin/correction-only.diff`): re-run only after a correction
+        (a fix, a stop anchor, walking), extending with the forward estimate between.
+        Output nearly the same (final live smoothed speeds: p99 0 to 0.45 mph, max 0 to 19.5 mph; right after a fix
+        p99 0.01 to 0.32 mph, max 9.1 mph), but little saved: the costly re-runs are the ones a fix makes.
+        Feeding in the last 10 min, base / correction-only (ms per 10 s): `20261022-002914` 305 / 202;
+        `20261021-215922` 1242 / 1198; `20261021-155919` 601 / 596; `20261024-003357` 702 / 800.
+      - Prototype (not committed, `target/livewin/gap-only.diff`): the same, each re-run reaching back only to the
+        previous correction. Feeding (first / last 10 min, ms per 10 s): `20261022-002914` 28 / 33;
+        `20261021-215922` 16 / 259; `20261021-155919` 21 / 95; `20261024-003357` 19 / 197.
+        But the output changes badly: final live smoothed speeds p99 up to 40 mph, max 291 mph on `20261022-002914`,
+        17 to 38% over 1 mph on two rides; right after a fix p99 5 to 19 mph, max 6 to 120 mph.
+        The backward pass started at the last fix lacks what the full window gave it (the raw GNSS speeds, the stop
+        ramps before the previous correction), so it isn't pinned there as assumed. Not usable as is.
 
 Laptop memory (2026-10-24): parallel replays over all sessions (about 1.5 GB each on the longest) crashed WSL.
 `just sweep <example>` runs one over every session in turn, each capped at 3 GB,
