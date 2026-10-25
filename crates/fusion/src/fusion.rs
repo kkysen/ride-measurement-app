@@ -604,6 +604,9 @@ pub struct Fusion {
     /// Settled inputs with their times, and the forward estimate at each fix and sample time, within `window_ns`.
     inputs: VecDeque<(i64, Input)>,
     forward: VecDeque<(i64, Estimate)>,
+    /// The forward (live) speed (m/s) at each sample time, for the whole ride: what an elevator or escalator
+    /// check needs of the speed, without smoothing.
+    live_speeds: Vec<(i64, f32)>,
     window_ns: Option<i64>,
     /// With a window: the latest smoothing of it, the values frozen as they left it,
     /// and the settled time at or after which smoothing re-runs.
@@ -709,6 +712,7 @@ impl Fusion {
             late_inputs: 0,
             inputs: VecDeque::new(),
             forward: VecDeque::new(),
+            live_speeds: Vec::new(),
             window_ns,
             recent: VecDeque::new(),
             frozen: Vec::new(),
@@ -1350,15 +1354,14 @@ impl Fusion {
         self.vertical_moves_where(|_| true)
     }
 
-    /// [`Self::vertical_moves`] of those `keep` keeps: the status keeps only recent ones,
-    /// so the speeds are smoothed only when one of those needs them, not at every status.
+    /// [`Self::vertical_moves`] of those `keep` keeps: the status keeps only recent ones.
+    /// A ride is at a vehicle's speed by the live speed over its span (see [`Self::live_speeds`]),
+    /// a slice of it found by time, so the check costs the same however long the ride.
     fn vertical_moves_where(
         &self,
         keep: impl Fn(&crate::vertical::Move) -> bool,
     ) -> Vec<crate::vertical::Move> {
         let s_ns = |s: f64| (s * 1e9) as i64;
-        // Smoothed only if needed: over a whole ride, that's smoothing it all again.
-        let smoothed = std::cell::OnceCell::new();
         crate::vertical::moves(self.altimeter.heights(), &self.step_windows, WALK_WINDOW_S)
             .into_iter()
             .filter(|m| keep(m))
@@ -1373,16 +1376,12 @@ impl Fusion {
                 if departed {
                     return false;
                 }
-                let speeds: Vec<f64> = smoothed
-                    .get_or_init(|| self.smoothed())
-                    .iter()
-                    .filter(|s| {
-                        s.elapsed_realtime_ns >= m.start_ns && s.elapsed_realtime_ns <= m.end_ns
-                    })
-                    .map(|s| s.speed_mps)
-                    .collect();
+                let from = self.live_speeds.partition_point(|&(t, _)| t < m.start_ns);
+                let to = self.live_speeds.partition_point(|&(t, _)| t <= m.end_ns);
+                let speeds = &self.live_speeds[from..to.max(from)];
                 let fast = !speeds.is_empty()
-                    && speeds.iter().sum::<f64>() / speeds.len() as f64 > VERTICAL_VEHICLE_MPS;
+                    && speeds.iter().map(|&(_, v)| f64::from(v)).sum::<f64>() / speeds.len() as f64
+                        > VERTICAL_VEHICLE_MPS;
                 !fast
             })
             .collect()
@@ -1632,6 +1631,7 @@ impl Fusion {
                 ));
             }
             self.position_inputs.push((t_ns, PositionInput::Sample));
+            self.live_speeds.push((t_ns, estimate.speed_mps as f32));
             self.forward.push_back((t_ns, estimate));
         }
         if self.window_ns.is_some() {
