@@ -1,5 +1,5 @@
 // Every score of the examples `signs`, `holds`, `doorscore`, `curves`, `legs_gnss`, `jumps`, `legs`,
-// and `stop_positions` for one session, each replay done once and shared by the scores that use the same options,
+// `stop_positions`, and `vertical` for one session, each replay done once and shared by the scores that use the same options,
 // and only one replay held at a time.
 // Writes everything to `target/score/<session>.txt` and prints each score's summary line.
 // Leaves out where the phone sat still (`Options::skip_still`) unless `WHOLE=1`.
@@ -24,6 +24,7 @@ mod legs;
 mod legs_gnss;
 mod signs;
 mod stop_positions;
+mod vertical;
 
 fn main() -> anyhow::Result<()> {
     let dir = std::env::args().nth(1).unwrap();
@@ -99,6 +100,17 @@ fn main() -> anyhow::Result<()> {
             legs::run(&dir, &d, &mut out)?;
         }
     }
+    // Going up and down, over the whole ride: an elevator's ride is where the phone sits still.
+    if wants("vertical") {
+        let v = timed(
+            "whole",
+            &Options {
+                no_statuses: true,
+                ..Options::default()
+            },
+        )?;
+        vertical::run(&name, &v, &mut out)?;
+    }
     if wants("stop_positions") {
         let e = timed(
             "unheld to the track",
@@ -124,6 +136,7 @@ fn main() -> anyhow::Result<()> {
         "jumps:",
         "legs:",
         "stop_positions:",
+        "vertical:",
     ];
     for line in out
         .lines()
