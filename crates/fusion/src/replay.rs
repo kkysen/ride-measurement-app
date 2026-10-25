@@ -36,6 +36,8 @@ pub struct Replay {
     pub subway_changes: Vec<(i64, bool)>,
     /// What the app would have shown, every [`STATUS_EVERY_NS`].
     pub statuses: Vec<(i64, crate::fusion::Status)>,
+    /// How long each of [`Self::statuses`] took to make (ns), for checking its cost stays the same over a ride.
+    pub status_cost_ns: Vec<u64>,
     /// What the rider did over the ride (see [`Fusion::timeline`]), as of its end.
     pub timeline: Vec<crate::fusion::Segment>,
     /// Stairs, elevators, and escalators (see [`crate::vertical`]).
@@ -396,6 +398,7 @@ pub fn replay_with_progress(
         fusion.navigator_mut().add_ephemeris(eph);
     }
     let mut statuses = Vec::new();
+    let mut status_cost_ns = Vec::new();
     let mut live = Vec::new();
     let mut events = events.peekable();
     let mut next_status = events.peek().map_or(0, |e| e.0);
@@ -407,7 +410,9 @@ pub fn replay_with_progress(
             progress(i as f64 / total as f64);
         }
         if t >= next_status && !options.no_statuses {
+            let start = std::time::Instant::now();
             statuses.push((t, fusion.status()));
+            status_cost_ns.push(start.elapsed().as_nanos() as u64);
             next_status = t + STATUS_EVERY_NS;
         }
         if let Some(every) = options.live_every_ns
@@ -458,6 +463,7 @@ pub fn replay_with_progress(
         timeline: fusion.timeline(),
         vertical: fusion.vertical_moves(),
         statuses,
+        status_cost_ns,
         live,
     })
 }
