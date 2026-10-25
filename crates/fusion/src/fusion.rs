@@ -640,6 +640,8 @@ pub struct Fusion {
     stop_detector: StopDetector,
     train_stops: Vec<(train_stops::Stop, Option<&'static Station>, bool)>,
     departures: Vec<i64>,
+    /// The lines ridden as of the old enough stops (see [`Fusion::riding_lines`]).
+    riding_lines: std::cell::RefCell<RidingLines>,
     /// The stop records settled so far (see [`Fusion::records`]), so a status recomputes only the recent ones.
     settled_records: std::cell::RefCell<SettledRecords>,
     /// The times of good fixes (see [`Fusion::good_fix_ns`]), in time order.
@@ -738,6 +740,12 @@ impl Fusion {
             train_stops: Vec::new(),
             departures: Vec::new(),
             settled_records: Default::default(),
+            riding_lines: std::cell::RefCell::new(RidingLines {
+                lines: Vec::new(),
+                prev: i64::MIN,
+                max_t: i64::MIN,
+                upto: 0,
+            }),
             good_fixes: Vec::new(),
             likely_stop: None,
             unconfirmed_stops: Vec::new(),
@@ -865,39 +873,78 @@ impl Fusion {
     /// none of them serve (a transfer across the platform), or after [`LINE_RESET_WINDOWS`] step windows since the
     /// stop before: walking to another platform needn't look like walking off (74 St to Jackson Hts on `184134`,
     /// 7:09 pm, by stairs), and steps within a car at a stop don't change the line anyway.
+    /// The stops before [`RidingLines::upto`] are kept as they left the lines, once old enough (see
+    /// [`RECORDS_SETTLE_S`]), so only the newer are gone through again: for `t` at or after them all.
     fn riding_lines(&self, t: i64) -> Vec<String> {
-        let mut lines: Vec<String> = Vec::new();
-        let mut prev = i64::MIN;
-        for (stop, station, in_subway) in &self.train_stops {
-            let Some(station) = station.filter(|_| *in_subway && stop.t_ns <= t) else {
-                continue;
-            };
-            let walked = self
-                .step_windows
-                .iter()
-                .filter(|&&(at, steps)| steps && at > prev && at <= stop.t_ns)
-                .count()
-                >= LINE_RESET_WINDOWS;
-            let both: Vec<String> = lines
-                .iter()
-                .filter(|l| station.lines.contains(l))
-                .cloned()
-                .collect();
-            lines = if both.is_empty() || walked {
-                station.lines.clone()
-            } else {
-                both
-            };
-            prev = stop.t_ns;
+        let lag = (RECORDS_SETTLE_S * 1e9) as i64;
+        let now = self.settled_ns.unwrap_or(i64::MIN);
+        let mut kept = self.riding_lines.borrow_mut();
+        // Keep the old enough ones, for any later `t`.
+        while let Some(&(stop, station, in_subway)) = self.train_stops.get(kept.upto) {
+            if stop.t_ns >= now.saturating_sub(lag) {
+                break;
+            }
+            let (lines, prev) = self.ride_on(&kept.lines, kept.prev, stop.t_ns, station, in_subway);
+            kept.lines = lines;
+            kept.prev = prev;
+            kept.max_t = kept.max_t.max(stop.t_ns);
+            kept.upto += 1;
+        }
+        let (mut lines, mut prev, from) = if t >= kept.max_t {
+            (kept.lines.clone(), kept.prev, kept.upto)
+        } else {
+            (Vec::new(), i64::MIN, 0)
+        };
+        drop(kept);
+        for &(stop, station, in_subway) in &self.train_stops[from..] {
+            if stop.t_ns <= t {
+                (lines, prev) = self.ride_on(&lines, prev, stop.t_ns, station, in_subway);
+            }
         }
         // Walking since the last stop: the next may be another line's.
-        let walked_since = self
-            .step_windows
+        if self.walked(prev, t) {
+            Vec::new()
+        } else {
+            lines
+        }
+    }
+
+    /// The lines after a stop at `at` (see [`Self::riding_lines`]), and the stop before the next.
+    fn ride_on(
+        &self,
+        lines: &[String],
+        prev: i64,
+        at: i64,
+        station: Option<&'static Station>,
+        in_subway: bool,
+    ) -> (Vec<String>, i64) {
+        let Some(station) = station.filter(|_| in_subway) else {
+            return (lines.to_vec(), prev);
+        };
+        let walked = self.walked(prev, at);
+        let both: Vec<String> = lines
             .iter()
-            .filter(|&&(at, steps)| steps && at > prev && at <= t)
+            .filter(|l| station.lines.contains(l))
+            .cloned()
+            .collect();
+        let lines = if both.is_empty() || walked {
+            station.lines.clone()
+        } else {
+            both
+        };
+        (lines, at)
+    }
+
+    /// Whether there were [`LINE_RESET_WINDOWS`] step windows with steps after `from`, up to `to`.
+    fn walked(&self, from: i64, to: i64) -> bool {
+        let i = self.step_windows.partition_point(|&(at, _)| at <= from);
+        self.step_windows[i..]
+            .iter()
+            .take_while(|&&(at, _)| at <= to)
+            .filter(|&&(_, steps)| steps)
+            .take(LINE_RESET_WINDOWS)
             .count()
-            >= LINE_RESET_WINDOWS;
-        if walked_since { Vec::new() } else { lines }
+            >= LINE_RESET_WINDOWS
     }
 
     /// The station the radio names now: Android's own location first (Google's database), then the rider's
@@ -2529,6 +2576,15 @@ struct SettledRecords {
     leg_from: Option<StopRecord>,
     /// The train stops before this index are all of settled records' stops, or fades long before them.
     stops_from: usize,
+}
+
+/// The lines ridden (see [`Fusion::riding_lines`]) as of the train stops before `upto`, the last of them
+/// with a station at `prev`, and the latest of their times.
+struct RidingLines {
+    lines: Vec<String>,
+    prev: i64,
+    max_t: i64,
+    upto: usize,
 }
 
 /// The stop records (see [`Fusion::records`]): those settled, then the rest.
