@@ -136,6 +136,9 @@ const PLATFORM_LAST_S: f64 = 8.0;
 const MISSED_STOP_WALK_WINDOWS: usize = 6;
 const MISSED_STOP_LOOKBACK_S: f64 = 60.0;
 const ALIGHT_AFTER_STOP_S: f64 = 6.0;
+/// How far (s) a stop's time can be before a stop found earlier: a missed stop is found up to
+/// [`RECORD_MAX_DWELL_S`] after the walk off began, [`ALIGHT_AFTER_STOP_S`] after the stop.
+const MISSED_STOP_DISORDER_S: f64 = RECORD_MAX_DWELL_S + ALIGHT_AFTER_STOP_S + 60.0;
 pub const MISSED_STOP_SCORE: f64 = 0.0;
 
 /// One stop of the train, for later analyses: dwell, and the doors' times. A stop with no door cycle is a
@@ -2998,11 +3001,9 @@ fn missed_stop(
     let s_ns = |s: f64| (s * 1e9) as i64;
     let window_ns = s_ns(WALK_WINDOW_S);
     let since = departure - s_ns(RECORD_MAX_DWELL_S);
-    let windows: Vec<(i64, bool)> = step_windows
-        .iter()
-        .copied()
-        .filter(|&(t, _)| t > since && t <= departure)
-        .collect();
+    // Step windows and departures are in time order: binary searches, so a call costs the same late in a ride.
+    let windows = &step_windows[step_windows.partition_point(|&(t, _)| t <= since)
+        ..step_windows.partition_point(|&(t, _)| t <= departure)];
     let walk_start = windows.windows(ALIGHT_OF).find_map(|w| {
         (w.iter().filter(|(_, steps)| *steps).count() >= ALIGHT_WINDOWS)
             .then(|| w.iter().find(|(_, steps)| *steps).unwrap().0 - window_ns)
@@ -3013,15 +3014,23 @@ fn missed_stop(
         .count();
     let stop_ns = walk_start - s_ns(ALIGHT_AFTER_STOP_S);
     // Riding up to the walk: a departure before it, with no stop since (not walking into the station to board).
-    let rode_from = departures
-        .iter()
+    let rode_from = departures[..departures.partition_point(|&d| d < walk_start)]
+        .last()
         .copied()
-        .filter(|&d| d > walk_start - s_ns(RECORD_MAX_DWELL_S) && d < walk_start)
-        .max()?;
-    let found = train_stops.iter().any(|(s, ..)| {
-        s.t_ns > rode_from.min(walk_start - s_ns(MISSED_STOP_LOOKBACK_S)) && s.t_ns < departure
-    });
-    let departed_between = departures.iter().any(|&d| d > stop_ns && d < departure);
+        .filter(|&d| d > walk_start - s_ns(RECORD_MAX_DWELL_S))?;
+    // Stops are in the order found, a missed one at most a dwell and a walk after its time: those found since.
+    let from = rode_from.min(walk_start - s_ns(MISSED_STOP_LOOKBACK_S));
+    let found = recent(
+        train_stops,
+        |x| x.0.t_ns,
+        from,
+        s_ns(MISSED_STOP_DISORDER_S),
+    )
+    .iter()
+    .any(|(s, ..)| s.t_ns > from && s.t_ns < departure);
+    let departed_between = departures[departures.partition_point(|&d| d <= stop_ns)..]
+        .first()
+        .is_some_and(|&d| d < departure);
     (walked >= MISSED_STOP_WALK_WINDOWS && !found && !departed_between).then_some(
         train_stops::Stop {
             t_ns: stop_ns,
