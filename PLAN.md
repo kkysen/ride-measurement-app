@@ -877,9 +877,17 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
       `864d35e` (each pair of stations' track remembered: 25 us), `036a175` (dwell, route, fades by binary search).
     - `b1d8e7b`: `Fusion::timeline` (asked at every smoothing tick) keeps its settled segments: 4 to 74 us before,
       6 to 17 us now (the copy of what's kept).
-    - Left: `stops()` and `smoothed()` still hand the app the whole ride at every smoothing tick (an FFI that
-      sends only what changed would fix it); `Fusion::aboard_at` scans all stops, but only while a ride up or
-      down is recent.
+    - Done (`bad96b9`, `1f11f16`, `51f946b`, `282afe6`, `28f997f`): the smoothing tick's FFI sends only what changed.
+      `stops_since` and `timeline_since` take the count the app's copy has settled (`SettledList`) and return the rest:
+      settled records never change, and the timeline's last kept segment still grows, so it isn't counted settled.
+      On `20261022-002914` a tick sends 4.7 items in the first 10 minutes and 4.9 in the last (94.7 before);
+      the getters take 3.3 and 16.9 us there (6.7 and 26.0 us for the whole lists), most of it the open tail's recompute.
+      `crates/cli/examples/deltas.rs` (scratch, `replay_with_hook`) applied the deltas at every status (and every 7th)
+      on all 18 sessions: equal to the whole lists at all 5,662 ticks; `deltas_rebuild_the_lists` does it on a synthetic ride.
+      `smoothed()` already sends only the 10-minute window live (flat); `LiveTrack.applySmoothed` now looks only there.
+      `Fusion::aboard_at` and the elevator check's departures by binary search and newest first: statuscost hash the same on all 18.
+      Unchecked on the phone. Still per tick in Kotlin: copying the lists of references for the `StateFlow`s (one per fix too).
+      Left: `missed_stop` (at each step window while walking in the subway) still scans every step window, departure, and stop.
 
 Laptop memory (2026-10-24): parallel replays over all sessions (about 1.5 GB each on the longest) crashed WSL.
 `just sweep <example>` runs one over every session in turn, each capped at 3 GB,
