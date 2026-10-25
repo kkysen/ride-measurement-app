@@ -81,7 +81,15 @@ abstract class CargoTask @Inject constructor(private val exec: ExecOperations) :
         exec.exec {
             workingDir = repoRoot.get().asFile
             commandLine("cargo", *args)
+            // The paths below assume `target/` in the repo, so a `$CARGO_TARGET_DIR` from the shell must not move it.
+            environment.remove("CARGO_TARGET_DIR")
         }
+    }
+
+    // Fail here, not later as "Rust core failed to load" on the phone, if `cargo` didn't leave the library where expected.
+    protected fun requireLibrary(path: String) {
+        val lib = repoRoot.get().file(path).asFile
+        if (!lib.isFile) throw GradleException("`cargo` built no `$path`")
     }
 }
 
@@ -94,6 +102,7 @@ abstract class CargoBuildAndroid @Inject constructor(exec: ExecOperations, priva
     @TaskAction
     fun build() {
         cargo("build", "--release", "-p", "ride-ffi", "--lib", "--target", "aarch64-linux-android")
+        requireLibrary("target/aarch64-linux-android/release/libride_ffi.so")
         fs.sync {
             from(repoRoot.file("target/aarch64-linux-android/release/libride_ffi.so"))
             into(outDir.dir("arm64-v8a"))
@@ -111,6 +120,7 @@ abstract class UniffiBindings @Inject constructor(exec: ExecOperations, private 
     @TaskAction
     fun generate() {
         cargo("build", "--release", "-p", "ride-ffi", "--lib")
+        requireLibrary("target/release/libride_ffi.so")
         fs.delete { delete(outDir) }
         cargo(
             "run", "--release", "-q", "-p", "ride-ffi", "--bin", "uniffi-bindgen", "--",
