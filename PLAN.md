@@ -747,6 +747,20 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    freezing the spread axis once its sign is known, on `193658`, `011209` and `003357` 19 and 14 (was 24 and 13);
    updating the axis only when one direction holds 3 times the rest of the spread (`axis-gate.patch`), 19 and 13.
    Starts can't score the sign: from rest, the speed rises either way.
+   Learning the axis from the push itself, also tried, none better, not committed (patches in `target/axis/`;
+   baseline at `HEAD` braking falls 43, rises 25, flat 40; starts right 93, wrong 10, flat 11):
+   the axis with its sign from the horizontal acceleration summed over the first 10 s after each stop ends
+   and leaky-summed (8 s) up to each stop, kept only when at least 2 m/s and 60% of the summed magnitude,
+   the spread no longer turning it after (`push.patch`), braking 43, 27, 38: the phone is rarely still long enough
+   to mark a stop (9 pushes on `193658`); the same also starting a push at each door closing (`push2.patch`),
+   39, 24, 45; at each start surge and stopping lurch from `crate::stops` instead (`surge.patch`), 34, 27, 47;
+   the spread's covariance uncentered, 28, 30, 50.
+   The false door cycle mid-river on `193658` (opening 7:59:22, closing 8:00:05 pm, found 8:00:10) has no lurch
+   or start surge around it, like several real ones; scored with the scratch `crates/cli/examples/doorscore.rs`
+   (`DUMP=1 just sweep doorscore`, `target/axis/doors-base.txt`): of 251 cycles on all rides, 137 near a tap.
+   The quietest 5 s of the cycle (median of 1 s stds of `|a|`) was 0.37 m/s^2 there, but real cycles reach 0.38
+   to 0.98 (rider handling), so vibration doesn't separate it; no change made.
+   Cycles whose quietest 5 s is over 1.0 (25, none near a tap, mostly the rider walking) could be dropped by it.
 7. Done (`d56a86b`): stops found between stations. A stop with no closing heard and the same registered cell
    as the stop before (the rider aboard) is `StopRecord::between_stations`: zero speed kept, no dwell, the live
    dwell not started there, labeled "between stations" on the graph. Against the "train stopped" taps
