@@ -929,6 +929,9 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
         17 to 38% over 1 mph on two rides; right after a fix p99 5 to 19 mph, max 6 to 120 mph.
         The backward pass started at the last fix lacks what the full window gave it (the raw GNSS speeds, the stop
         ramps before the previous correction), so it isn't pinned there as assumed. Not usable as is.
+        Rider-agreed next step (2026-10-25): fold this into the speed estimate work after the Saturday fixes.
+        The smoother reaching 45 min back (likely the accelerometer bias state) is the same non-locality;
+        once that is fixed, retry gap-only. Until then the live smoothing stays as it is.
 
 Laptop memory (2026-10-24): parallel replays over all sessions (about 1.5 GB each on the longest) crashed WSL.
 `just sweep <example>` runs one over every session in turn, each capped at 3 GB,
