@@ -228,6 +228,11 @@ Signals, what they showed, and how to use them:
   on trains or stations; not yet identified. Phones and trackers (Apple, Find My Device `0x40` Eddystone) are riders.
 - **Crowding**: BLE device counts (300 to 600 on platforms), but the unfiltered scan pauses with the screen off, so normalize for that;
   the user's Aranet4 (in the BLE data) gives CO2 (640 to 1180 ppm on a crowded 2), temperature, humidity, and a second barometer.
+  Decoded by `ride_fusion::aranet` (`crates/cli/examples/co2.rs` per reading). Over 694 readings with the screen on, CO2 follows
+  near devices (≥ -80 dBm, 30 s): Spearman 0.55, median 570 ppm under 50 devices, 970 at 150 to 200, 1025 over 300.
+  Cars differ more than crowds explain (ventilation): 2050 ppm on a 2 (Oct 21, 6:28 pm) and 1720 on a 7 at ~190 devices,
+  700 on the C at 80. Transfer passages: 1230 to 1600 ppm at 14 St to the L (Oct 23, 7:47 pm) with only 76 devices.
+  To do: fetch the device's stored history over GATT, for screen-off stretches (the filtered scan drops its advertisements).
 - **Pressure**: 0.6 m noise; stair descents are clear; tunnel pressure waves are large (a "-95 m" dip under the East River),
   so a grade term needs them rejected. Battery temperature is useless (phone heat, 1 minute steps).
 - **Operation**: detect CBTC (beacon, line, smooth spacing) and ATO vs ATPM (ATO's repeatable jerk-limited profile and stopping point;
