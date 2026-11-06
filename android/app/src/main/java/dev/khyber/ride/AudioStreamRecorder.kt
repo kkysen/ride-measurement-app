@@ -8,12 +8,15 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTimestamp
 import android.media.MediaRecorder
+import android.media.MicrophoneInfo as AndroidMicrophoneInfo
 import android.os.SystemClock
 import android.util.Log
 import com.google.protobuf.ByteString
 import dev.khyber.ride.proto.AudioChunk
 import dev.khyber.ride.proto.AudioInfo
 import dev.khyber.ride.proto.AudioTimestamp as PbAudioTimestamp
+import dev.khyber.ride.proto.Coordinate3F
+import dev.khyber.ride.proto.MicrophoneInfo
 import dev.khyber.ride.proto.StreamInfo
 import dev.khyber.ride.proto.StreamKind
 import java.io.ByteArrayOutputStream
@@ -21,20 +24,30 @@ import java.io.File
 import uniffi.ride_ffi.StreamWriter
 
 /**
- * Lossless mono 16-bit PCM from the microphone into the `audio` stream, one chunk per [CHUNK_FRAMES],
- * with `AudioRecord` boot-time timestamps so it lines up with the sensors.
+ * Lossless 16-bit PCM from every microphone at once (one interleaved channel each) at the input's highest
+ * native rate, into the `audio` stream, two seconds per chunk, with `AudioRecord` boot-time timestamps
+ * so it lines up with the sensors.
  * Uses the `UNPROCESSED` source when the phone supports it, so no gain control or noise suppression alters it.
+ * The microphones, what the input supports, and any format Android refused are all written into the session.
  */
+@SuppressLint("MissingPermission") // Only made after `RECORD_AUDIO` is checked.
 class AudioStreamRecorder(context: Context, dir: File) {
-    private val unprocessed = context.getSystemService(AudioManager::class.java)
+    private val audioManager = context.getSystemService(AudioManager::class.java)
+    private val unprocessed = audioManager
         .getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED) == "true"
     private val source = if (unprocessed) MediaRecorder.AudioSource.UNPROCESSED else MediaRecorder.AudioSource.VOICE_RECOGNITION
     /** The phone's own microphone, asked for so a headset's doesn't take over when one is connected. */
-    private val builtInMic = context.getSystemService(AudioManager::class.java)
+    private val builtInMic = audioManager
         .getDevices(AudioManager.GET_DEVICES_INPUTS)
         .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+    private val microphones = Health.guard("microphones") { audioManager.microphones } ?: emptyList()
+    private val refused = ArrayList<String>()
+    private val record: AudioRecord = open()
+    val sampleRateHz: Int = record.sampleRate
+    val channels: Int = record.channelCount
+    private val readFrames = sampleRateHz / 10
+    private val chunkFrames = sampleRateHz * 2
     private val writer = StreamWriter.create(dir.path, NAME)
-    private var record: AudioRecord? = null
     private var thread: Thread? = null
 
     @Volatile
@@ -50,25 +63,87 @@ class AudioStreamRecorder(context: Context, dir: File) {
             .setKind(StreamKind.STREAM_KIND_AUDIO)
             .setAudio(
                 AudioInfo.newBuilder()
-                    .setSampleRateHz(SAMPLE_RATE_HZ)
-                    .setChannels(1)
+                    .setSampleRateHz(sampleRateHz)
+                    .setChannels(channels)
                     .setAudioSource(source)
                     .setAudioSourceName(if (unprocessed) "UNPROCESSED" else "VOICE_RECOGNITION")
-                    .setInputDevice(builtInMic?.let { "${it.productName} ${it.address}".trim() } ?: ""),
+                    .setInputDevice(builtInMic?.let { "${it.productName} ${it.address}".trim() } ?: "")
+                    .addAllMicrophones(microphones.map(::microphoneInfo))
+                    .addAllDeviceSampleRates(builtInMic?.sampleRates?.toList() ?: emptyList())
+                    .addAllDeviceChannelCounts(builtInMic?.channelCounts?.toList() ?: emptyList())
+                    .addAllDeviceChannelIndexMasks(builtInMic?.channelIndexMasks?.toList() ?: emptyList())
+                    .addAllDeviceChannelMasks(builtInMic?.channelMasks?.toList() ?: emptyList())
+                    .setChannelIndexMask(record.format.channelIndexMask)
+                    .setEncoding(record.format.encoding)
+                    .addAllRefusedFormats(refused),
             )
             .build()
 
-    @SuppressLint("MissingPermission") // Only started after `RECORD_AUDIO` is checked.
-    fun start() {
-        val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE_HZ, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val r = AudioRecord(source, SAMPLE_RATE_HZ, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuffer, READ_FRAMES * 2 * 8))
-        record = r
+    /**
+     * The highest native rate the input lists (48 kHz if it lists none: Android resamples any rate asked for,
+     * and more than native is no more data), with a channel per microphone, or as many as the input says it has
+     * if more. Fewer channels only if Android refuses, each refusal kept for the session.
+     */
+    private fun open(): AudioRecord {
+        val rates = builtInMic?.sampleRates?.filter { it > 0 }?.sortedDescending()?.takeIf { it.isNotEmpty() } ?: listOf(48_000)
+        val builtIn = microphones.count { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+        val most = maxOf(
+            builtIn,
+            builtInMic?.channelCounts?.maxOrNull() ?: 0,
+            builtInMic?.channelIndexMasks?.maxOfOrNull { Integer.bitCount(it) } ?: 0,
+            1,
+        )
+        for (rate in rates) {
+            for (n in most downTo 1) {
+                val format = AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(rate)
+                    .setChannelIndexMask((1 shl n) - 1)
+                    .build()
+                tryOpen(format, "$rate Hz, ${n} channels by index")?.let { return it }
+            }
+        }
+        val mono = AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setSampleRate(rates.first())
+            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+            .build()
+        return tryOpen(mono, "${rates.first()} Hz mono") ?: throw IllegalStateException("no audio format opened: $refused")
+    }
+
+    private fun tryOpen(format: AudioFormat, label: String): AudioRecord? {
+        val r = try {
+            val frameBytes = 2 * format.channelCount
+            val minBuffer = AudioRecord.getMinBufferSize(format.sampleRate, format.channelMask, format.encoding)
+            AudioRecord.Builder()
+                .setAudioSource(source)
+                .setAudioFormat(format)
+                .setBufferSizeInBytes(maxOf(minBuffer, format.sampleRate / 10 * frameBytes * 8))
+                .build()
+        } catch (e: Exception) {
+            refused.add("$label: $e")
+            return null
+        }
+        if (r.state != AudioRecord.STATE_INITIALIZED || r.channelCount != format.channelCount || r.sampleRate != format.sampleRate) {
+            refused.add("$label: got state ${r.state}, ${r.sampleRate} Hz, ${r.channelCount} channels")
+            r.release()
+            return null
+        }
         builtInMic?.let { r.setPreferredDevice(it) }
+        return r
+    }
+
+    fun start() {
+        val r = record
         running = true
         r.startRecording()
         // Shown and written into the session if Android records from something else anyway (e.g. a wired headset).
         r.routedDevice?.takeIf { it.type != AudioDeviceInfo.TYPE_BUILTIN_MIC }?.let {
             Health.report("audio", IllegalStateException("recording from ${it.productName} (type ${it.type}), not the phone's microphone"))
+        }
+        val builtIn = microphones.count { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+        if (channels < builtIn) {
+            Health.report("audio", IllegalStateException("recording $channels of $builtIn microphones: Android refused more ($refused)"))
         }
         thread = Thread({ Health.guard("audio") { loop(r) } }, "audio").apply { start() }
     }
@@ -76,7 +151,7 @@ class AudioStreamRecorder(context: Context, dir: File) {
     fun stop() {
         running = false
         thread?.join()
-        record?.run {
+        record.run {
             stop()
             release()
         }
@@ -85,8 +160,10 @@ class AudioStreamRecorder(context: Context, dir: File) {
     }
 
     private fun loop(r: AudioRecord) {
-        val buf = ByteArray(READ_FRAMES * 2)
-        val pcm = ByteArrayOutputStream(CHUNK_FRAMES * 2)
+        val frameBytes = 2 * channels
+        val buf = ByteArray(readFrames * frameBytes)
+        val pcm = ByteArrayOutputStream(chunkFrames * frameBytes)
+        val sameness = ChannelSameness(channels, sampleRateHz * SAMENESS_S)
         val timestamps = ArrayList<PbAudioTimestamp>()
         val ts = AudioTimestamp()
         var chunkFirstFrame = 0L
@@ -115,7 +192,8 @@ class AudioStreamRecorder(context: Context, dir: File) {
             }
             pcm.write(buf, 0, n)
             val readFirstFrame = frameCount
-            frameCount += n / 2
+            frameCount += n / frameBytes
+            sameness.add(buf, n)?.let { Health.report("audio", IllegalStateException(it)) }
             val stamped = r.getTimestamp(ts, AudioTimestamp.TIMEBASE_BOOTTIME) == AudioRecord.SUCCESS
             if (stamped) {
                 timestamps.add(PbAudioTimestamp.newBuilder().setFramePosition(ts.framePosition).setBoottimeNs(ts.nanoTime).build())
@@ -124,28 +202,29 @@ class AudioStreamRecorder(context: Context, dir: File) {
             Health.guard("live audio") {
                 val last = timestamps.lastOrNull()
                 val tNs = if (last != null) {
-                    last.boottimeNs + (frameCount - last.framePosition) * 1_000_000_000L / SAMPLE_RATE_HZ
+                    last.boottimeNs + (frameCount - last.framePosition) * 1_000_000_000L / sampleRateHz
                 } else {
                     SystemClock.elapsedRealtimeNanos()
                 }
                 LiveSpeed.onAudio(
                     tNs,
+                    sampleRateHz,
+                    channels,
                     readFirstFrame,
                     buf.copyOf(n),
                     if (stamped) listOf(ts.framePosition) else emptyList(),
                     if (stamped) listOf(ts.nanoTime) else emptyList(),
                 )
             }
-            if (pcm.size() >= CHUNK_FRAMES * 2) flush()
+            if (pcm.size() >= chunkFrames * frameBytes) flush()
         }
         flush()
     }
 
     companion object {
         const val NAME = "audio"
-        const val SAMPLE_RATE_HZ = 16_000
-        private const val READ_FRAMES = SAMPLE_RATE_HZ / 10
-        private const val CHUNK_FRAMES = SAMPLE_RATE_HZ * 2
+        /** How long the channels are compared at the start, to tell copies of one microphone from several. */
+        private const val SAMENESS_S = 10
 
         private const val PREFS = "audio"
         private const val ENABLED = "enabled"
@@ -155,5 +234,53 @@ class AudioStreamRecorder(context: Context, dir: File) {
         fun setEnabled(context: Context, enabled: Boolean) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(ENABLED, enabled).apply()
         }
+    }
+}
+
+private fun microphoneInfo(m: AndroidMicrophoneInfo): MicrophoneInfo {
+    fun c(p: AndroidMicrophoneInfo.Coordinate3F) = Coordinate3F.newBuilder().setX(p.x).setY(p.y).setZ(p.z).build()
+    return MicrophoneInfo.newBuilder()
+        .setDescription(m.description)
+        .setId(m.id)
+        .setType(m.type)
+        .setAddress(m.address)
+        .setLocation(m.location)
+        .setGroup(m.group)
+        .setIndexInTheGroup(m.indexInTheGroup)
+        .setPosition(c(m.position))
+        .setOrientation(c(m.orientation))
+        .setSensitivityDb(m.sensitivity)
+        .setMaxSplDb(m.maxSpl)
+        .setMinSplDb(m.minSpl)
+        .setDirectionality(m.directionality)
+        .addAllFrequencyResponseHz(m.frequencyResponse.map { it.first })
+        .addAllFrequencyResponseDb(m.frequencyResponse.map { it.second })
+        .build()
+}
+
+/**
+ * Over the first [frames] frames, whether every channel is an exact copy of the first: if so, Android gave
+ * one microphone several times over, which is said once (the recording itself is kept as it came).
+ */
+private class ChannelSameness(private val channels: Int, private val frames: Int) {
+    private var seen = 0
+    private val differs = BooleanArray(channels)
+    private var done = channels < 2
+
+    fun add(buf: ByteArray, n: Int): String? {
+        if (done) return null
+        val frameBytes = 2 * channels
+        var f = 0
+        while (f + frameBytes <= n && seen < frames) {
+            for (c in 1 until channels) {
+                if (buf[f + 2 * c] != buf[f] || buf[f + 2 * c + 1] != buf[f + 1]) differs[c] = true
+            }
+            f += frameBytes
+            seen++
+        }
+        if (seen < frames) return null
+        done = true
+        val copies = (1 until channels).filter { !differs[it] }
+        return if (copies.isEmpty()) null else "channels $copies were exact copies of channel 0 for the first ${frames} frames"
     }
 }
