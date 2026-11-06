@@ -14,7 +14,7 @@ It's too weak to read speed from: picking the best speed per frame is off by 7 t
 4 m/s of a prior 3 m/s off ends 1.0 to 4.5 m/s off, not reliably nearer. Band levels tell motoring from the rest at
 AUC 0.57 and braking at 0.62: not usable either. Next: longer FFTs (finer bins at low k) and other car types.
 
-Usage: `vvvf_gnss.py [ride ...]`; needs `audio.wav`, `audio_ts.csv`, `own.csv` in `target/analysis/<ride>`."""
+Usage: `vvvf_gnss.py [ride ...]`; needs `audio.wav`, `audio_ts.csv`, `own.csv` in `data/work/analysis/<ride>`."""
 
 import csv
 import sys

@@ -1,4 +1,4 @@
-"""Stations from the sensors alone: at each door cycle's closing (Rust, `target/doors/`), the registered LTE cell
+"""Stations from the sensors alone: at each door cycle's closing (Rust, `data/work/doors/`), the registered LTE cell
 in the 8 s before it, while the train surely stood. Stops on any ride sharing that cell are one station.
 Prints each cell's stops across rides with the stations `trip_paths.py` put it at (from GNSS at the ends of each
 leg and the MTA's stop orders, before the rider's corrections), and how often each cell recurs.
@@ -33,7 +33,7 @@ def stops():
     """[(ride, close ns, cell)] with the cell most often registered while standing, if any."""
     out = []
     for ride in RIDES:
-        cyc = np.loadtxt(ROOT / "target/doors" / f"{ride}.csv", delimiter=",", skiprows=1, dtype=np.int64).reshape(-1, 2)
+        cyc = np.loadtxt(ROOT / "data/work/doors" / f"{ride}.csv", delimiter=",", skiprows=1, dtype=np.int64).reshape(-1, 2)
         cs = cells(ride)
         for _, close in cyc:
             seen = Counter(c for t, c in cs if close - SURE_S * 1e9 <= t <= close)

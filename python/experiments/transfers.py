@@ -1,5 +1,5 @@
 """The rider's transfers: each walk off a train paired with the next walk onto one, from the stop records
-(`stops.csv`, `alighted_ns` and `boarded_ns` from walking, in `target/analysis/stops2-<ride>` from
+(`stops.csv`, `alighted_ns` and `boarded_ns` from walking, in `data/work/analysis/stops2-<ride>` from
 `crates/cli/examples/export.rs`), with the lines on either side from `train_line.py`.
 
 Per transfer: the station, the train left (line, direction, chime family, the rider's car beacon) and the one

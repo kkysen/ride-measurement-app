@@ -2,7 +2,7 @@
 to GNSS acceleration (the phone's own speed, differentiated, where fixes are 1 s apart), then per car and
 averaged over the cars heard in the same second: noise (the residual's rms) against the signal, and whether two cars
 agree with each other better than either agrees with GNSS (the "noise" is the train's own motion) or not
-(it's the beacons' sensors or their 1/64 g steps). Needs `ble.csv` and `fixes.csv` in `target/analysis/<ride>`."""
+(it's the beacons' sensors or their 1/64 g steps). Needs `ble.csv` and `fixes.csv` in `data/work/analysis/<ride>`."""
 
 import csv
 import itertools

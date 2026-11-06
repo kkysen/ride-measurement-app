@@ -1,6 +1,6 @@
 """Live (forward) speed against our own raw-Doppler GNSS speed where it's confident (the phone's own speed
 holds at 0 for seconds as a train departs), on the elevated 7 part of a run exported by
-`crates/cli/examples/export.rs` into target/analysis/<run>: everywhere, and inside simulated outages."""
+`crates/cli/examples/export.rs` into data/work/analysis/<run>: everywhere, and inside simulated outages."""
 
 import sys
 

@@ -34,7 +34,7 @@ import startstop as ss  # noqa: E402
 from stops import PRECISE, RIDES, aboard, gnss_speed, lurches, session  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-CACHE = ROOT / "target/cache/world_h"
+CACHE = ROOT / "data/work/cache/world_h"
 RATE = 50.0
 DIR_S = 3.0
 AFTER_S = (1.0, 5.0)
@@ -45,7 +45,7 @@ SEP_S = 30.0
 
 
 def world_h(name):
-    """`startstop.world_horizontal_50hz`, cached under `target/cache`."""
+    """`startstop.world_horizontal_50hz`, cached under `data/work/cache`."""
     CACHE.mkdir(parents=True, exist_ok=True)
     f = CACHE / f"{name}.npz"
     if f.exists():
@@ -135,7 +135,7 @@ def main_openings():
     extra = {b: 0 for b in bars}
     n_taps = 0
     for name in S.RIDES:
-        cycles = np.loadtxt(ROOT / "target/doors" / f"{name}.csv", delimiter=",", skiprows=1,
+        cycles = np.loadtxt(ROOT / "data/work/doors" / f"{name}.csv", delimiter=",", skiprows=1,
                             dtype=np.int64).reshape(-1, 2)
         tn, db, tpl, picks = L.learned(name, cycles)
         t, h = world_h(name) if name in RIDES else (None, None)

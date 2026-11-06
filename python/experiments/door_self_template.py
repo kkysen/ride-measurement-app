@@ -1,5 +1,5 @@
 """Openings from the sound alone, learned per ride: each Rust door cycle (`crates/fusion/examples/door_cycles.rs`,
-in `target/doors/`) has a closing that's sure and an opening that isn't, since several steps up can come before one
+in `data/work/doors/`) has a closing that's sure and an opening that isn't, since several steps up can come before one
 closing. The doors' own opening sound repeats within a ride (`door_template.py`), so: average the onset spectrograms
 at every candidate step up, pick each cycle's best match, re-average from the picks, and repeat.
 Scores the picked openings against the rider's "doors open" taps (which only score), against the earliest and latest
@@ -50,7 +50,7 @@ def main():
     tot = {"earliest": 0, "latest": 0, "learned": 0, "any": 0}
     n_taps = 0
     for name in RIDES:
-        cycles = np.loadtxt(ROOT / "target/doors" / f"{name}.csv", delimiter=",", skiprows=1, dtype=np.int64).reshape(-1, 2)
+        cycles = np.loadtxt(ROOT / "data/work/doors" / f"{name}.csv", delimiter=",", skiprows=1, dtype=np.int64).reshape(-1, 2)
         t, lv = D.levels(name)
         tn, db = T.spectrogram(name)
         cands = []

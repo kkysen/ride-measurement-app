@@ -11,7 +11,7 @@ one per car, nearer cars stronger, not one per train. IDs recur across rides (`a
 Decoded, the axes are 1 g long (64 counts): the `a1xx` devices (the 7's R188s) lie flat (z about -64); the `97xx` to
 `9exx` ones (from 7:10 pm, another fleet) stand on edge (x about +-64), the sign flipping between cars facing
 opposite ways. Each car's own accelerometer: in principle the car's motion, at the beacon's rate (about 1 Hz here).
-Needs `ble.csv` and `fixes.csv` per ride in `target/analysis`."""
+Needs `ble.csv` and `fixes.csv` per ride in `data/work/analysis`."""
 
 import csv
 import sys

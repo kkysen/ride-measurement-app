@@ -9,7 +9,7 @@ L spreads 31 to 92 m (IQR), and 1 / length barely follows the speed (correlation
 The registered LTE cell, polled every 1 s, is no better: 31 passes, a 6 s median stay, correlation -0.14, 11 m/s rms;
 handovers follow the modem's hysteresis, not the platform's edges. It needs faster Wi-Fi scans or RTT ranging.
 
-Needs `wifi.csv`, `events.csv`, and `fused.csv` per ride in `target/analysis`."""
+Needs `wifi.csv`, `events.csv`, and `fused.csv` per ride in `data/work/analysis`."""
 
 import csv
 import sys

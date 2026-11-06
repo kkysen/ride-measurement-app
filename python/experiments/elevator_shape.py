@@ -44,12 +44,12 @@ def shape(sec, alt, a, b):
 
 
 def clock(session, t):
-    """`t` as a New York clock time, from the ride's exported fixes (`target/analysis/<ride>/fixes.csv`)."""
+    """`t` as a New York clock time, from the ride's exported fixes (`data/work/analysis/<ride>/fixes.csv`)."""
     import csv
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
-    fixes = ROOT / "target/analysis" / session.name.split("-")[1] / "fixes.csv"
+    fixes = ROOT / "data/work/analysis" / session.name.split("-")[1] / "fixes.csv"
     if not fixes.exists():
         return "?"
     r = next(csv.DictReader(open(fixes)))

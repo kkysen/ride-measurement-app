@@ -7,7 +7,7 @@ where its accuracy is good) per second: `car = g * a * u + noise`, with `u` a un
 `u` and `g` come from the least-squares fit of the three axes on `a`; the single-axis fit is the old model.
 Rides with car beacons and GNSS: `154951` (the 7, elevated), `184134` (the 7 and Queens Boulevard), `151449`.
 
-Needs `target/analysis/<ride>/{ble,fixes}.csv`."""
+Needs `data/work/analysis/<ride>/{ble,fixes}.csv`."""
 
 import csv
 import sys
@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
-ANALYSIS = ROOT / "target/analysis"
+ANALYSIS = ROOT / "data/work/analysis"
 PREFIX = "e2c56db5dffb48d2b060d0f5a710"
 COUNT = 9.80665 / 64
 RIDES = ["154951", "184134", "151449"]

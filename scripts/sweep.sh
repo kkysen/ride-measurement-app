@@ -9,7 +9,7 @@ example=$1
 shift
 jobs=${SWEEP_JOBS:-4}
 cap=${SWEEP_CAP:-1200M}
-out=target/sweep/$example
+out=data/work/sweep/$example
 mkdir -p "$out"
 bin=target/release/examples/$example
 sessions=()

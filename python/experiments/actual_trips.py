@@ -3,15 +3,15 @@ that day (subwaydata.nyc's daily archive, built from the GTFS-realtime feeds: ev
 departure per stop, and the train's ID). Unlike the schedule, it tells apart lines that share stops (2 and 3,
 B and C) by when each train actually stopped, and gives the trip the rider's own `transit` stream will record live.
 
-Inputs: `stops.csv` and `fixes.csv` in `target/analysis/stops2-<ride>` (stop records, sensors only, with walking off
+Inputs: `stops.csv` and `fixes.csv` in `data/work/analysis/stops2-<ride>` (stop records, sensors only, with walking off
 and on), the MTA's station list (`crates/fusion/data/stations.csv`) and GTFS stops (`data/mta/gtfs/stops.txt`),
-and the archive unpacked under `target/` (`ARCHIVE`, default the newest `target/dl-subwaydata-*/x`), downloaded with
+and the archive unpacked under `data/downloads/` (`ARCHIVE`, default the newest `data/downloads/dl-subwaydata-*/x`), downloaded with
 `curl -L https://subwaydata.nyc/data/subwaydatanyc_YYYY-MM-DD_csv.tar.xz` per day.
 Each ride is split into legs where the rider walked off or on; within a leg, every stop of every trip is a
 candidate when the trip was at a stop of that station within `SLACK_S` of the rider's stop (its arrival before
 the rider's departure and its departure after the rider's stop, both with slack). The trip matching most stops
 wins, then the smaller time error. Same-named stations (several 96 Sts, 7 Avs) are narrowed to the one nearest
-Android's own fix at the time (`target/analysis/trainline/net-<ride>.csv`). Labels (taps and tags) aren't used.
+Android's own fix at the time (`data/work/analysis/trainline/net-<ride>.csv`). Labels (taps and tags) aren't used.
 
 2026-10-22, 8 subway rides, 17 legs (archive for 2026-10-20 and 21, 1.4 MB each):
 - Clear: the 7 express to Flushing on 2026-10-20 is train `07 1536+ 34H/MST` (trip `093650_7X..N`) in both of
@@ -34,7 +34,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[2]
-ANALYSIS = ROOT / "target/analysis"
+ANALYSIS = ROOT / "data/work/analysis"
 NY = ZoneInfo("America/New_York")
 RIDES = ["151449", "154951", "184134", "214427", "135509", "155919", "182135", "215922"]
 SLACK_S = 45.0
@@ -57,7 +57,7 @@ def meters(a, b):
 def archive():
     if "ARCHIVE" in os.environ:
         return Path(os.environ["ARCHIVE"])
-    return max((ROOT / "target").glob("dl-subwaydata-*/x"))
+    return max((ROOT / "data/downloads").glob("dl-subwaydata-*/x"))
 
 
 def load_archive(path):
@@ -102,7 +102,7 @@ def candidates(name, t, net, names):
 
 def legs(ride):
     """The ride's stops in the subway as legs: [[(name, stopped s, departed s or None)]], split at walking off/on,
-    and Android's own fixes [(s, lat, lon)] (`target/analysis/trainline/net-<ride>.csv`, if exported)."""
+    and Android's own fixes [(s, lat, lon)] (`data/work/analysis/trainline/net-<ride>.csv`, if exported)."""
     d = ANALYSIS / f"stops2-{ride}"
     fx = read(d / "fixes.csv")[0]
     off = int(fx["time_ms"]) * 1_000_000 - int(fx["t_ns"])

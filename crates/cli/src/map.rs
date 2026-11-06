@@ -286,7 +286,7 @@ mod tests {
         let out = dir.path().join("map.html");
         super::map(&Session::open(dir.path()).unwrap(), &out, None, false).unwrap();
         let html = std::fs::read_to_string(&out).unwrap();
-        // To look at the demo map: `RIDE_MAP_DEMO=$PWD/target/demo-map.html cargo test -p ride-cli map`.
+        // To look at the demo map: `RIDE_MAP_DEMO=$PWD/data/work/demo-map.html cargo test -p ride-cli map`.
         if let Some(demo) = std::env::var_os("RIDE_MAP_DEMO") {
             std::fs::copy(&out, demo).unwrap();
         }

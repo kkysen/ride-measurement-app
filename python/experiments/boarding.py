@@ -11,7 +11,7 @@ Rules scored: `last_steps` (now), `cycle` (any step in the cycle, else the cycle
 `beacon` (the first reading of a beacon first heard after the last steps that is 8 dB over its first readings,
 inside the cycle if one), and `combined` (steps in the cycle, else beacon, else the cycle's middle).
 
-Needs `target/analysis/stops3-<ride>/{stops,steps,door_cycles,events,fixes}.csv` and `target/analysis/<ride>/ble.csv`."""
+Needs `data/work/analysis/stops3-<ride>/{stops,steps,door_cycles,events,fixes}.csv` and `data/work/analysis/<ride>/ble.csv`."""
 
 import csv
 from datetime import datetime
@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
-ANALYSIS = ROOT / "target/analysis"
+ANALYSIS = ROOT / "data/work/analysis"
 RIDES = ["151449", "154951", "184134", "214427", "135509", "155919", "182135", "215922"]
 PREFIX = "e2c56db5dffb48d2b060d0f5a710"
 RISE_DB = 8.0

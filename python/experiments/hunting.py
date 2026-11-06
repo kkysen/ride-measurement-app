@@ -54,7 +54,7 @@ def main():
         t, a = ss.world_horizontal_50hz(session=s)
         fe = features(t, a)
         walks = ST.walking(s)
-        cyc = np.loadtxt(ROOT / f"target/doors_eval/track/{name}/door_cycles.csv", delimiter=",", skiprows=1,
+        cyc = np.loadtxt(ROOT / f"data/work/doors_eval/track/{name}/door_cycles.csv", delimiter=",", skiprows=1,
                          dtype=np.int64).reshape(-1, 2)
         on = S.aboard(name, fe[:, 0])
         walking = np.array([((walks >= x - 4e9) & (walks < x + 10e9)).any() for x in fe[:, 0]])

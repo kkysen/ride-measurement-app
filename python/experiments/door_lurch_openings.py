@@ -67,7 +67,7 @@ def main():
     extra = {b: 0 for b in BARS}
     base_hits = base_extra = n_taps = n_cycles = n_anchored = 0
     for name in S.RIDES:
-        cycles = np.loadtxt(ROOT / "target/doors" / f"{name}.csv", delimiter=",", skiprows=1, dtype=np.int64).reshape(-1, 2)
+        cycles = np.loadtxt(ROOT / "data/work/doors" / f"{name}.csv", delimiter=",", skiprows=1, dtype=np.int64).reshape(-1, 2)
         tn, db, tpl, picks = learned(name, cycles)
         t, h3 = ss.world_horizontal_50hz(session=session(name))
         lu = lurches(t, np.column_stack([h3[:, 0], h3[:, 1], np.zeros(len(h3))]))

@@ -6,7 +6,7 @@ in the tone's last window: a tone with any prominent bin in 512 to 526 Hz while 
 Here every chime-like tone (any of the four bands 15 dB over its +-60 Hz neighborhood for 0.25 s) is scored
 by summing each family's best prominence over the tone's windows, and by the share of windows each family leads.
 
-Needs `target/audio/<ride>.wav` and `target/analysis/stops2-<ride>/{audio_ts,events}.csv`."""
+Needs `data/work/audio/<ride>.wav` and `data/work/analysis/stops2-<ride>/{audio_ts,events}.csv`."""
 
 import csv
 import re
@@ -18,7 +18,7 @@ import numpy as np
 from scipy import signal
 
 ROOT = Path(__file__).resolve().parents[2]
-ANALYSIS = ROOT / "target/analysis"
+ANALYSIS = ROOT / "data/work/analysis"
 RIDES = ["151449", "154951", "184134", "214427", "135509", "155919", "182135", "215922"]
 NPERSEG, HOP = 2048, 512
 PROMINENT_DB = 15.0
@@ -30,7 +30,7 @@ FAMILY = {"1": "R62", "3": "R62", "2": "Ntt", "7": "Ntt", "E": "Ntt", "F": "Ntt"
 def load(ride):
     d = ANALYSIS / f"stops2-{ride}"
     ts = np.loadtxt(d / "audio_ts.csv", delimiter=",", skiprows=1, dtype=np.int64)
-    with wave.open(str(ROOT / "target/audio" / f"{ride}.wav")) as w:
+    with wave.open(str(ROOT / "data/work/audio" / f"{ride}.wav")) as w:
         sr = w.getframerate()
         pcm = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float32)
     tags = []

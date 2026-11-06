@@ -6,7 +6,7 @@ Flags, with clock times:
 - jump: a cell whose station is over 1.5 km from both the station before it and after it in the ride,
   while those two are within 1 km of each other, all within 5 minutes;
 - back and forth: stations A, B, A in a row within 3 minutes, B being the flagged cell's.
-Needs `cell.csv`, `network.csv`, and `fixes.csv` per ride in `target/analysis`.
+Needs `cell.csv`, `network.csv`, and `fixes.csv` per ride in `data/work/analysis`.
 
 On nine rides (2026-10-22): 106 untagged cells placed, 2 flagged, both on the elevated 7 on Oct 20 at 4:02 pm:
 `28347409` (61 St-Woodside) and `28357391` (69 St) swapping back and forth between the two stations, a minute before

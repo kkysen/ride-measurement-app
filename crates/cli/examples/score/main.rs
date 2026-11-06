@@ -1,7 +1,7 @@
 // Every score of the examples `signs`, `holds`, `doorscore`, `curves`, `legs_gnss`, `jumps`, `legs`,
 // `stop_positions`, and `vertical` for one session, and `cost` (see `cost.rs`), each replay done once and shared by the scores that use the same options,
 // and only one replay held at a time.
-// Writes everything to `target/score/<session>.txt` and prints each score's summary line.
+// Writes everything to `data/work/score/<session>.txt` and prints each score's summary line.
 // Leaves out where the phone sat still (`Options::skip_still`) unless `WHOLE=1`.
 // Each replay's output is hashed, so a change meant to keep it the same can be checked.
 // `ONLY=signs,holds` runs only those scores (and only the replays they need); `DUMP=1` as in each example.
@@ -140,7 +140,7 @@ fn main() -> anyhow::Result<()> {
         cost::run(&r, &mut out)?;
     }
     out += &hashes.into_inner();
-    let path = std::path::Path::new("target/score").join(format!("{name}.txt"));
+    let path = std::path::Path::new("data/work/score").join(format!("{name}.txt"));
     std::fs::create_dir_all(path.parent().unwrap())?;
     std::fs::write(&path, &out)?;
     // The summary: each score's own line, which starts with its name.

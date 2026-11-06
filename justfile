@@ -51,7 +51,7 @@ apk:
 # Start the `adb` server, on localhost only: under WSL's mirrored networking `adb` hangs instead of starting it.
 adb-server:
     @if timeout 3 adb devices >/dev/null 2>&1; then echo "adb server already running"; \
-    else (nohup adb nodaemon server start > target/adb-server.log 2>&1 &) ; sleep 1; timeout 3 adb devices; fi
+    else (nohup adb nodaemon server start > data/work/adb-server.log 2>&1 &) ; sleep 1; timeout 3 adb devices; fi
 
 # Set the app's version for a new build on the phone, and the Rust core's to it if the Rust changed since.
 bump version:
@@ -103,6 +103,6 @@ sweep example *args:
     cargo build -q --release -p ride-cli --example {{example}}
     scripts/sweep.sh {{example}} {{args}}
 
-# Every score (see `crates/cli/examples/score/main.rs`) on every session: each session's in `target/score/`.
+# Every score (see `crates/cli/examples/score/main.rs`) on every session: each session's in `data/work/score/`.
 score *args:
     just sweep score {{args}}

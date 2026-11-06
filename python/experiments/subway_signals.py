@@ -5,7 +5,7 @@ cell, hunting (the bogies' lateral sway), and sound (door chimes, OMNY beeps). T
 fitted on all rides but one and scored on that one, for each ride in turn.
 
 Needs `data/gtfs/` (the MTA's GTFS `stops.txt`, `shapes.txt`, and `entrances.csv` from data.ny.gov),
-the CSVs from `crates/cli/examples/export.rs` and `radio.rs`, and WAVs from `ride wav` in `target/audio/`."""
+the CSVs from `crates/cli/examples/export.rs` and `radio.rs`, and WAVs from `ride wav` in `data/work/audio/`."""
 
 import csv
 import sys
@@ -167,7 +167,7 @@ def features(name, entrances, tracks):
     # (400 to 700 Hz: 441/555 and 516/645 Hz) and the OMNY beep's (2800 to 3050 Hz); the window's maximum.
     f["chime_snr"], f["omny_snr"] = np.full(n, np.nan), np.full(n, np.nan)
     ts = np.loadtxt(ANALYSIS / name / "audio_ts.csv", delimiter=",", skiprows=1, dtype=np.int64)
-    with wave.open(str(ROOT / "target/audio" / f"{name}.wav")) as wf:
+    with wave.open(str(ROOT / "data/work/audio" / f"{name}.wav")) as wf:
         sr = wf.getframerate()
         pcm = np.frombuffer(wf.readframes(wf.getnframes()), dtype="<i2").astype(float)
     frame_t = np.interp(np.arange(0, len(pcm) - sr, sr), ts[:, 0], ts[:, 1])

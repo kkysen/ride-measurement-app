@@ -31,7 +31,7 @@ from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[2]
 GTFS = ROOT / "data/mta/gtfs"
-ANALYSIS = ROOT / "target/analysis"
+ANALYSIS = ROOT / "data/work/analysis"
 NY = ZoneInfo("America/New_York")
 RIDES = {r: f"stops3-{r}" for r in ["151449", "154951", "184134", "214427", "135509", "155919", "182135", "215922"]}
 ON_TRACK_M = 80.0

@@ -3,7 +3,7 @@ our own Doppler speed (sigma under 0.5 m/s, fixes 1 s apart), its acceleration o
 per bin the 99th and 1st percentiles, i.e. the most the train motored and braked at that speed.
 
 Usage: `accel_curves.py model:ride[,ride...] ...`, e.g. `accel_curves.py R188:154951,184134`;
-needs `own.csv` in `target/analysis/<ride>`."""
+needs `own.csv` in `data/work/analysis/<ride>`."""
 
 import csv
 import sys

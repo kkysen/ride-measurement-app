@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ride  # noqa: E402
 
 SESSIONS = Path("/mnt/c/Users/kkyse/OneDrive/Khyber/Documents/RideLogger/sessions")
-ANALYSIS = Path(__file__).resolve().parents[2] / "target/analysis"
+ANALYSIS = Path(__file__).resolve().parents[2] / "data/work/analysis"
 
 
 LOCAL = Path(__file__).resolve().parents[2] / "data/sessions"

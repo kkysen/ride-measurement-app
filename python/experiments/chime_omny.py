@@ -27,7 +27,7 @@ OMNY_TAPS = {"184134": ["18:56:03", "19:16:02"], "214427": ["21:45:06.8"], "1355
 
 def load(name):
     ts = np.loadtxt(ANALYSIS / name / "audio_ts.csv", delimiter=",", skiprows=1, dtype=np.int64)
-    with wave.open(str(ROOT / "target/audio" / f"{name}.wav")) as w:
+    with wave.open(str(ROOT / "data/work/audio" / f"{name}.wav")) as w:
         sr = w.getframerate()
         pcm = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float32)
     return sr, pcm, ts
