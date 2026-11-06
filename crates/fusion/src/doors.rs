@@ -47,8 +47,9 @@ pub enum ChimeCars {
     /// 516 and 645 Hz, heard on the 1 (R62A) and the 3 (R62), which sound the same.
     R62,
 }
-const CHIME_WINDOW: usize = 2048;
-const CHIME_HOP: usize = 512;
+/// The chime's analysis windows (s): 2048 frames every 512 at 16 kHz, the same length of time at any rate.
+const CHIME_WINDOW_S: f64 = 0.128;
+const CHIME_HOP_S: f64 = 0.032;
 const CHIME_PROMINENT_DB: f64 = 15.0;
 const CHIME_NEIGHBORHOOD_HZ: f64 = 60.0;
 const CHIME_MIN_S: f64 = 0.25;
@@ -144,6 +145,8 @@ pub struct DoorDetector {
     next_level_frame: i64,
     next_chime_frame: i64,
     level_window: usize,
+    chime_window: usize,
+    chime_hop: usize,
     level: Spectrum,
     level_bins: (usize, usize),
     chime: Spectrum,
@@ -170,10 +173,12 @@ impl DoorDetector {
         let level_hop = (rate / LEVEL_RATE_HZ).round() as usize;
         let level_window = 2 * level_hop;
         let bin = |n: usize, hz: f64| (hz * n as f64 / rate).ceil() as usize;
-        let chime_df = rate / CHIME_WINDOW as f64;
+        let chime_window = (CHIME_WINDOW_S * rate).round() as usize;
+        let chime_hop = (CHIME_HOP_S * rate).round() as usize;
+        let chime_df = rate / chime_window as f64;
         let k = (CHIME_NEIGHBORHOOD_HZ / chime_df) as usize;
         let mut chime_bins = Vec::new();
-        for i in 0..CHIME_WINDOW / 2 {
+        for i in 0..chime_window / 2 {
             let f = i as f64 * chime_df;
             if let Some(c) = CHIME_HZ.iter().position(|&(a, b)| f >= a && f <= b) {
                 chime_bins.push((i, i.saturating_sub(k), i + k + 1, CHIME_CARS[c]));
@@ -191,12 +196,14 @@ impl DoorDetector {
             next_level_frame: 0,
             next_chime_frame: 0,
             level_window,
+            chime_window,
+            chime_hop,
             level: Spectrum::new(level_window),
             level_bins: (
                 bin(level_window, LEVEL_BAND_HZ.0),
                 bin(level_window, LEVEL_BAND_HZ.1),
             ),
-            chime: Spectrum::new(CHIME_WINDOW),
+            chime: Spectrum::new(chime_window),
             chime_bins,
             chime_range,
             levels: VecDeque::new(),
@@ -248,7 +255,7 @@ impl DoorDetector {
         // Analyze in time order, whichever window is due first.
         loop {
             let level_due = self.next_level_frame + self.level_window as i64 <= end;
-            let chime_due = self.next_chime_frame + CHIME_WINDOW as i64 <= end;
+            let chime_due = self.next_chime_frame + self.chime_window as i64 <= end;
             if level_due && (!chime_due || self.next_level_frame <= self.next_chime_frame) {
                 let start = self.next_level_frame;
                 self.next_level_frame += level_hop;
@@ -257,7 +264,7 @@ impl DoorDetector {
                 }
             } else if chime_due {
                 let start = self.next_chime_frame;
-                self.next_chime_frame += CHIME_HOP as i64;
+                self.next_chime_frame += self.chime_hop as i64;
                 self.on_chime_window(start);
             } else {
                 break;
@@ -338,11 +345,11 @@ impl DoorDetector {
     }
 
     fn on_chime_window(&mut self, start: i64) {
-        let Some(t) = self.time_of(start as f64 + CHIME_WINDOW as f64 / 2.0) else {
+        let Some(t) = self.time_of(start as f64 + self.chime_window as f64 / 2.0) else {
             return;
         };
         let (lo, hi) = self.chime_range;
-        let samples: Vec<f32> = self.window(start, CHIME_WINDOW).collect();
+        let samples: Vec<f32> = self.window(start, self.chime_window).collect();
         let db: Vec<f64> = self
             .chime
             .power(samples.into_iter(), lo, hi)
@@ -361,7 +368,7 @@ impl DoorDetector {
         if tone {
             self.tone_votes[usize::from(best[1] > best[0])] += 1;
         }
-        let min_frames = (CHIME_MIN_S * self.rate_hz / CHIME_HOP as f64).ceil() as usize;
+        let min_frames = (CHIME_MIN_S * self.rate_hz / self.chime_hop as f64).ceil() as usize;
         match (&mut self.tone, tone) {
             (Some((_, n)), true) => *n += 1,
             (None, true) => self.tone = Some((t, 1)),
@@ -419,17 +426,22 @@ mod tests {
 
     #[test]
     fn finds_a_door_cycle_however_the_audio_is_split() {
-        let rate = 16_000;
+        for rate in [16_000, 48_000] {
+            finds_a_door_cycle_at(rate);
+        }
+    }
+
+    fn finds_a_door_cycle_at(rate: u32) {
         let pcm = ride(rate);
         let t0 = 1_000_000_000_000;
-        for read in [1600, 32_000, 777] {
+        for read in [rate as usize / 10, 2 * rate as usize, 777] {
             let mut d = DoorDetector::new(rate);
             let mut found = Vec::new();
             for (i, part) in pcm.chunks(read).enumerate() {
                 let first = (i * read) as i64;
                 found.extend(d.on_audio(first, part, &[(0, t0)]));
             }
-            assert_eq!(found.len(), 1, "{read}: {found:?}");
+            assert_eq!(found.len(), 1, "{rate} Hz, {read}: {found:?}");
             let s = |t: i64| (t - t0) as f64 * 1e-9;
             assert!((s(found[0].open_ns) - 10.0).abs() < 0.5, "{found:?}");
             assert!((s(found[0].close_ns) - 40.0).abs() < 0.5, "{found:?}");

@@ -360,8 +360,17 @@ fn audio_summary(
 ) -> anyhow::Result<()> {
     let contents = session.read_audio(name)?;
     let rate = info.map_or(0, |i| i.sample_rate_hz);
-    let frames: usize = contents.chunks.iter().map(|c| c.pcm_s16le.len() / 2).sum();
-    println!("{name}: {} chunks, {frames} frames", contents.chunks.len());
+    let channels = info.map_or(1, |i| usize::try_from(i.channels).unwrap_or(1).max(1));
+    let frame_bytes = 2 * channels;
+    let frames: usize = contents
+        .chunks
+        .iter()
+        .map(|c| c.pcm_s16le.len() / frame_bytes)
+        .sum();
+    println!(
+        "{name}: {} chunks, {frames} frames, {channels} channels",
+        contents.chunks.len()
+    );
     report_health(&contents, label, problems);
     let mut expected = 0;
     let mut discontinuities = 0;
@@ -369,7 +378,7 @@ fn audio_summary(
         if c.first_frame != expected {
             discontinuities += 1;
         }
-        expected = c.first_frame + (c.pcm_s16le.len() / 2) as i64;
+        expected = c.first_frame + (c.pcm_s16le.len() / frame_bytes) as i64;
     }
     let timestamps: Vec<_> = contents.chunks.iter().flat_map(|c| &c.timestamps).collect();
     if rate > 0 {

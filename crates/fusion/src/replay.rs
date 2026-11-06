@@ -115,8 +115,10 @@ enum Event {
     Transit(Box<(Vec<u8>, i64)>),
 }
 
-/// The app feeds audio to fusion as it reads it, this many frames at a time (`AudioStreamRecorder.kt`).
-const AUDIO_READ_FRAMES: usize = 1600;
+/// The app feeds audio to fusion as it reads it, a tenth of a second at a time (`AudioStreamRecorder.kt`).
+fn audio_read_frames(rate: u32) -> usize {
+    (rate as usize / 10).max(1)
+}
 
 /// Uses the uncalibrated accelerometer and gyro if recorded, else the calibrated ones, like the app.
 /// Every input is merged by time; live, they arrive slightly out of order, so the replay can differ a little
@@ -346,7 +348,7 @@ pub fn replay_with_hook(
         .iter()
         .find(|s| s.name == "audio")
         .and_then(|s| s.audio.as_ref())
-        .map(|a| a.sample_rate_hz as u32);
+        .map(|a| (a.sample_rate_hz as u32, (a.channels as usize).max(1)));
     // Stable, like the merge: records at equal times stay in the order read.
     records.sort_by_key(|(t, _)| *t);
     let cuts = if options.skip_still {
@@ -379,7 +381,7 @@ pub fn replay_with_hook(
     }
     let records_len = records.len();
     sources.push((records_len, Box::new(records.into_iter())));
-    if let Some(rate) = audio_rate.filter(|_| !options.ignore_audio)
+    if let Some((rate, channels)) = audio_rate.filter(|_| !options.ignore_audio)
         && session.stream_path("audio").exists()
     {
         // Still FLAC where recompressed: each chunk is decoded only as it's fed.
@@ -388,11 +390,12 @@ pub fn replay_with_hook(
             || {
                 Ok(Box::new(audio_events(
                     rate,
+                    channels,
                     session.stream_chunks("audio")?,
                     &cuts,
                 )))
             },
-            || audio_events(rate, chunks_of(read_stream_file(&path)?), &cuts).collect(),
+            || audio_events(rate, channels, chunks_of(read_stream_file(&path)?), &cuts).collect(),
         )?);
     }
     let total = sources.iter().map(|s| s.0).sum::<usize>().max(1);
@@ -620,6 +623,7 @@ fn sensor_events<'a>(
 /// A chunk whose FLAC doesn't decode is left out, as when reading the stream.
 fn audio_events<'a>(
     rate: u32,
+    channels: usize,
     chunks: impl Iterator<Item = anyhow::Result<AudioChunk>> + 'a,
     cuts: &'a [(i64, i64)],
 ) -> impl Iterator<Item = anyhow::Result<(i64, Event)>> + 'a {
@@ -643,13 +647,6 @@ fn audio_events<'a>(
         if !ride_session::audio_flac::restore(&mut chunk) {
             return events;
         }
-        let samples: Vec<i16> = chunk
-            .pcm_s16le
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|&b| i16::from_le_bytes(b))
-            .collect();
         let timestamps: Vec<(i64, i64)> = chunk
             .timestamps
             .iter()
@@ -659,9 +656,14 @@ fn audio_events<'a>(
         let Some((f0, t0)) = clock else {
             return events;
         };
-        for (i, read) in samples.chunks(AUDIO_READ_FRAMES).enumerate() {
-            let first = chunk.first_frame + (i * AUDIO_READ_FRAMES) as i64;
-            let last = first + read.len() as i64;
+        let read_frames = audio_read_frames(rate);
+        for (i, read) in chunk
+            .pcm_s16le
+            .chunks(read_frames * 2 * channels)
+            .enumerate()
+        {
+            let first = chunk.first_frame + (i * read_frames) as i64;
+            let last = first + (read.len() / (2 * channels)) as i64;
             let arrived = t0 + ((last - f0) as f64 / f64::from(rate) * 1e9) as i64;
             if in_cuts(cuts, arrived) {
                 continue;
@@ -670,12 +672,13 @@ fn audio_events<'a>(
                 arrived,
                 Event::Audio(
                     rate,
-                    Box::new(AudioSamples {
-                        first_frame: first,
-                        samples: read.to_vec(),
-                        // The app takes one timestamp per read.
-                        timestamps: timestamps.get(i).copied().into_iter().collect(),
-                    }),
+                    // The app takes one timestamp per read.
+                    Box::new(AudioSamples::from_pcm(
+                        first,
+                        read,
+                        channels,
+                        timestamps.get(i).copied().into_iter().collect(),
+                    )),
                 ),
             )));
         }

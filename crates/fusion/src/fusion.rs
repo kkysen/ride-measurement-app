@@ -295,11 +295,42 @@ enum Pending {
     Transit(Box<[trips::TripStop]>, i64),
 }
 
+/// Audio as door detection takes it: mono, one sample per frame.
 #[derive(Clone, Debug)]
 pub struct AudioSamples {
     pub first_frame: i64,
     pub samples: Vec<i16>,
     pub timestamps: Vec<(i64, i64)>,
+}
+
+impl AudioSamples {
+    /// From 16-bit little-endian PCM as recorded, `channels` interleaved (one per microphone):
+    /// each frame is the mean of its channels, live and replayed alike.
+    pub fn from_pcm(
+        first_frame: i64,
+        pcm_s16le: &[u8],
+        channels: usize,
+        timestamps: Vec<(i64, i64)>,
+    ) -> Self {
+        let channels = channels.max(1);
+        let samples = pcm_s16le
+            .as_chunks::<2>()
+            .0
+            .chunks_exact(channels)
+            .map(|frame| {
+                let sum: i32 = frame
+                    .iter()
+                    .map(|&b| i32::from(i16::from_le_bytes(b)))
+                    .sum();
+                (sum / channels as i32) as i16
+            })
+            .collect();
+        Self {
+            first_frame,
+            samples,
+            timestamps,
+        }
+    }
 }
 
 impl Pending {
@@ -820,7 +851,7 @@ impl Fusion {
         self.arrive(t_ns, Pending::WifiScan(ssids));
     }
 
-    /// Microphone samples (mono, `rate_hz`) as they're read, at `t_ns`, when they arrived;
+    /// Microphone samples (at `rate_hz`, channels already mixed) as they're read, at `t_ns`, when they arrived;
     /// door cycles in them hold the speed at zero (see [`crate::doors`]).
     pub fn on_audio(&mut self, t_ns: i64, rate_hz: u32, audio: AudioSamples) {
         self.doors.get_or_insert_with(|| DoorDetector::new(rate_hz));
