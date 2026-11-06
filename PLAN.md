@@ -449,7 +449,7 @@ Open, roughly in order:
      passing 50 St, 59 St, and 66 St, per the rider; at 72 St two closings 15 s apart, the doors closing, reopening,
      closing), and none between Jackson Hts and Queens Plaza on `184134`'s F (correct, per the rider).
    - Learned door openings: the one GNSS put at 25 mph was the 7 pulling into 61 St at 4:01:27 pm (GNSS likely
-     right; the rider tapped doors open 18 s later); a clip is in `target/clips/`, for the rider to listen to.
+     right; the rider tapped doors open 18 s later); a clip is in `data/work/clips/`, for the rider to listen to.
 
 10. 2026-10-22 night, 0.1.5 on the phone (installed 2026-10-22 3:55 am):
    - The bus out of Port Authority (`20261022-002914`): a moving fix now ends the subway Wi-Fi's hold, and no fix
@@ -682,7 +682,7 @@ checked against the phone. The L ride is likely `20261023-193658` (7:36 pm), the
 
 Open, from the rider's reports on those rides (details in item 7a of the 2026-10-21 section):
 1. Done (`69b80ca`, `d28d26e`, `44c806a`; scored with `crates/cli/examples/holds.rs`, `ec8afa9`, over the 11 rides
-   with taps, `just sweep holds`, results in `target/cmp/holds-*.txt`): the live speed underground with nothing
+   with taps, `just sweep holds`, results in `data/work/cmp/holds-*.txt`): the live speed underground with nothing
    holding it. The main cause: on the L every stop's settling made a start surge about 1 s after the lurch, taken
    for a departure, which ended the live hold and dwell at once (standing at Bedford Av, 55 mph); surges within
    `DEPART_AFTER_STOP_S` of the lurch are now skipped, as `stop_records` already did. The quiet phone's zero is
@@ -698,13 +698,13 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
 2. Done (`e76cc1b`): the yaw rate times the speed, sideways to the axis, taken out of the IMU's horizontal
    acceleration while turning slower than 0.1 rad/s (faster, the rider turning the phone, it ran a stop in a
    GNSS cut on `011209` to 35 mph). Scored with the untracked scratch `crates/cli/examples/curves.rs`
-   (`just sweep curves`; results in `target/cmp/curves-*.txt`): seconds at 50 mph or more with no fix within
+   (`just sweep curves`; results in `data/work/cmp/curves-*.txt`): seconds at 50 mph or more with no fix within
    10 s, 1459 to 1083 in all (`003357` 58 to 38, its Jefferson St stretch 45 to 13 s; `193658` 63 to 48);
    pooled RMS in simulated 30 s GNSS cuts 5.9 to 5.9 mph, but `160303` 3.6 to 7.4, `155919` 5.7 to 7.5,
    `193658` 4.0 to 4.6. Holding the spread's axis while turning, alone or with it, regressed both; ungated,
    the cut RMS on `011209` went 5.5 to 13.5 mph.
    Also tried: naming each stop's station by the lines its train turned out to be on (`leg_station`, patch in
-   `target/cmp/leg-station.patch`): no stop's station changed on `193658` or six other subway rides
+   `data/work/cmp/leg-station.patch`): no stop's station changed on `193658` or six other subway rides
    (14 St-Union Sq already reads the L), so not committed.
 3. Done (`b7011be`, `51aa0fb`, `0d40f12`): the route and stop count only since the last walk off, none between
    trains, where the station's lines are its complex's; a feed trip only matches its own line's platform.
@@ -722,7 +722,7 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    don't have; NTT on the 1 at 96 St; a passing 2's chime taken as the rider's at 14 St.
    Ignore chimes between trains, and only count chimes since boarding; add the L's R143s and R160s.
 5. Done (checked, no code change; scored with the untracked scratch `crates/cli/examples/departs.rs`, `just sweep departs`,
-   results in `target/cmp/departs-before.txt`): departures on the L are found well since `69b80ca`.
+   results in `data/work/cmp/departs-before.txt`): departures on the L are found well since `69b80ca`.
    Against the "train started" taps, a start surge within 2 s of 100 of 114 taps over 11 rides, all 14 on `193658`
    (median under 0.5 s); the stop records' departure within 2 s of 81, 10 of 14 on `193658`, the 4 missed for want of
    a stop before them (boarding at 7:52:49 pm, 7:55:30, 7:58:15, and the hold at 8:04:45), not of a departure.
@@ -738,7 +738,7 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    dwell restarts at 8:03:06 (10 s at 8:03:18 in the replay's statuses), but the early one still shows from
    8:02:28: its cell (29256324) is another sector of Bedford Av's site (29256316), so item 7's cue misses it.
    The travel axis's sign braking into Bedford Av (checked, no code change; scored with the untracked scratch
-   `crates/cli/examples/signs.rs`, `just sweep signs`, results in `target/cmp/signs-*.txt`):
+   `crates/cli/examples/signs.rs`, `just sweep signs`, results in `data/work/cmp/signs-*.txt`):
    the live speed should fall over the 10 s before each "train stopped" tap. Over all tapped rides it falls before 43,
    rises before 25, and stays within 1 mph before 40. Of the 25, 7 rise from under 5 mph, which any axis would.
    At Bedford Av on `193658` (8:01:11 pm, 33 to 55 mph), two causes stack:
@@ -746,13 +746,13 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    and while cruising, the spread axis wanders through sideways and round to backward within seconds,
    because the covariance is centered, so a departure's steady push goes into the mean and only sway is left.
    From the zero, that sideways axis drove the speed negative, and braking along the axis (back to forward by then)
-   took it to the limit. Tried, all worse or no better, not committed (patches in `target/cmp/`):
+   took it to the limit. Tried, all worse or no better, not committed (patches in `data/work/cmp/`):
    holding the sign by an anchor carried from when it was learned (`sign-anchor.patch`), braking falls 37, rises 30;
    that plus signing again at each departure, on `193658` 4 and 5 (was 5 and 3);
    freezing the spread axis once its sign is known, on `193658`, `011209` and `003357` 19 and 14 (was 24 and 13);
    updating the axis only when one direction holds 3 times the rest of the spread (`axis-gate.patch`), 19 and 13.
    Starts can't score the sign: from rest, the speed rises either way.
-   Learning the axis from the push itself, also tried, none better, not committed (patches in `target/axis/`;
+   Learning the axis from the push itself, also tried, none better, not committed (patches in `data/work/axis/`;
    baseline at `HEAD` braking falls 43, rises 25, flat 40; starts right 93, wrong 10, flat 11):
    the axis with its sign from the horizontal acceleration summed over the first 10 s after each stop ends
    and leaky-summed (8 s) up to each stop, kept only when at least 2 m/s and 60% of the summed magnitude,
@@ -762,7 +762,7 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    the spread's covariance uncentered, 28, 30, 50.
    The false door cycle mid-river on `193658` (opening 7:59:22, closing 8:00:05 pm, found 8:00:10) has no lurch
    or start surge around it, like several real ones; scored with the scratch `crates/cli/examples/doorscore.rs`
-   (`DUMP=1 just sweep doorscore`, `target/axis/doors-base.txt`): of 251 cycles on all rides, 137 near a tap.
+   (`DUMP=1 just sweep doorscore`, `data/work/axis/doors-base.txt`): of 251 cycles on all rides, 137 near a tap.
    The quietest 5 s of the cycle (median of 1 s stds of `|a|`) was 0.37 m/s^2 there, but real cycles reach 0.38
    to 0.98 (rider handling), so vibration doesn't separate it; no change made.
    Cycles whose quietest 5 s is over 1.0 (25, none near a tap, mostly the rider walking) could be dropped by it.
@@ -781,7 +781,7 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
    a shape joining them, and no faster than a train can go (3 mph/s up and down, 55 mph between): 126 pairs
    over all sessions, 8 too fast (likely misnamed), 14 with a fix, none without a shape.
    - The map path: each leg's samples placed along the track by the share of the smoothed speeds' distance, each
-     stop's dwell at its station. `stop_positions` (`just sweep stop_positions`, `target/track/`): 166 stops,
+     stop's dwell at its station. `stop_positions` (`just sweep stop_positions`, `data/work/track/`): 166 stops,
      dead reckoned a median 482 m off (90th 2902 m), joined 0 m (353 m) by construction; the honest score, each
      stop left out with its neighbors joined across it (88 stops): 180 m (737 m), against 830 m (3189 m)
      dead reckoned on the same stops.
@@ -866,7 +866,7 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
     - Still parts (`f3032eb`): `Options::skip_still` leaves out where GPS stays within 100 m for 10 min, but each
       end's minute; it finds exactly the four known stretches. Accidental sessions are in `scripts/sweep-skip.txt`.
     - `just score` (`710b438`, `31296ca`): every score of eight examples, five replays a session, 4 sessions at once
-      capped at 1200M each: 2:12 for all 18 sessions (7:12 one at a time), each session's in `target/score/`.
+      capped at 1200M each: 2:12 for all 18 sessions (7:12 one at a time), each session's in `data/work/score/`.
     - Open: the backward pass carries state across a whole ride. Cutting any minute (even one near the end of
       `20261024-220437`) changes smoothed speeds 45 min earlier by up to 29 mph, while the forward pass is unchanged
       before the cut. Fixes should anchor the backward pass; something (bias, heading?) doesn't reset at them.
@@ -912,7 +912,7 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
       1.27 s per 10 s on `20261021-215922` (12 ms in its first), 0.64 s on `20261021-155919`, 0.74 s on `20261024-003357`.
       - Re-sorting: once one input arrives late, every re-run sorts a copy of the window (10% of live time).
         Inserting it in place, as over a whole ride, changes the live output on 8 of 18 (it leaves the window sooner); not committed.
-      - Prototype (not committed, `target/livewin/prototype.diff`, scratch `crates/cli/examples/livewin.rs`):
+      - Prototype (not committed, `data/work/livewin/prototype.diff`, scratch `crates/cli/examples/livewin.rs`):
         redo only the last N min each re-run, older values keeping their last smoothing.
         Feeding in the last 10 min, base / N=2 / 5 / 10 min (ms per 10 s): `20261022-002914` 252 / 72 / 135 / 242;
         `20261021-215922` 1272 / 227 / 288 / 396; `20261021-155919` 638 / 129 / 236 / 431; `20261024-003357` 739 / 174 / 205 / 256.
@@ -921,13 +921,13 @@ Open, from the rider's reports on those rides (details in item 7a of the 2026-10
         The final live smoothed speeds change badly: median 0 to 0.05 mph but p99 13 to 43 mph, max 20 to 106 mph,
         12 to 39% of values over 1 mph: a fix after a tunnel can no longer correct the tunnel before the last N min,
         which is what the window is for. Not worth it as is.
-      - Prototype (not committed, `target/livewin/correction-only.diff`): re-run only after a correction
+      - Prototype (not committed, `data/work/livewin/correction-only.diff`): re-run only after a correction
         (a fix, a stop anchor, walking), extending with the forward estimate between.
         Output nearly the same (final live smoothed speeds: p99 0 to 0.45 mph, max 0 to 19.5 mph; right after a fix
         p99 0.01 to 0.32 mph, max 9.1 mph), but little saved: the costly re-runs are the ones a fix makes.
         Feeding in the last 10 min, base / correction-only (ms per 10 s): `20261022-002914` 305 / 202;
         `20261021-215922` 1242 / 1198; `20261021-155919` 601 / 596; `20261024-003357` 702 / 800.
-      - Prototype (not committed, `target/livewin/gap-only.diff`): the same, each re-run reaching back only to the
+      - Prototype (not committed, `data/work/livewin/gap-only.diff`): the same, each re-run reaching back only to the
         previous correction. Feeding (first / last 10 min, ms per 10 s): `20261022-002914` 28 / 33;
         `20261021-215922` 16 / 259; `20261021-155919` 21 / 95; `20261024-003357` 19 / 197.
         But the output changes badly: final live smoothed speeds p99 up to 40 mph, max 291 mph on `20261022-002914`,
@@ -958,7 +958,7 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Data: data.ny.gov "MTA Subway Entrances and Exits: 2024" (`i9wp-a4ja`, data of 2025-12-05, downloaded 2026-10-25)
     in `data/mta/entrances/` (2,120 entrances: type, entry/exit allowed, location; no street or corner names).
     Loader `python/experiments/subway_entrances.py`. Scratch: `crates/cli/examples/entrance_export.rs` (export per session)
-    and `target/entrances/match_entrances.py`, report in `target/entrances/report.txt`.
+    and `data/work/entrances/match_entrances.py`, report in `data/work/entrances/report.txt`.
     Method, sensors only: a GPS gap of 90 s or more while the replay was in the subway;
     entry is the last fix within 15 m before it, exit the first after it; nearest entrance allowing entry or exit.
     `subway_changes` alone lags losing GPS by about 30 s and flickers, so its ends were 70 to 120 m off.
