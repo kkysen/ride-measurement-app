@@ -142,17 +142,21 @@ pub const MAX_SPEED_MPS: f64 = 343.0;
 /// NYC subway trains cruise at 40 to 45 mph and may reach 50, where power cuts off; they never exceed 55 mph.
 /// Other rail (LIRR, Metro-North) is faster, so this is only for subway rides.
 pub const SUBWAY_MAX_SPEED_MPS: f64 = 55.0 * 0.44704;
-/// How fast a subway train can speed up and slow down (m/s^2) at a speed (m/s), as (motoring, braking):
-/// motoring is constant force at low speed, then constant power, falling as 1/v.
-/// Learned above ground with GNSS (`python/experiments/accel_curves.py`, the 7's R188s on `154951` and `184134`):
-/// the 99th percentile motoring is 1.2 to 1.3 up to 13 mph, 0.85 to 0.95 at 18 to 27 mph, 0.5 at 31 to 36,
-/// and 0.4 at 40 to 45 (a * v about 7.5 to 9.5 m^2/s^3); braking is at most about 1.0.
-/// These are those with a quarter's margin, for all subway cars until other models are measured
-/// (NYC cars are rated about 2.5 mph/s motoring, 3 mph/s service braking, 3.2 emergency).
-/// With GNSS cut 30 s of every 90 s, outage rms (at outage end) on `184134` went from 6.39 (9.82) to 6.34 (9.71) km/h;
-/// `154951` and `214427` were unchanged. Those are the rides it was learned from, so this isn't a held-out check.
+/// How fast a subway train can speed up and slow down (m/s^2) at a speed (m/s), as (motoring, braking).
+/// Motoring is the traction motors' three regions: constant force, then constant power (1/v),
+/// then their natural region (1/v^2). Fit by `data/work/track/fit_curves.py` to the 90th percentile per 2 mph
+/// of GNSS acceleration (speeds over 6 to 8 s) on open track, from `crates/cli/examples/accelcurves.rs`
+/// (14 runs on 9 rides; `data/work/track/fit_curves.txt`), rms 10 to 15% in log space:
+/// the fleet (R142, R160, R68A, R46, R62A) `min(1.00, 6.5 / v, 75 / v^2)`;
+/// the 7's R188s (CBTC) the highest, `min(1.24, 9.5 / v, 85 / v^2)`, which this is with 15% margin.
+/// Every model ridden is rated 2.5 mph/s motoring (1.12), 3.0 full service braking (1.34), 3.2 emergency
+/// (Wikipedia); only the R188s went over the motoring rate beyond GNSS's own noise (2 sigma):
+/// at 1.4 to 1.56 m/s^2 between 10 and 18 mph, on 7 of their 13 departures from a stop.
+/// Braking's 90th percentile is about 0.76 to 0.8 m/s^2 to 30 mph, then lower; no sample went over
+/// the full service rate, which is the bound.
 pub fn subway_accel_limits(speed_mps: f64) -> (f64, f64) {
-    ((11.0 / speed_mps.max(1e-3)).min(1.6), 1.5)
+    let v = speed_mps.max(1e-3);
+    ((10.9 / v).min(98.0 / (v * v)).min(1.43), 3.0 * 0.44704)
 }
 /// The slack (m/s) over [`subway_accel_limits`]'s ceiling, for the phone's noise.
 const ACCEL_LIMIT_SLACK_MPS: f64 = 0.3;

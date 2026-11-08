@@ -7,7 +7,7 @@
 use std::sync::OnceLock;
 
 use crate::fusion::{SmoothedSpeed, StopRecord};
-use crate::live_speed::SUBWAY_MAX_SPEED_MPS;
+use crate::live_speed::{SUBWAY_MAX_SPEED_MPS, subway_accel_limits};
 use crate::position::PositionEstimate;
 use crate::stations::{Station, meters};
 use crate::trips::{line_of_route, stop_ids};
@@ -424,18 +424,25 @@ pub struct Joined {
     pub with_fix: usize,
 }
 
-/// The subway's highest rate of acceleration and braking (m/s^2): 3 mph/s.
-const SUBWAY_MAX_ACCEL_MPS2: f64 = 3.0 * 0.44704;
-
-/// The least time (s) a train takes from a stop to a stop `length` (m) along: speeding up and braking at
-/// [`SUBWAY_MAX_ACCEL_MPS2`], at most at [`SUBWAY_MAX_SPEED_MPS`] between.
+/// The least time (s) a train takes from a stop to a stop `length` (m) along: speeding up and braking as fast as
+/// [`subway_accel_limits`] allows, at most at [`SUBWAY_MAX_SPEED_MPS`] between.
 fn fastest_s(length: f64) -> f64 {
-    let (a, v) = (SUBWAY_MAX_ACCEL_MPS2, SUBWAY_MAX_SPEED_MPS);
-    if length < v * v / a {
-        2.0 * (length / a).sqrt()
-    } else {
-        length / v + v / a
-    }
+    let braking = subway_accel_limits(0.0).1;
+    // Speeding up step by step (v^2 grows by 2 a dx), each step's time at the speed at its middle.
+    let steps = 1000;
+    let dx = length / steps as f64;
+    let mut up = 0.0_f64;
+    (0..steps)
+        .map(|i| {
+            let x = (i as f64 + 0.5) * dx;
+            let mid = (up * up + subway_accel_limits(up).0 * dx).sqrt();
+            up = (up * up + 2.0 * subway_accel_limits(mid).0 * dx).sqrt();
+            let v = mid
+                .min((2.0 * braking * (length - x)).sqrt())
+                .min(SUBWAY_MAX_SPEED_MPS);
+            dx / v
+        })
+        .sum()
 }
 
 /// Whether a stop anchors the path: underground at a named station, not a hold between stations.
@@ -809,8 +816,8 @@ mod tests {
     fn a_train_needs_time_to_speed_up() {
         // 528 m in 22 s would average 52 mph: a station misnamed (`20261024-003357`).
         assert!(fastest_s(528.0) > 35.0);
-        // 2.2 km at 55 mph with 18 s each to speed up and brake.
-        assert!((100.0..115.0).contains(&fastest_s(2217.0)));
+        // 2.2 km: 113 s along the learned curve (109 s at a flat 3 mph/s).
+        assert!((110.0..116.0).contains(&fastest_s(2217.0)));
     }
 
     #[test]
