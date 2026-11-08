@@ -997,6 +997,18 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Clamping the signed speed at zero once the axis sign is known was tried and dropped: on those 7 rides,
     stops where the live speed falls went from 71 to 55.
     The replay also reads positive where its speed itself rises before a stop (Sat Nov 7, 2:29 pm).
+    Looked into (2026-11-08), nothing kept: `crates/cli/examples/brakecause.rs` (scratch, `no_live_smoothing`,
+    same counts as `brakesign`) buckets the 68 of 147 stops where the live speed doesn't fall:
+    30 where the replay itself speeds up in the window or the live speed runs away with no braking seen,
+    16 held at 0 by a likely stop or transfer then released (some moving: Bowery at 44 mph on Thu Nov 5, 10:06 pm;
+    item 27's hold), 9 with no approach (the replay under 3 mph), 8 crossing zero then rising, 5 pinned at the cap.
+    The signed speed below zero isn't braking past the stop: often the whole leg runs negative with the right shape
+    (DeKalb Av, Sun Nov 1, 1:50 am), so showing it as 0 made it 51 of 136 (from 71);
+    re-checking the axis sign at each departure without GNSS, 69.
+    The cap: on Thu Nov 5 the bias reaches -1 to -2 m/s^2 underground (a gravity tilt leak, not the accelerometer)
+    and pins the speed at 55 mph through braking into 50 St and 14 St.
+    Keeping the caps from moving the bias: 79 to 73; resetting the bias at each stillness without GNSS: 79 to 75.
+    Open: where the bias of -2 m/s^2 comes from (the gravity's 600 s time constant underground?), and item 27's holds.
 20. Done, unchecked on the phone (`34cfce3`, `6b7d63f`, `10fdd80`, `00681c8`): the live map underground, noted on
     four rides, the latest Sat Nov 7, 5:59 pm. `Fusion::recent_track_path`, drawn under the GPS path:
     each leg between stations once the train stops at its far station (placed as a past ride's by `track::Along`);
