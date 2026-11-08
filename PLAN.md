@@ -1114,6 +1114,16 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     A trip the feeds list at a stop's own platform now counts as serving it.
     Replayed (`skip_still`): the A from 50 St on, through 59 St and 125 St to 168 St, but for one C at 125 St (5:25:59 pm);
     no change on Thu Oct 29, 4:29 pm, Tue Nov 3, 6:01 pm, or Sat Nov 7 (2:29 pm, 5:59 pm).
+    No line from Queensboro Plaza to Times Sq on Tue Nov 3, done (2026-11-08, `1d4f5bf`), not on the phone: the W kept.
+    The cell names those stops a station early (Broadway at 30 Av, Queensboro Plaza at 39 Av),
+    and once the feeds settled the W's Queensboro Plaza at 6:12:10 pm, 1:27 after the stop named there,
+    nothing matched the newest stop, and the stops after, through the 60 St tunnel, have no station.
+    A trip matched at each of the older stops is now kept while no newer stop rules it out
+    (a platform its line doesn't stop at, or a stop before it reached only after the rider left);
+    never one from the newer stops' times alone (an N a station ahead lists them within seconds).
+    Replayed (`skip_still`): the W from Broadway through Queensboro Plaza, Lexington Av/59 St, 5 Av/59 St and 57 St-7 Av,
+    but for 10 s walking blips (6:12:43, 6:13:33, 6:19:03 pm), and still the W at Times Sq on the Q (item 22);
+    Thu Oct 29, 4:29 pm, Sat Oct 31, 4:58 pm and Sat Nov 7 (2:29 pm, 5:59 pm) unchanged.
 22. Missed transfers and switches: 3 to 1 (Thu Oct 29, 4:29 pm); "switched to Q" (Tue Nov 3, 6:01 pm; Sat Nov 7, 5:59 pm).
     Looked into (2026-11-08, `skip_still`), nothing fixed: all three are changes across the platform
     with almost no steps (7 s, 17 s; at 96 St the rider stood 1:42), so no walk off is found
@@ -1129,6 +1139,12 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     to Times Sq (the stops between have no station; item 21's stale line).
     The rider's ground truth for Tue Nov 3, 6:01 pm: the W from 30 Av to 57 St-7 Av, then the Q to Times Sq
     ("switched to Q" at 6:19 pm, right after tagging the Q's car 5048).
+    Checked again (2026-11-08) with the recorded GTFS-RT: the W `108200_N..S72R` and the Q `109100_Q..S36R`
+    are both at 57 St-7 Av at 6:19:30 pm, the rider's dwell (6:19:17 to 6:19:32 pm).
+    Settled, the W reached 49 St at 6:22:26 pm, after the rider stopped at Times Sq (6:21:49 pm): not the W.
+    But the Q's last Times Sq time is 6:24:06 pm, 2:17 late, so the feeds don't confirm the Q either,
+    and live, at Times Sq, the W was still predicted there at 6:22:25 pm, so the status shows the W until the rider walks off.
+    Left: the change, live; the express passing 49 St (named by the cell at 6:20:33 pm) is a sign the W stops there.
 23. Done, not on the phone (`4affdf5`, `a27cacf`, `e1d4f91`): graph, map and replay (Mon Oct 26, 8:08 pm).
     The graph's time axis shows round 12-hour New York times, as many as fit (`clock_ticks`).
     The live map pins each tap where the rider was (`positions_at`), underground once its leg is drawn.
@@ -1265,6 +1281,9 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     So the cell can be gone for a whole run; the station must come from the rest then.
 36. Wrong car number shown (Tue Nov 3, 6:01 pm, at 6:14 pm): the app's car number was wrong;
     the rider's tags are right: 5546 on the W (6:04 pm) and 5048 on the Q (6:19 pm).
+    Why (checked 2026-11-08): the app shows the car beacon's ID as "car" (`Status::car`, `MainActivity.kt`),
+    not the car's number: at 6:14 pm it was `9a72` (39538), and it went between that and `9776` over the ride.
+    Left: show the car's number, from the rider's tags tying beacons to cars, or not call the ID a car.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
