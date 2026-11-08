@@ -140,6 +140,9 @@ pub struct Options {
     pub no_track_hold: bool,
     /// Leave out [`Replay::statuses`], for what doesn't show them: about a fifth of a replay's time.
     pub no_statuses: bool,
+    /// For scoring the live estimate only: no smoothing of the window as inputs arrive (see
+    /// [`Fusion::set_live_smoothing`]), most of a live replay's time.
+    pub no_live_smoothing: bool,
     /// For scoring: keep [`Replay::live`] this often (ns), if set.
     pub live_every_ns: Option<i64>,
     /// For scoring: leave out where the phone sat still (see [`still_cuts`]), as a gap in the recording.
@@ -422,6 +425,7 @@ pub fn replay_with_hook(
     fusion.reserve_inputs(buffered);
     fusion.set_max_speed(options.max_speed_mps);
     fusion.set_track_hold(!options.no_track_hold);
+    fusion.set_live_smoothing(!options.no_live_smoothing);
     // Downloaded orbits (`just orbits`), for constellations whose navigation messages the phone missed.
     for eph in ride_gnss::orbits::read_session_orbits(&session.dir)? {
         fusion.navigator_mut().add_ephemeris(eph);

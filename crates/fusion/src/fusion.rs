@@ -756,6 +756,8 @@ pub struct Fusion {
     subway_changes: Vec<(i64, bool)>,
     /// Whether the smoothed speeds are held to the track between stations (see [`crate::track::hold_to_track`]).
     track_hold: bool,
+    /// For scoring only: no smoothing of the window as inputs arrive (see [`Fusion::set_live_smoothing`]).
+    no_live_smoothing: bool,
     /// The registered LTE cell and when it was last reported.
     cell: Option<(i64, i64)>,
     /// Each change of the registered LTE cell (none when it's lost), for the cell at a stop.
@@ -864,6 +866,7 @@ impl Fusion {
             trips: trips::Trips::default(),
             subway_changes: Vec::new(),
             track_hold: true,
+            no_live_smoothing: false,
             cell: None,
             cells: Vec::new(),
             network_station: None,
@@ -884,6 +887,13 @@ impl Fusion {
     /// For scoring only: leave the smoothed speeds unheld to the track (see [`crate::track::hold_to_track`]).
     pub fn set_track_hold(&mut self, on: bool) {
         self.track_hold = on;
+    }
+
+    /// For scoring only: `false` skips smoothing the window as inputs arrive, which is most of a live replay's time,
+    /// for what reads only the forward (live) estimate and the stops: the smoothed speeds are then the forward
+    /// estimate's, until [`Fusion::finish`] smooths the last window.
+    pub fn set_live_smoothing(&mut self, on: bool) {
+        self.no_live_smoothing = !on;
     }
 
     /// Whether the phone is in the subway as of the settled inputs.
@@ -2035,7 +2045,7 @@ impl Fusion {
             self.live_speeds.push((t_ns, estimate.speed_mps as f32));
             self.forward.push_back((t_ns, estimate));
         }
-        if self.window_ns.is_some() {
+        if self.window_ns.is_some() && !self.no_live_smoothing {
             let next = *self.next_smooth_ns.get_or_insert(t_ns);
             if t_ns >= next && self.measured_ns != self.smoothed_measured_ns {
                 self.recent = self.smooth_window().into();
