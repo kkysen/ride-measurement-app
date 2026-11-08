@@ -1116,7 +1116,14 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     A replayed ride has a "Taps" button: its taps as pins on the map and lines on the graph, labeled where there's room;
     the replay's buttons are on their own row with fixed widths, so none moves.
     The tap lists show 12-hour times too.
-24. Check "says SMEE chime on NTT 5 train" (Tue Oct 27, 10:04 pm).
+24. Done, not on the phone (`d6f8ffe`): "says SMEE chime on NTT 5 train" (Tue Oct 27, 10:04 pm).
+    Arriving at 3 Av-149 St, a 0.29 s tone at 523 Hz alone confirmed a closing as the SMEE chime,
+    and the 2's and 5's fleets weren't in `car_models`, so it was shown. Now the 4 and 5 are R142 and R142A,
+    the 6 R62A and R142A: a SMEE chime on the 2 or 5 says nothing, and the 6 names its model.
+    Over the 37 rides with legs, the only other change is the 6 named. The classifier itself is still noisy:
+    requiring both of a family's pitches lost half the confirmed chimes (the 1's are often 641 Hz alone),
+    and one-pitch SMEE tones are as often wrong as right (523 Hz alone on the N and W's R160s, 0.8 s long).
+    Left: the N, Q, R and W fleets; a better chime feature than the pitch votes.
 25. Audio. Recording now takes every microphone at its native rate (`4ec4350`, `6000ec9`), untested on the phone:
     check a ride has 48 kHz, 3 channels, no sameness or missing-channel `Health` reports, and the microphone info.
     Then benchmark lossless codecs on it (FLAC, WavPack, MPEG-4 ALS, OptimFROG),
