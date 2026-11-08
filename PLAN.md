@@ -1014,7 +1014,20 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     the live gravity leaked -0.09, -0.10 and -0.34 m/s^2 while the bias read -1.59, -0.67 and -0.29;
     gravity carried by the gyro alone since the last stop leaked -1.49, -3.96 and -0.36 (the gyro's drift),
     so the 600 s time constant helps and dropping it would make it worse.
-    Open: where the bias of -1 to -2 m/s^2 comes from (the filter's own bias updates, not tilt), and item 27's holds.
+    Where the bias comes from (2026-11-08, stash "item19: bias source probe"; per-second bias changes by source):
+    on Thu Nov 5, 10:06 pm, the caps move it (55 mph cap, leg cap, acceleration ceiling), but they follow
+    the input: the along-axis acceleration itself averages -0.7 to -2.4 m/s^2 over 30 s for 15 min underground.
+    Two causes: the first-order turn `v - (omega x v) dt` lengthens gravity and the travel axis each sample,
+    so with the phone in hand the axis grew to 1.3 to 1.8 long and gravity about 2 m/s^2 too strong,
+    scaling the along-track acceleration up to 1.8x; and gravity's direction drifting with the gyro.
+    An exact rotation keeps both at length (axis 1.00, peak bias -2.05 to -1.36) but scored worse:
+    falls 81 to 78 of 147, `liveratio` under 0.5 30 to 41, within 91 to 78, median 0.95 to 0.81,
+    so the speed's scale underground had been leaning on the lengthened axis; not kept.
+    Also not kept: the caps updating the covariance like an exact measurement (bias unchanged, peak -2.15),
+    and no cap bias moves while a likely stop holds (only delays it).
+    During the Canal St dwell (shown 0), the estimator's own speed ran to -55 mph and the caps pulled the bias down.
+    Open: the exact rotation with the speed's scale found elsewhere (the leg cap, anchors), gravity's gyro drift,
+    and item 27's holds.
 20. Done, unchecked on the phone (`34cfce3`, `6b7d63f`, `10fdd80`, `00681c8`): the live map underground, noted on
     four rides, the latest Sat Nov 7, 5:59 pm. `Fusion::recent_track_path`, drawn under the GPS path:
     each leg between stations once the train stops at its far station (placed as a past ride's by `track::Along`);
