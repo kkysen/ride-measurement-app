@@ -1172,10 +1172,29 @@ impl Fusion {
             .last_left()
             .and_then(|r| r.alighted_ns)
             .unwrap_or(i64::MIN);
-        let stopped_at = self
+        // The train's newest stop in the subway, when it's after the last door cycle: the train has moved on
+        // from that cycle's station (14 St still shown at 18 St, Thu Oct 29, 1:25 am), so the newer stop names it.
+        let last_door = self
             .last_stop
-            .filter(|&(at, _)| recent(at, 60.0) && at > boarded_after)
-            .and_then(|(_, s)| s);
+            .filter(|&(at, _)| recent(at, 60.0) && at > boarded_after);
+        let stopped_since = last_door.and_then(|(at, _)| {
+            self.train_stops
+                .iter()
+                .rev()
+                // Found in about time order: the last few cover a stop found out of order.
+                .take(4)
+                .find(|(stop, _, in_subway)| *in_subway && stop.t_ns > at)
+        });
+        // A stop not decided yet (a likely one) after the cycle: the cell names its station, if any.
+        let likely_since = last_door.is_some_and(|(at, _)| {
+            self.likely_stop_now(t)
+                .is_some_and(|l| l.t_ns > at && self.context.in_subway)
+        });
+        let stopped_at = match stopped_since {
+            Some(&(_, station, _)) => station,
+            None if likely_since => self.station_now(t),
+            None => last_door.and_then(|(_, s)| s),
+        };
         let riding = self.riding_lines(t);
         let station = stopped_at
             .or(cell_station.filter(|_| self.context.in_subway))
