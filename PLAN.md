@@ -965,6 +965,38 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     On `20261024-085154` the exit is Borough Hall's IRT stair (`232`, NE) 8 m away at 9:32:42 am, beside the app's stairs (+5.7 m).
     Open: entries and exits were found on 13 of 18 sessions; most are 2 to 30 m from the nearest entrance,
     with the next one often within 15 m, so the corner is unsure; to put in Rust once the rider confirms.
+18. The speed bound is wrong (rider, 2026-11-08). On CBTC, a train can't use its motors to accelerate past 50 mph.
+    Trains generally don't exceed 55 mph, except on long downgrades without signal timers to hold them,
+    like the 60 St tunnel, where the rider expects about 60 to 62 mph
+    (notes on Tue Nov 3, 6:01 pm and Sat Nov 7, 5:59 pm).
+    So: no powered acceleration above 50 mph on CBTC lines; 55 mph as the usual cap, not a hard one;
+    above 55 only coasting down a long grade without timers. Keep the bound per line or segment.
+    Also from notes: "55 mph ± 28 mph is meaningless since it's supposed to be a cap",
+    braking at 55 mph doesn't bring the speed down (Tue Oct 27, 10:04 pm),
+    and the speed jumps from 0 to 55 mph right after leaving a station (Sun Nov 1, 1:50 am; Tue Oct 27, 10:04 pm).
+19. Braking into a station often shows as accelerating (Thu Oct 29, 1:23 am).
+20. The live map still isn't drawn underground, noted on four rides, the latest Sat Nov 7, 5:59 pm. Top fix.
+21. Wrong lines and stations in the status:
+    "6 train doesn't go anywhere near Astoria Blvd" (Sat Nov 7, 2:29 pm);
+    "E at 59th but the E doesn't go there" (Sat Oct 31, 4:58 pm);
+    103 St on the 3, which doesn't stop there (Thu Oct 29, 11:07 pm);
+    14 St while at 18 St, corrected later (Thu Oct 29, 1:23 am).
+    A line must serve the station it's named at.
+22. Missed transfers and switches: 3 to 1 (Thu Oct 29, 4:29 pm); "switched to Q" (Tue Nov 3, 6:01 pm; Sat Nov 7, 5:59 pm).
+23. Graph, map and replay (Mon Oct 26, 8:08 pm): timestamps on the graph;
+    on the map, show where the rider taps; a taps button when replaying a ride, with taps on the graph and map.
+24. Check "says SMEE chime on NTT 5 train" (Tue Oct 27, 10:04 pm).
+25. Audio. Recording now takes every microphone at its native rate (`4ec4350`, `6000ec9`), untested on the phone:
+    check a ride has 48 kHz, 3 channels, no sameness or missing-channel `Health` reports, and the microphone info.
+    Then benchmark lossless codecs on it (FLAC, WavPack, MPEG-4 ALS, OptimFROG),
+    and try lossless on OneDrive with Opus on the phone, dropped on the phone only after the upload is verified.
+    Opus, measured on Thu Nov 5, 10:06 pm (16 kHz mono, 1:03:16): FLAC 80 MB, Opus 64 kbps 32 MB, 32 kbps 15 MB.
+    Estimated for 48 kHz and 3 microphones: FLAC 550 to 700 MB an hour, Opus at 48 kbps a microphone about 65 MB.
+    Uncoupled channels (mapping family 255), so the microphones stay separate; check announcements and chimes survive.
+    Find car 2239's train, the only one with the 1's new automated announcements.
+26. Labels from notes to learn from: the W parked on the center track at 30 Av (Sat Nov 7, 5:59 pm),
+    the M4 bus (Thu Nov 5, 4:30 pm), the Grand St to W 4 St shuttle bus (Thu Oct 29, 10:22 pm), car numbers.
+    All notes are listed by `ride summary`; a copy of them is in `data/work/notes.txt`.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
