@@ -66,6 +66,8 @@ struct Leg {
     since_ns: i64,
     stations: VecDeque<(f64, f64)>,
     covered_m: f64,
+    /// The most a train can go on the leg's line (m/s), if lower than the subway's ([`CBTC_POWERED_MAX_MPS`]).
+    line_max_mps: Option<f64>,
     /// The last known place: when, and how far along the track from the departure (m).
     known: (i64, f64),
 }
@@ -164,6 +166,26 @@ pub const MAX_SPEED_MPS: f64 = 343.0;
 /// NYC subway trains cruise at 40 to 45 mph and may reach 50, where power cuts off; they never exceed 55 mph.
 /// Other rail (LIRR, Metro-North) is faster, so this is only for subway rides.
 pub const SUBWAY_MAX_SPEED_MPS: f64 = 55.0 * 0.44704;
+/// On CBTC lines, a train can't use its motors past 50 mph (the rider, 2026-11-08; PLAN.md item 18),
+/// and their tunnels have no long downgrade to coast faster on, so this caps the speed on their legs.
+pub const CBTC_POWERED_MAX_MPS: f64 = 50.0 * 0.44704;
+/// The most a train can go (m/s) `since_s` after a departure, on a leg whose next station allows at most `peak_mps`
+/// on a line allowing at most `line_max_mps` (see [`LiveSpeedEstimator::start_leg`]).
+fn leg_cap_mps(since_s: f64, peak_mps: f64, line_max_mps: Option<f64>) -> f64 {
+    subway_reach_by_time_mps(since_s)
+        .min(peak_mps)
+        .min(line_max_mps.unwrap_or(f64::INFINITY))
+        .max(LEG_CAP_FLOOR_MPS)
+}
+
+/// The most a train can go (m/s) on any of `lines`, if lower than the subway's: [`CBTC_POWERED_MAX_MPS`]
+/// when every line it could be is in [`CBTC_LINES`].
+pub fn line_max_mps(lines: &[String]) -> Option<f64> {
+    let cbtc = !lines.is_empty() && lines.iter().all(|l| CBTC_LINES.contains(&l.as_str()));
+    cbtc.then_some(CBTC_POWERED_MAX_MPS)
+}
+/// The lines run by CBTC end to end. Queens Boulevard and Culver are only in part, so they keep the usual cap.
+pub const CBTC_LINES: &[&str] = &["7", "L"];
 /// How fast a subway train can speed up and slow down (m/s^2) at a speed (m/s), as (motoring, braking).
 /// Motoring is the traction motors' three regions: constant force, then constant power (1/v),
 /// then their natural region (1/v^2). Fit by `data/work/track/fit_curves.py` to the 90th percentile per 2 mph
@@ -1160,7 +1182,14 @@ impl LiveSpeedEstimator {
     /// `recorded_mps` is the most a recorded train went to the next station
     /// ([`crate::track::recorded_peak_mph`]), if known: the cap to it is no higher, with [`RECORDED_MARGIN_MPS`]
     /// or [`RECORDED_MARGIN_SHARE`].
-    pub fn start_leg(&mut self, since_ns: i64, stations_m: &[f64], recorded_mps: Option<f64>) {
+    /// `line_max_mps` is the most a train can go on the line, if lower than the subway's (see [`CBTC_LINES`]).
+    pub fn start_leg(
+        &mut self,
+        since_ns: i64,
+        stations_m: &[f64],
+        recorded_mps: Option<f64>,
+        line_max_mps: Option<f64>,
+    ) {
         self.leg = (!stations_m.is_empty()).then(|| Leg {
             since_ns,
             stations: stations_m
@@ -1178,6 +1207,7 @@ impl LiveSpeedEstimator {
                 })
                 .collect(),
             covered_m: 0.0,
+            line_max_mps,
             known: (since_ns, 0.0),
         });
     }
@@ -1248,9 +1278,7 @@ impl LiveSpeedEstimator {
             self.leg = None;
             return;
         };
-        let cap = subway_reach_by_time_mps(since_s)
-            .min(peak)
-            .max(LEG_CAP_FLOOR_MPS);
+        let cap = leg_cap_mps(since_s, peak, leg.line_max_mps);
         if self.v.abs() > cap {
             let y = self.v.signum() * cap - self.v;
             if self.p00 > 0.0 {
@@ -1538,5 +1566,21 @@ mod tests {
         let peak = subway_peak_mps(600.0) / 0.44704;
         assert!((40.0..48.0).contains(&peak), "{peak}");
         assert!(subway_peak_mps(2200.0) / 0.44704 > 50.0);
+    }
+
+    #[test]
+    fn cbtc_lines_cap_a_leg_at_50_mph() {
+        let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(line_max_mps(&lines(&["7"])), Some(CBTC_POWERED_MAX_MPS));
+        assert_eq!(line_max_mps(&lines(&["L"])), Some(CBTC_POWERED_MAX_MPS));
+        // Unknown, or possibly a line without CBTC: the usual cap.
+        assert_eq!(line_max_mps(&[]), None);
+        assert_eq!(line_max_mps(&lines(&["7", "N"])), None);
+        let peak = subway_peak_mps(2200.0);
+        let cbtc = leg_cap_mps(120.0, peak, Some(CBTC_POWERED_MAX_MPS));
+        assert!((cbtc / 0.44704 - 50.0).abs() < 1e-9, "{cbtc}");
+        assert!(leg_cap_mps(120.0, peak, None) / 0.44704 > 50.0);
+        // Early on, the motoring curve is still the lower.
+        assert_eq!(leg_cap_mps(5.0, peak, Some(CBTC_POWERED_MAX_MPS)), leg_cap_mps(5.0, peak, None));
     }
 }
