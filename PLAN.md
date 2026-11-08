@@ -1044,7 +1044,16 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     The 1 viaduct is mostly flat; some downtown trains skipped 125 St.
     The car model from the car number: look up the fleet number ranges (Wikipedia's car pages), don't guess.
     The line from GTFS-RT (the trip the train matched), not only the track nearby.
-29. Switch the NYCT feeds to GTFS-RT v2 (rider, 2026-11-08); v1 lacked the 2's reroute past a fire (Tue Oct 27).
+29. Done, not on the phone (`9ad588a`): the NYCT feeds switched to GTFS-RT v2 (rider, 2026-11-08);
+    v1 lacked the 2's reroute past a fire (Tue Oct 27). v2 is `nyct-v2%2Fgtfs...`, the same line groups,
+    from the MTA's developer group post (for daylight saving time ending 2026-11-01; v1 retires in 2027).
+    Checked on 2026-11-08: all eight answer with no key, header version 2.0. Against v1 on the wire:
+    past stops (1629 stop updates against 1111 on the B/D/F/M), stop sequences, `direction_id`,
+    a vehicle descriptor, `is_assigned` on every trip, B Division delays as alerts, some trip IDs ending in `_`,
+    and vehicles mostly `IN_TRANSIT_TO` where v1 said `STOPPED_AT`. Fusion reads only trip IDs (as keys between polls),
+    routes, stop IDs and times (`trips::trip_stops`), so past stops only add the times behind the train;
+    nothing reads the status, track labels or trip ID suffixes, and the raw responses are stored unchanged.
+    Gzipped, the numbered lines' feed is 24 KB (v1 13 KB), well within the fetcher's 5 s timeouts.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
