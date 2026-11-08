@@ -1169,7 +1169,9 @@ impl LiveSpeedEstimator {
                 .map(|(i, &d)| {
                     let peak = subway_peak_mps(d);
                     let peak = match recorded_mps {
-                        Some(r) if i == 0 => peak.min(r + RECORDED_MARGIN_MPS.max(r * RECORDED_MARGIN_SHARE)),
+                        Some(r) if i == 0 => {
+                            peak.min(r + RECORDED_MARGIN_MPS.max(r * RECORDED_MARGIN_SHARE))
+                        }
                         _ => peak,
                     };
                     (crate::track::least_s(d), peak)
@@ -1199,7 +1201,8 @@ impl LiveSpeedEstimator {
             return;
         }
         let gain = 0.5 * weight.clamp(0.0, 1.0);
-        let db = (2.0 * (estimated - known) / (t * t)).clamp(-ANCHOR_MAX_DB_MPS2, ANCHOR_MAX_DB_MPS2);
+        let db =
+            (2.0 * (estimated - known) / (t * t)).clamp(-ANCHOR_MAX_DB_MPS2, ANCHOR_MAX_DB_MPS2);
         // The speed is signed along the axis; the distance is its magnitude's.
         let sign = if self.v < 0.0 { -1.0 } else { 1.0 };
         self.b += sign * gain * db;
@@ -1234,7 +1237,11 @@ impl LiveSpeedEstimator {
             return;
         }
         let since_s = (t_ns - leg.since_ns) as f64 * 1e-9;
-        while leg.stations.front().is_some_and(|&(least, _)| least < since_s) {
+        while leg
+            .stations
+            .front()
+            .is_some_and(|&(least, _)| least < since_s)
+        {
             leg.stations.pop_front();
         }
         let Some(&(_, peak)) = leg.stations.front() else {
@@ -1516,10 +1523,16 @@ mod tests {
         assert!((18.0..23.0).contains(&mph(28.0)), "{}", mph(28.0));
         // A station spacing of 600 m allows under 50 mph, and it only rises.
         assert!((35.0..50.0).contains(&mph(600.0)), "{}", mph(600.0));
-        assert!((0..300).all(|i| subway_reach_mps(i as f64 * 10.0) <= subway_reach_mps(i as f64 * 10.0 + 10.0)));
+        assert!(
+            (0..300)
+                .all(|i| subway_reach_mps(i as f64 * 10.0)
+                    <= subway_reach_mps(i as f64 * 10.0 + 10.0))
+        );
         assert_eq!(subway_reach_mps(1e6), SUBWAY_MAX_SPEED_MPS);
         // About 6 s to 20 mph.
-        let s20 = (0..200).find(|&i| subway_reach_by_time_mps(i as f64 * 0.1) >= 20.0 * 0.44704).unwrap();
+        let s20 = (0..200)
+            .find(|&i| subway_reach_by_time_mps(i as f64 * 0.1) >= 20.0 * 0.44704)
+            .unwrap();
         assert!((50..80).contains(&s20), "{s20}");
         // 600 m between stations: no train passes about 45 mph; 2.2 km, about 55.
         let peak = subway_peak_mps(600.0) / 0.44704;

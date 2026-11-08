@@ -2325,7 +2325,12 @@ impl Fusion {
     /// A departure at `at` underground from the station named now: the speed is capped along the way to the next
     /// stations on the riding line (see [`LiveSpeedEstimator::start_leg`]), if the way is known.
     fn start_leg(&mut self, at: i64) {
-        let Some(station) = self.context.in_subway.then(|| self.station_now(at)).flatten() else {
+        let Some(station) = self
+            .context
+            .in_subway
+            .then(|| self.station_now(at))
+            .flatten()
+        else {
             self.end_leg();
             return;
         };
@@ -2338,7 +2343,8 @@ impl Fusion {
         let lines = self.riding_lines(at);
         match crate::track::stations_ahead_m(station, prev, &lines) {
             Some(ahead) => {
-                let recorded = crate::track::recorded_peak_mph(station, prev, &lines).map(|mph| mph * 0.44704);
+                let recorded =
+                    crate::track::recorded_peak_mph(station, prev, &lines).map(|mph| mph * 0.44704);
                 self.estimator.start_leg(at, &ahead, recorded);
                 self.leg_since_ns = Some(at);
                 self.leg_from = Some(station);
@@ -2378,7 +2384,11 @@ impl Fusion {
         let Some(at) = self.station_now(t_ns) else {
             return;
         };
-        if stations::same_complex(from, at) || self.leg_radio.is_some_and(|r| stations::same_complex(r, at)) {
+        if stations::same_complex(from, at)
+            || self
+                .leg_radio
+                .is_some_and(|r| stations::same_complex(r, at))
+        {
             return;
         }
         self.leg_radio = Some(at);
@@ -2387,7 +2397,8 @@ impl Fusion {
         };
         let since_s = (t_ns - since) as f64 * 1e-9;
         if track.length_m() <= crate::live_speed::subway_reach_by_time_m(since_s) {
-            self.estimator.anchor(t_ns, track.length_m(), RADIO_ANCHOR_WEIGHT);
+            self.estimator
+                .anchor(t_ns, track.length_m(), RADIO_ANCHOR_WEIGHT);
         }
     }
 

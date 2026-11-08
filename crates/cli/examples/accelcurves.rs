@@ -33,11 +33,25 @@ const RUNS: &[(&str, f64, f64, &str, &str, bool)] = &[
     ("20261027-220431", 20.7, 25.9, "2 express", "R142", false),
     ("20261027-220431", 51.1, 67.9, "4", "R142", false),
     ("20261031-215706", 16.8, 19.3, "1", "R62A", false),
-    ("20261103-180153", 2.8, 10.8, "W (car 5546, noted wrong)", "R46?", false),
+    (
+        "20261103-180153",
+        2.8,
+        10.8,
+        "W (car 5546, noted wrong)",
+        "R46?",
+        false,
+    ),
     ("20261103-185919", 6.5, 8.5, "1 (car 2387)", "R62A", false),
     ("20261104-030354", 3.5, 5.0, "1", "R62A", false),
     ("20261105-220621", 0.6, 4.3, "M (car 8582)", "R160", false),
-    ("20261105-220621", 6.7, 18.0, "M, Williamsburg Bridge", "R160", true),
+    (
+        "20261105-220621",
+        6.7,
+        18.0,
+        "M, Williamsburg Bridge",
+        "R160",
+        true,
+    ),
     ("20261107-175954", 3.5, 11.7, "N (car 5078)", "R68A", false),
 ];
 
@@ -113,12 +127,20 @@ fn main() -> anyhow::Result<()> {
                 let t = secs(f.elapsed_realtime_ns);
                 t >= from_min * 60.0
                     && t <= to_min * 60.0
-                    && f.horizontal_accuracy_meters.is_some_and(|a| a <= ACCURACY_M)
-                    && f.speed_accuracy_meters_per_second.is_none_or(|a| a <= SPEED_ACCURACY_MPS)
+                    && f.horizontal_accuracy_meters
+                        .is_some_and(|a| a <= ACCURACY_M)
+                    && f.speed_accuracy_meters_per_second
+                        .is_none_or(|a| a <= SPEED_ACCURACY_MPS)
             })
             .filter_map(|f| {
-                let sigma = f.speed_accuracy_meters_per_second.unwrap_or(SPEED_ACCURACY_MPS) as f64;
-                Some((secs(f.elapsed_realtime_ns), f.speed_meters_per_second? as f64, sigma))
+                let sigma = f
+                    .speed_accuracy_meters_per_second
+                    .unwrap_or(SPEED_ACCURACY_MPS) as f64;
+                Some((
+                    secs(f.elapsed_realtime_ns),
+                    f.speed_meters_per_second? as f64,
+                    sigma,
+                ))
             })
             .collect();
         println!(
@@ -141,7 +163,11 @@ fn main() -> anyhow::Result<()> {
                 _ => None,
             };
             if let (Some(f), Some((a, sigma))) = (csv.as_mut(), a) {
-                writeln!(f, "{session} {from_min},{},{model},{grade},{v:.3},{a:.4},{sigma:.4}", mmss(t))?;
+                writeln!(
+                    f,
+                    "{session} {from_min},{},{model},{grade},{v:.3},{a:.4},{sigma:.4}",
+                    mmss(t)
+                )?;
             }
             let a = a.map(|a| a.0);
             if dump {
@@ -173,7 +199,10 @@ fn main() -> anyhow::Result<()> {
             let from_stop = moving.and_then(|m| leg[..m].iter().rposition(|p| p.1 < STOPPED_MPS));
             let reach = |mph: f64| {
                 let s = from_stop?;
-                leg[s..].iter().find(|p| p.1 >= mph * MPH).map(|p| p.0 - leg[s].0)
+                leg[s..]
+                    .iter()
+                    .find(|p| p.1 >= mph * MPH)
+                    .map(|p| p.0 - leg[s].0)
             };
             let cruise: Vec<f64> = leg
                 .iter()

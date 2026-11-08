@@ -336,7 +336,11 @@ pub fn ahead(from: &Station, prev: Option<&Station>, lines: &[String]) -> Option
 /// How far (m) along the track the next stations a train leaving `from` (away from `prev`) can stop at are,
 /// nearest first, on any shape of one of `lines` (any, if none). Where the shapes disagree (lines going
 /// different ways, an express and a local), each is the farthest of them, so a cap from it holds on any of them.
-pub fn stations_ahead_m(from: &Station, prev: Option<&Station>, lines: &[String]) -> Option<Vec<f64>> {
+pub fn stations_ahead_m(
+    from: &Station,
+    prev: Option<&Station>,
+    lines: &[String],
+) -> Option<Vec<f64>> {
     let ids_from = stop_ids(from);
     let ids_prev = prev.map(stop_ids)?;
     let mut out: Option<Vec<f64>> = None;
@@ -388,7 +392,11 @@ fn irt_recorded_peaks() -> &'static HashMap<(String, String, String), f64> {
             .skip(1)
             .filter_map(|l| {
                 let mut f = l.split(',');
-                let key = (f.next()?.to_string(), f.next()?.to_string(), f.next()?.to_string());
+                let key = (
+                    f.next()?.to_string(),
+                    f.next()?.to_string(),
+                    f.next()?.to_string(),
+                );
                 Some((key, f.next()?.parse().ok()?))
             })
             .collect()
@@ -415,11 +423,19 @@ pub fn recorded_peak_mph(from: &Station, prev: Option<&Station>, lines: &[String
         let (Some(k), Some(p)) = (find(&ids_from), find(&ids_prev)) else {
             continue;
         };
-        let j = if p < k { k.checked_add(1) } else { k.checked_sub(1) };
+        let j = if p < k {
+            k.checked_add(1)
+        } else {
+            k.checked_sub(1)
+        };
         let Some((next, _)) = j.and_then(|j| shape.stops.get(j)) else {
             continue;
         };
-        let key = (line_of_route(&shape.route), shape.stops[k].0.clone(), next.clone());
+        let key = (
+            line_of_route(&shape.route),
+            shape.stops[k].0.clone(),
+            next.clone(),
+        );
         let peak = *irt_recorded_peaks().get(&key)?;
         out = Some(out.map_or(peak, |o| o.max(peak)));
     }
@@ -850,11 +866,22 @@ mod tests {
     fn recorded_peaks_by_stretch() {
         let lines = ["1".to_string()];
         // The 1 northbound, Chambers St to Franklin St: 32.6 mph on the study's Figure F.2-1.
-        let mph = recorded_peak_mph(station("Chambers St", "1"), Some(station("WTC Cortlandt", "1")), &lines);
+        let mph = recorded_peak_mph(
+            station("Chambers St", "1"),
+            Some(station("WTC Cortlandt", "1")),
+            &lines,
+        );
         assert!(mph.is_some_and(|m| (32.0..33.5).contains(&m)), "{mph:?}");
         // Off the IRT, nothing recorded.
         let l = ["L".to_string()];
-        assert_eq!(recorded_peak_mph(station("Lorimer St", "L"), Some(station("Graham Av", "L")), &l), None);
+        assert_eq!(
+            recorded_peak_mph(
+                station("Lorimer St", "L"),
+                Some(station("Graham Av", "L")),
+                &l
+            ),
+            None
+        );
     }
 
     #[test]
