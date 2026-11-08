@@ -676,8 +676,13 @@ impl LiveSpeedEstimator {
         self.predict(along, dt);
         self.predicted_ns = t_ns;
         self.mark_used(Sensor::Imu, t_ns);
+        // The bounds are for the IMU alone: with recent GNSS, its speed stands (a train above 55 mph on a downgrade,
+        // or speeding up faster than the curves, is what GNSS measured).
+        let gnss_recent =
+            self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
         if let Some(max) = self.max_speed_mps
             && self.v.abs() > max
+            && !gnss_recent
         {
             let y = self.v.signum() * max - self.v;
             if self.p00 > 0.0 {
@@ -686,7 +691,9 @@ impl LiveSpeedEstimator {
             self.v += y;
             self.mark_used(Sensor::SpeedLimit, t_ns);
         }
-        self.limit_accel(t_ns, dt);
+        if !gnss_recent {
+            self.limit_accel(t_ns, dt);
+        }
         self.limit_on_leg(t_ns, dt);
         self.along_since_gnss += along * dt;
         for c in &mut self.cars {
