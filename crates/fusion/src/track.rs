@@ -69,6 +69,81 @@ fn shapes() -> &'static [Shape] {
     })
 }
 
+/// The track's points every [`GRID_STEP_M`] or less, with each one's line, by grid cell (1e-3 degrees),
+/// for nearest-point lookups (see [`track_m`]).
+type TrackGrid = std::collections::HashMap<(i32, i32), Vec<(f64, f64, u16)>>;
+const GRID_STEP_M: f64 = 10.0;
+
+fn grid() -> &'static (TrackGrid, Vec<String>) {
+    static GRID: OnceLock<(TrackGrid, Vec<String>)> = OnceLock::new();
+    GRID.get_or_init(|| {
+        let mut grid = TrackGrid::default();
+        let mut lines: Vec<String> = Vec::new();
+        for shape in shapes() {
+            let line = line_of_route(&shape.route);
+            let k = lines.iter().position(|l| *l == line).unwrap_or_else(|| {
+                lines.push(line);
+                lines.len() - 1
+            }) as u16;
+            for w in shape.points.windows(2) {
+                let n = (meters(w[0], w[1]) / GRID_STEP_M).ceil().max(1.0) as usize;
+                for i in 0..n {
+                    let f = i as f64 / n as f64;
+                    let p = (
+                        w[0].0 + (w[1].0 - w[0].0) * f,
+                        w[0].1 + (w[1].1 - w[0].1) * f,
+                    );
+                    let cell = ((p.0 * 1e3).floor() as i32, (p.1 * 1e3).floor() as i32);
+                    grid.entry(cell).or_default().push((p.0, p.1, k));
+                }
+            }
+        }
+        (grid, lines)
+    })
+}
+
+/// Distance (m) from a point to the nearest subway track (of one of `lines`, if given), if within about 100 m.
+/// The track is the GTFS shapes', above and under ground.
+pub fn track_m(lat: f64, lon: f64, lines: Option<&[String]>) -> Option<f64> {
+    let (grid, names) = grid();
+    let (ca, co) = ((lat * 1e3).floor() as i32, (lon * 1e3).floor() as i32);
+    let mut best: Option<f64> = None;
+    for da in -1..=1 {
+        for dn in -1..=1 {
+            for &(pa, po, k) in grid.get(&(ca + da, co + dn)).into_iter().flatten() {
+                if lines.is_some_and(|l| !l.contains(&names[k as usize])) {
+                    continue;
+                }
+                let d = meters((lat, lon), (pa, po));
+                best = Some(best.map_or(d, |b: f64| b.min(d)));
+            }
+        }
+    }
+    best
+}
+
+/// The lines whose track passes within `within_m` of a point (up to about 100 m), each with its distance (m).
+pub fn lines_near(lat: f64, lon: f64, within_m: f64) -> Vec<(String, f64)> {
+    let (grid, names) = grid();
+    let (ca, co) = ((lat * 1e3).floor() as i32, (lon * 1e3).floor() as i32);
+    let mut best: Vec<Option<f64>> = vec![None; names.len()];
+    for da in -1..=1 {
+        for dn in -1..=1 {
+            for &(pa, po, k) in grid.get(&(ca + da, co + dn)).into_iter().flatten() {
+                let d = meters((lat, lon), (pa, po));
+                let b = &mut best[k as usize];
+                if d <= within_m && b.is_none_or(|x| d < x) {
+                    *b = Some(d);
+                }
+            }
+        }
+    }
+    best.iter()
+        .enumerate()
+        .filter_map(|(k, d)| Some((names[k].clone(), (*d)?)))
+        .collect()
+}
+
 /// A stretch of track from one station to another.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Track {
