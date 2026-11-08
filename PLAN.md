@@ -1019,6 +1019,32 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Plan: find the stuck-low cause first; then along-track distance measurements in the forward filter:
     a stop at a named station (the track since the departure) and the radio naming a station on the line
     (`station_history`, from network fixes and tagged cells), weighted for the radio's lag. Then drop `ahead_scale`.
+28. Learn the trains' acceleration curves (speeding up, cruise, braking) from the above-ground rides,
+    per line and car model, to bound and shape the speed between stations (rider, 2026-11-08).
+    Today nothing holds the position to the track between anchors, the speed filter knows no track,
+    and between stations only `fastest_s` (a flat 3 mph/s and 55 mph) rejects legs and the smoothed speeds are
+    scaled to the track's length; no curve shapes the speed, and the live speed isn't bounded by the average.
+    Runs found by `crates/cli/examples/aboveground.rs` (`43afeae`; open track, GPS, train speed;
+    `data/work/track/aboveground.txt`), with the rider's labels:
+    - Tue Oct 20, 3:49 pm: 7, Court Sq to Queensboro Plaza, then to Mets-Willets Point (0.5 and 8.4 km).
+    - Tue Oct 20, 6:41 pm: 7, Mets-Willets Point to 74 St (4.0 km).
+    - Tue Oct 27, 10:04 pm: 5 (NTT chime) Jackson Av to E 180 St (car 6458); 2 express E 180 St to Gun Hill Rd
+      (car 6303, bypassing a fire); 4 Woodlawn to 161 St (car 1170).
+    - Tue Nov 3, 6:01 pm: W, the rider believes, 30 Av to Queensboro Plaza (car 5546, noted as a wrong number).
+    - Thu Nov 5, 10:06 pm: M, Myrtle-Wyckoff Avs to Central Av (car 8582; only the M goes to Myrtle-Wyckoff),
+      and M Myrtle Av to Marcy Av.
+    - Sat Nov 7, 5:59 pm: N, 30 Av to Queensboro Plaza (car 5078).
+    - The rider thinks they also took the J across the Williamsburg Bridge on some ride: find it.
+    Missed by the open-track grid (`python/experiments/open_track.py` counts a stretch only when both end stations
+    are above ground), to count: the Manhattan Bridge (Sat Oct 24, 10:04 pm, York St to Grand St, car 2718)
+    and the 1's 125 St viaduct (Sat Oct 31, 9:57 pm 137 St to 125 St; Tue Nov 3, 6:59 pm 125 St to 137 St, car 2387;
+    Wed Nov 4, 3:03 am 137 St to 116 St). Fix the grid for bridges and viaducts between underground stations,
+    without matching buses on streets over underground lines (Grand St shuttle bus, Broadway over the 1).
+    Bridges have steep grades (to 5.5% on the Manhattan Bridge), so their acceleration differs: keep grade apart.
+    The 1 viaduct is mostly flat; some downtown trains skipped 125 St.
+    The car model from the car number: look up the fleet number ranges (Wikipedia's car pages), don't guess.
+    The line from GTFS-RT (the trip the train matched), not only the track nearby.
+29. Switch the NYCT feeds to GTFS-RT v2 (rider, 2026-11-08); v1 lacked the 2's reroute past a fire (Tue Oct 27).
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
