@@ -1004,6 +1004,18 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     and once the 1 is matched there); a route stale from before a walk (the 6) still needs the station to show.
     `just test-rust` fails on the untracked `crates/cli/examples/entrance_export.rs` (no `no_live_smoothing`).
 22. Missed transfers and switches: 3 to 1 (Thu Oct 29, 4:29 pm); "switched to Q" (Tue Nov 3, 6:01 pm; Sat Nov 7, 5:59 pm).
+    Looked into (2026-11-08, `skip_still`), nothing fixed: all three are changes across the platform
+    with almost no steps (7 s, 17 s; at 96 St the rider stood 1:42), so no walk off is found
+    and no car beacons were heard (`train_change` from beacons can't fire).
+    96 St: the chime went from NTT (the 3) to R62 at the 1's closing, 10 s before leaving.
+    Tried a train change from the chime before the stop against the closing's (stash "item22: chime train change"):
+    it splits Thu Oct 29's leg at 96 St (the 1 after), but over the 37 sessions with legs
+    it flagged 13 stops not walked off at, only 3 of them real changes (also Wed Oct 21, 6:27 pm, 96 St);
+    the chime family is too noisy for it alone.
+    57 St-7 Av, N/W to Q: the same chime, and the feeds can't tell: the Q's trip lists no 57 St stop,
+    and the N the rider left reached Times Sq within the slack of the Q, so the N, matched at 5 Av/59 St too, wins.
+    Left: a sensor sign of a change across the platform; Tue Nov 3 also shows the 7 from Queensboro Plaza
+    to Times Sq (the stops between have no station; item 21's stale line).
 23. Graph, map and replay (Mon Oct 26, 8:08 pm): timestamps on the graph;
     on the map, show where the rider taps; a taps button when replaying a ride, with taps on the graph and map.
 24. Check "says SMEE chime on NTT 5 train" (Tue Oct 27, 10:04 pm).
