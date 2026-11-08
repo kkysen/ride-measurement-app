@@ -954,6 +954,10 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     (`VERTICAL_MIN_RIDE_S`): elevators 11/11, rides found 11 (all elevators), exit stairs as stairs 5/5.
     Left: the 6 noise moves (Edgewater, `002914`, 2:06 to 2:49 am) show as stairs; a rule that a ride in the
     subway can only be an escalator (the rider's idea) is untried.
+    Open, from notes: false stairs up on the 180 St platform (Tue Oct 27, 10:04 pm, at 10:40 pm).
+    Labels: "escalator" at Borough Hall's exit (Sat Oct 24, 8:51 am, at 9:31 am);
+    "96 St I took the stairs, there are no escalators", run down two at a time (Fri Oct 30, 2:49 pm, at 2:50 pm);
+    "boarded elevator" (Sat Oct 31, 4:58 pm, at 5:38 pm).
 17. Which entrance the rider used (`70ef373`, prototype; waiting on the rider's check).
     Data: data.ny.gov "MTA Subway Entrances and Exits: 2024" (`i9wp-a4ja`, data of 2025-12-05, downloaded 2026-10-25)
     in `data/mta/entrances/` (2,120 entrances: type, entry/exit allowed, location; no street or corner names).
@@ -974,6 +978,7 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Also from notes: "55 mph ± 28 mph is meaningless since it's supposed to be a cap",
     braking at 55 mph doesn't bring the speed down (Tue Oct 27, 10:04 pm),
     and the speed jumps from 0 to 55 mph right after leaving a station (Sun Nov 1, 1:50 am; Tue Oct 27, 10:04 pm).
+    For the grade term: "accelerating on a downgrade" (Tue Oct 27, 10:04 pm, at 11:17 pm, south from Woodlawn on the 4).
     Done in part (2026-11-08, `bd29c7b`), not on the phone: a leg underground whose riding lines are all CBTC
     end to end (the 7, the L: `live_speed::CBTC_LINES`) is capped at 50 mph, not 55.
     Fast sweep (203 legs, `no_live_smoothing`): 5 legs changed, 4 on Fri Oct 23, 7:36 pm (the L),
@@ -1072,6 +1077,8 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     misses makes a leg past it; walking into a station (no train path from the street) isn't drawn, by design.
     The Queensboro Plaza walk off at 6:11 pm on Sat Nov 7 (then a departure at 6:13 pm) is the app's guess, not the rider's:
     the rider doesn't remember changing trains there; check it against the steps.
+    Notes that the map wasn't drawn underground: Mon Oct 26, 8:08 pm (at 8:48 pm), Tue Oct 27, 10:04 pm (at 11:51 pm),
+    Sat Nov 7, 5:59 pm (at 6:28 pm).
 21. Wrong lines and stations in the status:
     "6 train doesn't go anywhere near Astoria Blvd" (Sat Nov 7, 2:29 pm);
     "E at 59th but the E doesn't go there" (Sat Oct 31, 4:58 pm);
@@ -1110,6 +1117,8 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     and the N the rider left reached Times Sq within the slack of the Q, so the N, matched at 5 Av/59 St too, wins.
     Left: a sensor sign of a change across the platform; Tue Nov 3 also shows the 7 from Queensboro Plaza
     to Times Sq (the stops between have no station; item 21's stale line).
+    The rider's ground truth for Tue Nov 3, 6:01 pm: the W from 30 Av to 57 St-7 Av, then the Q to Times Sq
+    ("switched to Q" at 6:19 pm, right after tagging the Q's car 5048).
 23. Done, not on the phone (`4affdf5`, `a27cacf`, `e1d4f91`): graph, map and replay (Mon Oct 26, 8:08 pm).
     The graph's time axis shows round 12-hour New York times, as many as fit (`clock_ticks`).
     The live map pins each tap where the rider was (`positions_at`), underground once its leg is drawn.
@@ -1135,6 +1144,14 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
 26. Labels from notes to learn from: the W parked on the center track at 30 Av (Sat Nov 7, 5:59 pm),
     the M4 bus (Thu Nov 5, 4:30 pm), the Grand St to W 4 St shuttle bus (Thu Oct 29, 10:22 pm), car numbers.
     All notes are listed by `ride summary`; a copy of them is in `data/work/notes.txt`.
+    More, all as notes: R179s on the A (Tue Oct 27, 10:04 pm, at 11:44 pm, car 3011, the second car)
+    and on the C (Thu Oct 29, 5:20 pm, at 5:23 pm, car 3146); on that ride "transferred to A" at 5:33 pm (car 4322)
+    and "transferred back to the same C" at 5:44 pm (car 3149);
+    "door l8" on the F (Thu Oct 22, 6:18 pm, at 6:28 pm, car 8909, second car from the back);
+    car 1241 as a note (Mon Nov 2, 6:04 pm, at 6:27 pm, after tagging 1242);
+    "first car" as a note (Fri Oct 30, 4:00 pm, at 4:04 pm, car 6785).
+    Regenerated on 2026-11-08 from all 60 sessions, with clock times and the tags around each note:
+    63 notes on 21 rides.
 27. The live speed underground (rider, 2026-11-08: "just fix the live speed"). Mostly done (2026-11-08), not on the phone.
     Scored by `crates/cli/examples/liveratio.rs` (live distance over track length per leg; `skip_still`,
     `Options::no_live_smoothing` since `534a8bc`, byte-identical and 6x faster), over the 37 sessions with legs
@@ -1185,6 +1202,8 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     runaways (47): more mid-leg anchors (more tagged cells); the 3's charts (F.2-15, F.2-16) don't digitize;
     use the study's average peak speeds (B-8) and measured stop braking (2.11 and 1.83 mph/s, cars 8116, 8112).
     The MTA's Speed and Capacity Review (mta.info/document/13046) blocks scripted downloads: the rider is to save it.
+    The rider's note on what works: with the phone very still, leaving a station from a correct stop,
+    the numbers look accurate by eye (Mon Oct 26, 8:08 pm, at 8:18 pm).
 28. Learn the trains' acceleration curves (speeding up, cruise, braking) from the above-ground rides,
     per line and car model, to bound and shape the speed between stations (rider, 2026-11-08). Done (2026-11-08).
     Open track grid (`b7317bc`, `0377dfb`, `6f988ba`): plus OpenStreetMap's subway ways not tagged as tunnels
@@ -1197,12 +1216,12 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     fleet `min(1.00, 6.5/v, 75/v^2)`, R188 `min(1.24, 9.5/v, 85/v^2)` (rms 10 to 15%); braking flat about 0.76 to
     0.8 m/s^2 to 30 mph. All models ridden are rated 2.5 mph/s motoring, 3.0 full service, 3.2 emergency
     (Wikipedia); only the R188s went over motoring beyond GNSS noise (1.4 to 1.56 m/s^2 at 10 to 18 mph, 7 of 13
-    departures). Car models: 6458, 6303, 1170 R142; 5546 R46 (noted wrong); 8582 R160; 5078 R68A; 2718 R68;
+    departures). Car models: 6458, 6303, 1170 R142; 5546 R46 (the W; the rider's tag, correcting the app's: item 36); 8582 R160; 5078 R68A; 2718 R68;
     2387 R62A; the 7 R188. `subway_accel_limits` is the R188 fit with 15% margin, braking 3.0 mph/s.
     Open: the CBTC stretches not ridden yet (southern L, lower Culver F) to tell CBTC from the R188;
     check the R188 starts over the rated rate against the gyro-tracked accelerometer.
 29. Done, not on the phone (`9ad588a`): the NYCT feeds switched to GTFS-RT v2 (rider, 2026-11-08);
-    v1 lacked the 2's reroute past a fire (Tue Oct 27). v2 is `nyct-v2%2Fgtfs...`, the same line groups,
+    v1 lacked the 2's reroute past a fire (Tue Oct 27, 10:04 pm, at 10:48 pm: express from 180 St to Gun Hill Rd). v2 is `nyct-v2%2Fgtfs...`, the same line groups,
     from the MTA's developer group post (for daylight saving time ending 2026-11-01; v1 retires in 2027).
     Checked on 2026-11-08: all eight answer with no key, header version 2.0. Against v1 on the wire:
     past stops (1629 stop updates against 1111 on the B/D/F/M), stop sequences, `direction_id`,
@@ -1212,6 +1231,30 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     routes, stop IDs and times (`trips::trip_stops`), so past stops only add the times behind the train;
     nothing reads the status, track labels or trip ID suffixes, and the raw responses are stored unchanged.
     Gzipped, the numbered lines' feed is 24 KB (v1 13 KB), well within the fetcher's 5 s timeouts.
+30. False stops between stations, from notes (item 7 finds stops between stations; these are wrong ones):
+    a station stop in the middle of the Joralemon tunnel, though the train likely didn't stop
+    and surely moved on (Mon Oct 26, 1:38 pm, at 1:43 pm);
+    on Mon Oct 26, 8:08 pm: after Borough Hall (8:16 pm), right before Wall St during the curve (8:20 pm),
+    and a stop right before Canal St with false walking after it, on the express 2 (8:27 pm);
+    on Tue Oct 27, 10:04 pm: after leaving 138 St (10:17 pm), then a true stop in the tunnel,
+    and before West Farms Sq (10:36 pm).
+    Check each against the lurch, the closing and the cell; the curve one may be the yaw rate (item 2).
+31. Stops on the 5 above ground not counted, or at least no dwell time shown and not 0 mph
+    (Tue Oct 27, 10:04 pm, at 10:29 and 10:32 pm).
+32. Transfer held wrongly: "false resumption of transfer" once the train moved south from Woodlawn
+    (Tue Oct 27, 10:04 pm, at 11:15 pm); the D from 161 St to 155 St marked transfer the whole way,
+    then 55 mph as soon as it moved (11:36 pm; the jump is item 18's).
+33. Walking speed wrong: "walking 55 mph" (Mon Oct 26, 8:08 pm, at 8:41 pm);
+    6.7 mph walking at a normal pace with GNSS Doppler (Tue Oct 27, 5:23 pm, at 5:33 pm).
+34. The 2 from GTFS-RT keeps being lost (Mon Oct 26, 8:08 pm, at 8:19 pm). Check against v2 (item 29).
+35. Station cells missing (the registered cell, item 7 of 2026-10-21):
+    none at 138 St and 149 St-Grand Concourse on the 5 (Tue Oct 27, 10:04 pm, at 10:16 and 10:21 pm);
+    the southbound 4 missed 110 St, 103 St, 86 St and 59 St (Mon Nov 2, 6:04 pm, at 6:22 and 6:24 pm);
+    on the next 4 (Mon Nov 2, 6:31 pm) none from 125 St south, in other apps too, after restarting the phone
+    and moving to the next car, until Brooklyn Bridge-City Hall (6:38 pm).
+    So the cell can be gone for a whole run; the station must come from the rest then.
+36. Wrong car number shown (Tue Nov 3, 6:01 pm, at 6:14 pm): the app's car number was wrong;
+    the rider's tags are right: 5546 on the W (6:04 pm) and 5048 on the Q (6:19 pm).
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
