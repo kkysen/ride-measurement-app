@@ -1059,8 +1059,15 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
       weight), is a known place; the estimate's distance against it corrects the bias and speed.
     - GNSS is never capped (`01c19ce`): the 55 mph cap, the acceleration ceiling and the leg cap stand aside with
       GNSS in the last 5 s.
-    Open: stuck-low legs (46 under 0.5): classify (held, axis, slow integration) and fix the biggest group;
-    runaways (43): more mid-leg anchors (more tagged cells); the 3's charts (F.2-15, F.2-16) don't digitize;
+    - Stuck low (`29984be`): of the 46 legs under 0.5, 31 were held at 0 by a likely stop, 15 integrated too slowly
+      with no hold, 1 by a transfer. 16 of the 31 held by a lurch 6 to 20 s after the live departure, no closing
+      heard (motoring cut off); a likely stop within 20 s of a departure no longer holds (live only: the stop
+      records never kept them). Under 0.5 46 to 30, within 0.7 to 1.3 82 to 91, median 0.85 to 0.95,
+      over 1.3 43 to 47; 19 legs nearer the track by over 0.15, 3 further (4:13 on Mon Oct 26, 8:08 pm, 0.88 to 1.63).
+    Open: stuck-low legs (30 under 0.5): held from a stop with no departure found, offline or live
+      (the leg starts at the stop: Wed Oct 21, 6:21 pm, 11:28, the phone in hand); lurches mid-leg 40 to 80 s
+      after the departure; slow integration without a hold (15);
+    runaways (47): more mid-leg anchors (more tagged cells); the 3's charts (F.2-15, F.2-16) don't digitize;
     use the study's average peak speeds (B-8) and measured stop braking (2.11 and 1.83 mph/s, cars 8116, 8112).
     The MTA's Speed and Capacity Review (mta.info/document/13046) blocks scripted downloads: the rider is to save it.
 28. Learn the trains' acceleration curves (speeding up, cruise, braking) from the above-ground rides,
