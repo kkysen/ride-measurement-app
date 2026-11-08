@@ -82,6 +82,14 @@ impl Track {
         *self.along.last().unwrap_or(&0.0)
     }
 
+    /// The same track, the other way.
+    pub fn reversed(&self) -> Track {
+        let points: Vec<(f64, f64)> = self.points.iter().rev().copied().collect();
+        let length = self.length_m();
+        let along = self.along.iter().rev().map(|a| length - a).collect();
+        Track { points, along }
+    }
+
     /// The point `m` meters along, clamped to the ends.
     pub fn at(&self, m: f64) -> (f64, f64) {
         let i = self.along.partition_point(|&a| a <= m);
@@ -143,6 +151,150 @@ pub fn between(a: &Station, b: &Station) -> Option<Track> {
         along.push(along.last().unwrap() + meters(w[0], w[1]));
     }
     Some(Track { points, along })
+}
+
+/// A shape's points from index `i` to `j` (either way), as a [`Track`].
+fn slice(shape: &Shape, i: usize, j: usize) -> Track {
+    let points: Vec<(f64, f64)> = if i <= j {
+        shape.points[i..=j].to_vec()
+    } else {
+        shape.points[j..=i].iter().rev().copied().collect()
+    };
+    let mut along = vec![0.0];
+    for w in points.windows(2) {
+        along.push(along.last().unwrap() + meters(w[0], w[1]));
+    }
+    Track { points, along }
+}
+
+/// A fix is on a shape's track within this (m): where the path leaves GNSS for the track.
+const ON_SHAPE_M: f64 = 60.0;
+
+/// The track from where a train was at a good fix (`p`) to the station it next stopped at,
+/// along a shape of one of `lines` (any, if none) that stops there and passes within [`ON_SHAPE_M`] of `p`;
+/// the nearest such. From the fix's nearest point on it, so the path meets GNSS's.
+/// For entering a tunnel, as from Queensboro Plaza's elevated platform to Lexington Av/59 St.
+pub fn to_station(p: (f64, f64), station: &Station, lines: &[String]) -> Option<Track> {
+    let ids = stop_ids(station);
+    // The fix's distance, the shape, its segment there, the station's point, and the fix's point on it.
+    #[allow(clippy::type_complexity)]
+    let mut best: Option<(f64, &Shape, usize, usize, (f64, f64))> = None;
+    for shape in shapes() {
+        if !lines.is_empty() && !lines.contains(&line_of_route(&shape.route)) {
+            continue;
+        }
+        let Some(&(_, k)) = shape
+            .stops
+            .iter()
+            .find(|(id, _)| ids.contains(&id.as_str()))
+        else {
+            continue;
+        };
+        let Some((d, i, q)) = nearest_on(shape, p) else {
+            continue;
+        };
+        if d <= ON_SHAPE_M && best.is_none_or(|(b, ..)| d < b) {
+            best = Some((d, shape, i, k, q));
+        }
+    }
+    let (_, shape, i, k, q) = best?;
+    // From the fix's point on segment `i` (points `i` to `i + 1`) to the station's point `k`.
+    let mut track = if i < k {
+        slice(shape, i + 1, k)
+    } else {
+        slice(shape, i, k)
+    };
+    track.points.insert(0, q);
+    *track.points.last_mut().unwrap() = (station.lat, station.lon);
+    track.along = vec![0.0];
+    for w in track.points.windows(2) {
+        track
+            .along
+            .push(track.along.last().unwrap() + meters(w[0], w[1]));
+    }
+    Some(track)
+}
+
+/// The point of a shape's track nearest `p`: its distance (m), its segment's first point, and the point.
+fn nearest_on(shape: &Shape, p: (f64, f64)) -> Option<(f64, usize, (f64, f64))> {
+    let m_lat = 111_195.0;
+    let m_lon = m_lat * p.0.to_radians().cos();
+    let mut best: Option<(f64, usize, (f64, f64))> = None;
+    for (i, w) in shape.points.windows(2).enumerate() {
+        // In meters about `p`, flat over a segment's length.
+        let (ax, ay) = ((w[0].1 - p.1) * m_lon, (w[0].0 - p.0) * m_lat);
+        let (bx, by) = ((w[1].1 - p.1) * m_lon, (w[1].0 - p.0) * m_lat);
+        let (dx, dy) = (bx - ax, by - ay);
+        let len2 = dx * dx + dy * dy;
+        let f = if len2 > 0.0 {
+            (-(ax * dx + ay * dy) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let (x, y) = (ax + dx * f, ay + dy * f);
+        let d = x.hypot(y);
+        if best.is_none_or(|(b, ..)| d < b) {
+            let q = (
+                w[0].0 + (w[1].0 - w[0].0) * f,
+                w[0].1 + (w[1].1 - w[0].1) * f,
+            );
+            best = Some((d, i, q));
+        }
+    }
+    best
+}
+
+/// How many stations on [`ahead`] goes.
+const AHEAD_STOPS: usize = 4;
+
+/// The track from a station on through the next [`AHEAD_STOPS`] a shape of one of `lines` (any, if none) stops at,
+/// away from `prev` where the shape stops there too: where a train leaving `from` is headed. None if no shape
+/// knows the way, or the shapes disagree (no `prev`, or lines going different ways): the way isn't known.
+pub fn ahead(from: &Station, prev: Option<&Station>, lines: &[String]) -> Option<Track> {
+    let ids_from = stop_ids(from);
+    let ids_prev = prev.map(stop_ids)?;
+    // The shape, the station's point, the farthest stop's point, and the next station's position.
+    let mut found: Option<(&Shape, usize, usize, (f64, f64))> = None;
+    for shape in shapes() {
+        if !lines.is_empty() && !lines.contains(&line_of_route(&shape.route)) {
+            continue;
+        }
+        let find = |ids: &[&str]| {
+            shape
+                .stops
+                .iter()
+                .position(|(id, _)| ids.contains(&id.as_str()))
+        };
+        let (Some(k), Some(p)) = (find(&ids_from), find(&ids_prev)) else {
+            continue;
+        };
+        let j = if p < k {
+            k.checked_add(1)
+        } else {
+            k.checked_sub(1)
+        };
+        let Some(&(_, i)) = j.and_then(|j| shape.stops.get(j)) else {
+            continue;
+        };
+        // On past the next station, up to [`AHEAD_STOPS`] (or the line's end): a train can pass one without a
+        // stop found there (an express, a closed station, a stop missed), and is placed by distance.
+        let far = if p < k {
+            (k + AHEAD_STOPS).min(shape.stops.len() - 1)
+        } else {
+            k.saturating_sub(AHEAD_STOPS)
+        };
+        let to = shape.points[i];
+        match found {
+            // Another shape to the same next station (within a platform's length): the same way.
+            Some((.., q)) if meters(q, to) <= 200.0 => {}
+            Some(_) => return None,
+            None => found = Some((shape, shape.stops[k].1, shape.stops[far].1, to)),
+        }
+    }
+    let (shape, k, i, _) = found?;
+    let mut track = slice(shape, k, i);
+    track.points[0] = (from.lat, from.lon);
+    Some(track)
 }
 
 /// The shortest track from `from` to the next station a shape of one of `lines` (any, if none) stops at,

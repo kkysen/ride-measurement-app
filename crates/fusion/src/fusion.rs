@@ -625,6 +625,25 @@ pub struct Fix {
     pub speed_sigma: Option<f64>,
 }
 
+/// The leg in progress (see [`Fusion::recent_track_path`]): from the departure at `left`, along `track`,
+/// with `next` of [`Fusion::live_speeds`] summed into `m` (meters) so far.
+/// A good fix's time, a station's address, and the riding lines (see `Fusion::fix_tracks`).
+type FixTrackKey = (i64, usize, Vec<String>);
+
+struct AheadPath {
+    left: i64,
+    /// The track's length over the live speeds' distance on the leg before (see [`Fusion::ahead_scale`]).
+    scale: f64,
+    track: crate::track::Track,
+    next: usize,
+    m: f64,
+    prev: Option<(i64, f32)>,
+    points: Vec<(SmoothedSpeed, (f64, f64))>,
+}
+
+/// The bounds of [`Fusion::ahead_scale`].
+const AHEAD_SCALE: (f64, f64) = (0.5, 4.0);
+
 /// How often [`Fusion::recent_track_path`] gives a point along the track (ns).
 const TRACK_PATH_EVERY_NS: i64 = 1_000_000_000;
 
@@ -700,10 +719,17 @@ pub struct Fusion {
     /// The track between each pair of stations a leg was looked up for (see [`crate::track::between`]),
     /// by their addresses: a status looks up the same recent legs again.
     tracks: std::cell::RefCell<HashMap<(usize, usize), Option<crate::track::Track>>>,
+    /// The track between a good fix and a station (see [`crate::track::to_station`]), by the fix's time,
+    /// the station's address, and the riding lines: each tick asks for the same recent ones again.
+    fix_tracks: std::cell::RefCell<HashMap<FixTrackKey, Option<crate::track::Track>>>,
+    /// The leg in progress so far (see [`Fusion::recent_track_path`]): its start, the live speeds summed,
+    /// and its points, so each tick adds only the speeds since the last.
+    ahead_path: std::cell::RefCell<Option<AheadPath>>,
     /// The stop records settled so far (see [`Fusion::records`]), so a status recomputes only the recent ones.
     settled_records: std::cell::RefCell<SettledRecords>,
-    /// The times of good fixes (see [`Fusion::good_fix_ns`]), in time order.
+    /// The times of good fixes (see [`Fusion::good_fix_ns`]), in time order, and where each was.
     good_fixes: Vec<i64>,
+    good_fix_points: Vec<(f64, f64)>,
     /// The latest lurch the car settled after, shown live as the stop before it's decided (see [`Fusion::estimate`]).
     likely_stop: Option<train_stops::Stop>,
     /// Stops in the subway waiting for a door closing or a departure to confirm them.
@@ -799,6 +825,8 @@ impl Fusion {
             departures: Vec::new(),
             settled_records: Default::default(),
             tracks: Default::default(),
+            fix_tracks: Default::default(),
+            ahead_path: Default::default(),
             timeline_kept: std::cell::RefCell::new(TimelineKept {
                 joined: Vec::new(),
                 until: i64::MIN,
@@ -812,6 +840,7 @@ impl Fusion {
                 upto: 0,
             }),
             good_fixes: Vec::new(),
+            good_fix_points: Vec::new(),
             likely_stop: None,
             unconfirmed_stops: Vec::new(),
             walking: WalkingDetector::default(),
@@ -2401,6 +2430,7 @@ impl Fusion {
                 let accuracy_m = f.accuracy.unwrap_or(DEFAULT_FIX_ACCURACY_M);
                 if accuracy_m <= GAP_FIX_M {
                     self.good_fixes.push(t_ns);
+                    self.good_fix_points.push((f.lat, f.lon));
                 }
                 self.position_inputs.push((
                     t_ns,
@@ -2647,47 +2677,257 @@ impl Fusion {
         self.recent.iter().copied().collect()
     }
 
-    /// The live map's path underground: each leg between stations that starts in the window (see
-    /// [`crate::track::legs`]), its smoothed speeds placed along the track as [`crate::track::join`] places a past
-    /// ride's (without [`crate::track::blend`]: the live map draws GPS fixes, not dead reckoning).
-    /// A leg shows once the train stops at its far station. The window's start, and each leg's start with its
-    /// points in time order: a caller keeps the legs it has from before the window, which never change again.
+    /// The live map's path underground, as [`crate::track::join`] places a past ride's (without
+    /// [`crate::track::blend`]: the live map draws GPS fixes, not dead reckoning), from what starts in the window:
+    /// - each leg between stations (see [`crate::track::legs`]), once the train stops at its far station;
+    /// - into a tunnel, from the last good fix to the first station stopped at, and out of one, from the
+    ///   station to the first good fix, along the track the fix is on (see [`crate::track::to_station`]);
+    /// - the leg in progress, toward the next station on the riding line (see [`crate::track::ahead`]),
+    ///   by the smoothed speeds' distance since leaving: not held to the track until the train gets there,
+    ///   so often short underground; it ends at the station at most.
+    ///
+    /// The window's start, and each part not yet settled, by its start, with its points in time order:
+    /// a caller replaces its parts with these and drops any others starting in the window;
+    /// a part that ended before the window never changes again, so isn't given again.
     #[allow(clippy::type_complexity)]
     pub fn recent_track_path(&self) -> (i64, Vec<(i64, Vec<(SmoothedSpeed, (f64, f64))>)>) {
-        let speeds = self.recent_smoothed();
-        let Some(first) = speeds.first().map(|s| s.elapsed_realtime_ns) else {
+        use crate::track::{Along, Leg, ahead, anchor, to_station};
+        let Some(first) = self
+            .recent_smoothed()
+            .first()
+            .map(|s| s.elapsed_realtime_ns)
+        else {
             return (i64::MIN, Vec::new());
         };
         // As the hold in `smooth_window`: a leg starts within a dwell of its first stop.
         let from = first - (RECORD_MAX_DWELL_S * 1e9) as i64 - 1;
+        // The smoothed speeds from there: frozen, then the window's. Smoothing reaches only the latest measurement,
+        // so a part still changes until the window has passed its end.
+        let speeds: Vec<SmoothedSpeed> = if self.window_ns.is_some() {
+            let i = self
+                .frozen
+                .partition_point(|s| s.elapsed_realtime_ns < from);
+            self.frozen[i..]
+                .iter()
+                .chain(&self.recent)
+                .copied()
+                .collect()
+        } else {
+            self.smooth_window()
+        };
         let records: Vec<StopRecord> = self.records().since(from).cloned().collect();
-        let fixes = &self.good_fixes[self.good_fixes.partition_point(|&t| t <= from)..];
+        let k0 = self.good_fixes.partition_point(|&t| t <= from);
+        let fixes = &self.good_fixes[k0..];
+        let points = &self.good_fix_points[k0..];
         let (legs, _) = crate::track::legs(&records, fixes, None);
-        let legs = legs
-            .iter()
-            .filter(|leg| leg.from_ns >= first)
-            .map(|leg| {
-                let along = crate::track::Along::new(leg, &speeds);
-                // One a second, as `Replay::map_path`, and the stop at the far station.
-                let mut points: Vec<(SmoothedSpeed, (f64, f64))> = Vec::new();
-                let mut end = None;
-                for (s, p) in along.path() {
-                    let t = s.elapsed_realtime_ns;
-                    if points
-                        .last()
-                        .is_none_or(|(l, _)| t - l.elapsed_realtime_ns >= TRACK_PATH_EVERY_NS)
+        let mut parts: Vec<Leg> = Vec::new();
+        let mut ahead_of: Option<(i64, crate::track::Track)> = None;
+        // Whether the rider stayed on one train over records `range`: no platform walk before any of them,
+        // and none they got off at without boarding a train there (its departure is then the boarded train's).
+        let on_board = |range: std::ops::Range<usize>| {
+            records[range].iter().all(|x| {
+                !x.on_platform
+                    && x.alighted_ns
+                        .is_none_or(|a| x.departed_ns.is_some_and(|d| d > a))
+            })
+        };
+        let lost_after = |j: usize| {
+            fixes
+                .get(j + 1)
+                .is_none_or(|&n| n - fixes[j] > ride_session::track::MAX_GAP_NS)
+        };
+        let fix_track = |j: usize, station: &'static stations::Station, lines: Vec<String>| {
+            let key = (fixes[j], std::ptr::from_ref(station) as usize, lines);
+            let mut cache = self.fix_tracks.borrow_mut();
+            if let Some(t) = cache.get(&key) {
+                return t.clone();
+            }
+            let t = to_station(points[j], station, &key.2);
+            cache.insert(key, t.clone());
+            t
+        };
+        for (k, r) in records.iter().enumerate() {
+            if !anchor(r) {
+                continue;
+            }
+            let station = r.station.unwrap();
+            // Into the tunnel: from the last good fix, where GPS was lost (as the map's dashed gaps),
+            // if the rider stayed on the train from there.
+            let j = fixes.partition_point(|&t| t < r.stopped_ns);
+            if !legs.iter().any(|l| l.to_ns == r.stopped_ns)
+                && let Some(j) = j.checked_sub(1).filter(|&j| lost_after(j))
+            {
+                let i = records.partition_point(|x| x.stopped_ns <= fixes[j]);
+                // The stop the train stood at when GPS was lost, if it had stopped and not left yet.
+                let i = i
+                    .checked_sub(1)
+                    .filter(|&i| records[i].departed_ns.is_some_and(|d| d > fixes[j]))
+                    .unwrap_or(i);
+                // Only to the first station after it.
+                if on_board(i..k + 1)
+                    && !records[i..k]
+                        .iter()
+                        .any(|x| anchor(x) && x.stopped_ns > fixes[j])
+                    && let Some(track) = fix_track(j, station, self.riding_lines(r.stopped_ns))
+                {
+                    parts.push(Leg {
+                        from_ns: fixes[j],
+                        to_ns: r.stopped_ns,
+                        track,
+                    });
+                }
+            }
+            // Out of it, to the first good fix after GPS was lost, or on toward the next station.
+            let Some(left) = r.departed_ns else {
+                continue;
+            };
+            if legs.iter().any(|l| l.from_ns == left) {
+                continue;
+            }
+            let j = fixes.partition_point(|&t| t <= left);
+            let lines = self.riding_lines(left);
+            match fixes.get(j) {
+                Some(&t) => {
+                    let lost = j.checked_sub(1).is_none_or(lost_after);
+                    let until = records.partition_point(|x| x.stopped_ns < t);
+                    if lost
+                        && on_board(k..until)
+                        && let Some(track) = fix_track(j, station, lines.clone())
                     {
-                        points.push((*s, p));
-                        end = None;
-                    } else {
-                        end = Some((*s, p));
+                        parts.push(Leg {
+                            from_ns: left,
+                            to_ns: t,
+                            track: track.reversed(),
+                        });
                     }
                 }
-                points.extend(end);
-                (leg.from_ns, points)
+                None if k + 1 == records.len() && on_board(k..k + 1) => {
+                    let before = records[..k]
+                        .iter()
+                        .rev()
+                        .filter_map(|x| x.station)
+                        .find(|s| !stations::same_complex(station, s));
+                    ahead_of = ahead(station, before, &lines).map(|t| (left, t));
+                }
+                None => {}
+            }
+        }
+        let sample = |from_ns: i64, at: &dyn Fn(&SmoothedSpeed) -> (f64, f64)| {
+            // One a second, as `Replay::map_path`, and the last.
+            let mut out: Vec<(SmoothedSpeed, (f64, f64))> = Vec::new();
+            let mut end = None;
+            for s in speeds
+                .iter()
+                .skip_while(|s| s.elapsed_realtime_ns < from_ns)
+            {
+                let t = s.elapsed_realtime_ns;
+                if out
+                    .last()
+                    .is_none_or(|(l, _)| t - l.elapsed_realtime_ns >= TRACK_PATH_EVERY_NS)
+                {
+                    out.push((*s, at(s)));
+                    end = None;
+                } else {
+                    end = Some(*s);
+                }
+            }
+            out.extend(end.map(|s| (s, at(&s))));
+            out
+        };
+        let mut out: Vec<(i64, Vec<(SmoothedSpeed, (f64, f64))>)> = Vec::new();
+        for leg in legs.iter().chain(&parts).filter(|l| l.to_ns >= first) {
+            let along = Along::new(leg, &speeds);
+            let points: Vec<_> = sample(leg.from_ns, &|s| along.at(s.elapsed_realtime_ns))
+                .into_iter()
+                .take_while(|(s, _)| s.elapsed_realtime_ns <= leg.to_ns)
+                .collect();
+            out.push((leg.from_ns, points));
+        }
+        // The leg in progress, by the live speed, which the smoothing hasn't reached yet underground.
+        let mut cached = self.ahead_path.borrow_mut();
+        match ahead_of {
+            None => *cached = None,
+            Some((left, track)) => {
+                let a = match cached.take() {
+                    Some(a) if a.left == left && a.track == track => a,
+                    _ => AheadPath {
+                        left,
+                        next: self.live_speeds.partition_point(|&(t, _)| t < left),
+                        scale: self.ahead_scale(&legs, left),
+                        track,
+                        m: 0.0,
+                        prev: None,
+                        points: Vec::new(),
+                    },
+                };
+                let a = cached.insert(a);
+                // The newest point is the latest speed's, kept only if a second after the one before.
+                if a.points.len() > 1
+                    && a.points[a.points.len() - 1].0.elapsed_realtime_ns
+                        - a.points[a.points.len() - 2].0.elapsed_realtime_ns
+                        < TRACK_PATH_EVERY_NS
+                {
+                    a.points.pop();
+                }
+                let n = self.live_speeds.len();
+                for k in a.next..n {
+                    let (t, v) = self.live_speeds[k];
+                    if let Some((pt, pv)) = a.prev {
+                        a.m += f64::from(pv + v) / 2.0 * (t - pt) as f64 * 1e-9;
+                    }
+                    a.prev = Some((t, v));
+                    let due = a
+                        .points
+                        .last()
+                        .is_none_or(|(l, _)| t - l.elapsed_realtime_ns >= TRACK_PATH_EVERY_NS);
+                    if due || k + 1 == n {
+                        // The acceleration since the point before, for coloring by it.
+                        let accel_mps2 = a.points.last().map_or(0.0, |(l, _)| {
+                            (f64::from(v) - l.speed_mps)
+                                / ((t - l.elapsed_realtime_ns) as f64 * 1e-9).max(1e-3)
+                        });
+                        let s = SmoothedSpeed {
+                            elapsed_realtime_ns: t,
+                            speed_mps: f64::from(v),
+                            sigma_mps: f64::NAN,
+                            forward_mps: f64::from(v),
+                            backward_mps: f64::NAN,
+                            accel_mps2,
+                        };
+                        a.points.push((s, a.track.at(a.m * a.scale)));
+                    }
+                }
+                a.next = n;
+                out.retain(|(t, _)| *t != left);
+                out.push((left, a.points.clone()));
+            }
+        }
+        out.sort_by_key(|(t, _)| *t);
+        (first, out)
+    }
+
+    /// How much farther than the live speeds say the train goes: the median over the legs in the window that
+    /// ended by `left` of each's track over their distance, within [`AHEAD_SCALE`]; 1 without one.
+    /// Underground the live speeds often cover half the track or less.
+    fn ahead_scale(&self, legs: &[crate::track::Leg], left: i64) -> f64 {
+        let mut ratios: Vec<f64> = legs
+            .iter()
+            .filter(|l| l.to_ns <= left)
+            .filter_map(|leg| {
+                let i = self.live_speeds.partition_point(|&(t, _)| t < leg.from_ns);
+                let j = self.live_speeds.partition_point(|&(t, _)| t <= leg.to_ns);
+                let m: f64 = self.live_speeds[i..j]
+                    .windows(2)
+                    .map(|w| f64::from(w[0].1 + w[1].1) / 2.0 * (w[1].0 - w[0].0) as f64 * 1e-9)
+                    .sum();
+                (m > 0.0).then(|| leg.track.length_m() / m)
             })
             .collect();
-        (first, legs)
+        if ratios.is_empty() {
+            return 1.0;
+        }
+        ratios.sort_by(f64::total_cmp);
+        ratios[ratios.len() / 2].clamp(AHEAD_SCALE.0, AHEAD_SCALE.1)
     }
 
     /// Smoothed speeds at every fix and sample time in the window: the forward estimate there combined with
