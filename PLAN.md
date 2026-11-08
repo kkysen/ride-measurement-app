@@ -1145,6 +1145,9 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     But the Q's last Times Sq time is 6:24:06 pm, 2:17 late, so the feeds don't confirm the Q either,
     and live, at Times Sq, the W was still predicted there at 6:22:25 pm, so the status shows the W until the rider walks off.
     Left: the change, live; the express passing 49 St (named by the cell at 6:20:33 pm) is a sign the W stops there.
+    The rider (2026-11-08): the GTFS-RT is often off by a little, so its times can't settle it,
+    but the train didn't stop at 49 St, so it was a Q on the express track.
+    Next: use the stop pattern itself (a station passed without stopping) to rule out the locals that stop there.
 23. Done, not on the phone (`4affdf5`, `a27cacf`, `e1d4f91`): graph, map and replay (Mon Oct 26, 8:08 pm).
     The graph's time axis shows round 12-hour New York times, as many as fit (`clock_ticks`).
     The live map pins each tap where the rider was (`positions_at`), underground once its leg is drawn.
