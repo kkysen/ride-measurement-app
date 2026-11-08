@@ -48,10 +48,12 @@ import kotlin.math.max
 import kotlin.math.min
 import uniffi.ride_ffi.LiveStop
 import uniffi.ride_ffi.TimelineSegment
+import uniffi.ride_ffi.clockTicks
 
 /** How much of the ride the graph shows, ending now; null is the whole ride. */
 private val WINDOWS_MIN = listOf(5, 15, 60, null)
-private val CLOCK = DateTimeFormatter.ofPattern("h:mm a").withZone(ZoneId.of("America/New_York"))
+private val NEW_YORK = ZoneId.of("America/New_York")
+private val CLOCK = DateTimeFormatter.ofPattern("h:mm a", java.util.Locale.US).withZone(NEW_YORK)
 
 /** The narrowest the zoomed graph gets (ns). */
 private const val MIN_SPAN_NS = 30_000_000_000L
@@ -122,7 +124,6 @@ fun SpeedGraphScreen(
         val startNs = endNs - spanNs
         val shown = samples.filter { it.elapsedRealtimeNs in startNs..endNs }
         val shownStops = stops.filter { (it.departedNs ?: it.leftNs ?: nowNs) >= startNs && it.stoppedNs <= endNs }
-        val clock = { ns: Long -> CLOCK.format(Instant.ofEpochMilli(clockOffsetMs + ns / 1_000_000)).lowercase() }
         // The gestures outlive each frame's range (now moves on), so they read the latest one.
         val view by rememberUpdatedState(longArrayOf(windowEndNs, windowSpanNs, startNs, spanNs))
         val gestures = Modifier
@@ -158,9 +159,8 @@ fun SpeedGraphScreen(
         Canvas(Modifier.fillMaxWidth().weight(1f).then(gestures)) {
             plot(text, ink, accelColor, shown.map { it.elapsedRealtimeNs to Units.accel(it.accelMps2) }, startNs, endNs, shownStops, nowNs, zeroBased = false, labels = false)
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(clock(startNs))
-            Text(clock(endNs))
+        Canvas(Modifier.fillMaxWidth().height(20.dp).then(gestures)) {
+            timeAxis(text, ink, clockOffsetMs, startNs, endNs)
         }
     }
 }
@@ -256,6 +256,27 @@ private fun DrawScope.plot(
         if (i == 0) path.moveTo(x(t), y(v)) else path.lineTo(x(t), y(v))
     }
     drawPath(path, color, style = Stroke(width = 2.dp.toPx()))
+}
+
+/**
+ * The time axis under the graphs: round clock times (12-hour, New York) from Rust's `clock_ticks`,
+ * as many as fit, each centered on its time and kept on the canvas.
+ */
+private fun DrawScope.timeAxis(text: TextMeasurer, ink: Color, clockOffsetMs: Long, startNs: Long, endNs: Long) {
+    val left = 36.dp.toPx()
+    val w = size.width - left
+    val startMs = clockOffsetMs + startNs / 1_000_000
+    val endMs = clockOffsetMs + endNs / 1_000_000
+    val style = TextStyle(color = ink, fontSize = 11.sp)
+    val offsetMs = NEW_YORK.rules.getOffset(Instant.ofEpochMilli(startMs)).totalSeconds * 1000L
+    val maxTicks = (w / 72.dp.toPx()).toInt().coerceAtLeast(2)
+    for (ms in clockTicks(startMs, endMs, offsetMs, maxTicks.toUInt())) {
+        val tx = left + w * (ms - startMs).toFloat() / max(1L, endMs - startMs).toFloat()
+        val label = text.measure(CLOCK.format(Instant.ofEpochMilli(ms)).lowercase(), style)
+        val lx = (tx - label.size.width / 2f).coerceIn(0f, max(0f, size.width - label.size.width))
+        drawLine(ink.copy(alpha = 0.5f), Offset(tx, 0f), Offset(tx, 3.dp.toPx()), 1f)
+        drawText(label, topLeft = Offset(lx, size.height - label.size.height))
+    }
 }
 
 /** What the rider was doing, as a strip over the graphs' time axis: each line ridden, and walking, labeled where there's room. */
