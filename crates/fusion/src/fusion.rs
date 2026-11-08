@@ -1051,9 +1051,11 @@ impl Fusion {
             return (lines.to_vec(), prev);
         };
         let walked = self.walked(prev, at);
+        // By complex: a stop named at another of its platforms (Queensboro Plaza's 7 one, from the N/W,
+        // Tue Nov 3, 6:10 pm) is still a stop of the lines the train was on.
         let both: Vec<String> = lines
             .iter()
-            .filter(|l| station.lines.contains(l))
+            .filter(|l| stations::serves(station, l))
             .cloned()
             .collect();
         let lines = if both.is_empty() || walked {
