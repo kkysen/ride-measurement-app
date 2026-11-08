@@ -1010,46 +1010,62 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
 26. Labels from notes to learn from: the W parked on the center track at 30 Av (Sat Nov 7, 5:59 pm),
     the M4 bus (Thu Nov 5, 4:30 pm), the Grand St to W 4 St shuttle bus (Thu Oct 29, 10:22 pm), car numbers.
     All notes are listed by `ride summary`; a copy of them is in `data/work/notes.txt`.
-27. The live speed underground (rider, 2026-11-08: "just fix the live speed").
-    `crates/cli/examples/liveratio.rs` (`skip_still`, about 1:15 a ride): over 43 legs on 8 rides, the live speed's
-    distance over the track's length is 0 to 2.4 (10th 0.16, median 0.76, 90th 1.79); per-ride medians 0.36 to 1.87.
-    Not "about half", as said before (that was the smoothed speeds' 0.46 from item 8). Two failures:
-    runaway (peak at the 55 mph cap, 1.3 to 2.4 times the track) and stuck low (peak 6 to 14 mph on legs averaging
-    over 20; `20261026-200816` 13:37, 0 m in 89 s), sometimes both in one leg (Sat Nov 7, 5:59 pm, 25:53).
-    Plan: find the stuck-low cause first; then along-track distance measurements in the forward filter:
-    a stop at a named station (the track since the departure) and the radio naming a station on the line
-    (`station_history`, from network fixes and tagged cells), weighted for the radio's lag. Then drop `ahead_scale`.
+27. The live speed underground (rider, 2026-11-08: "just fix the live speed"). Mostly done (2026-11-08), not on the phone.
+    Scored by `crates/cli/examples/liveratio.rs` (live distance over track length per leg; `skip_still`,
+    `Options::no_live_smoothing` since `534a8bc`, byte-identical and 6x faster), over the 37 sessions with legs
+    (`data/work/sessions-with-legs.txt`) at 5 jobs: about 1 minute. Compare with `data/work/cmp_liveratio.py`
+    (legs matched by session and start). On 203 matched legs, baseline (`d0d7a43` plus the grid) to now (`f85f5cd`):
+    within 0.7 to 1.3 of the track 63 to 82, runaways over 1.3 61 to 43, 90th percentile 2.05 to 1.66,
+    under 0.5 45 to 46, median 0.85 to 0.85.
+    Causes found and fixed:
+    - Held at 0 after a stop (`4fec3d9`): the departure surge must hold 0.5 m/s^2 for 3 s; leaving Fulton St (2/3,
+      Mon Oct 26, 8:08 pm) it stepped 1.0 then settled to 0.24 to 0.4, so the likely stop held the speed at 0 the
+      whole leg. A weaker start (`train_stops::Event::Started`) now ends a likely stop only; counted as departures,
+      weak starts added 42 untapped departures at 17 to 29 mph (false; `missed_stop` would add stops).
+      Scored against the rider's 354 "train started" taps by `crates/cli/examples/departs2.rs`: 314 found.
+    - Axis left behind by a phone turned in a hand (`8497e55`): once GNSS sets the axis, only tilting turned it;
+      58 deg at 1.2 rad/s at 50 St (Sat Nov 7, 5:59 pm) left it 60 to 80 deg off. Faster than 0.25 rad/s about the
+      vertical (no train turns over 0.18) now turns the axis with the phone.
+    - Caps from known inputs only (rider: never the estimate itself; `988599e`): what a train reaches in the time
+      since the departure, and the fastest any train goes on a leg to the next station its line stops at
+      (`track::stations_ahead_m`, the farthest where lines disagree). Rider wanted an average-speed cap; with only
+      accurate inputs, the leg's own average isn't known live.
+    - IRT recorded peaks (`0c5a27a`, `f85f5cd`): the IRT Capacity Study (STV, July 2020, archive.org
+      `irt-capacity-study-final-reportt-redacted`, in `data/downloads/speed-capacity-docs-20261108/`) charts event
+      recorder speeds per stretch; `python/experiments/irt_digitize.py` and `irt_peaks.py` read 328 stretches from
+      26 of 28 charts into `crates/fusion/data/irt_recorded_peaks.csv`; the cap is at most the peak plus the more of
+      5 mph and 15% (speed limits changed since 2018 "somewhat, not massively").
+    - Anchors (`19fb8a2`, `2074d2c`): a stop at a named station, or a station the radio names on the way (half
+      weight), is a known place; the estimate's distance against it corrects the bias and speed.
+    - GNSS is never capped (`01c19ce`): the 55 mph cap, the acceleration ceiling and the leg cap stand aside with
+      GNSS in the last 5 s.
+    Open: stuck-low legs (46 under 0.5): classify (held, axis, slow integration) and fix the biggest group;
+    runaways (43): more mid-leg anchors (more tagged cells); the 3's charts (F.2-15, F.2-16) don't digitize;
+    use the study's average peak speeds (B-8) and measured stop braking (2.11 and 1.83 mph/s, cars 8116, 8112).
+    The MTA's Speed and Capacity Review (mta.info/document/13046) blocks scripted downloads: the rider is to save it.
 28. Learn the trains' acceleration curves (speeding up, cruise, braking) from the above-ground rides,
-    per line and car model, to bound and shape the speed between stations (rider, 2026-11-08).
-    Today nothing holds the position to the track between anchors, the speed filter knows no track,
-    and between stations only `fastest_s` (a flat 3 mph/s and 55 mph) rejects legs and the smoothed speeds are
-    scaled to the track's length; no curve shapes the speed, and the live speed isn't bounded by the average.
-    Runs found by `crates/cli/examples/aboveground.rs` (`43afeae`; open track, GPS, train speed;
-    `data/work/track/aboveground.txt`), with the rider's labels:
-    - Tue Oct 20, 3:49 pm: 7, Court Sq to Queensboro Plaza, then to Mets-Willets Point (0.5 and 8.4 km).
-    - Tue Oct 20, 6:41 pm: 7, Mets-Willets Point to 74 St (4.0 km).
-    - Tue Oct 27, 10:04 pm: 5 (NTT chime) Jackson Av to E 180 St (car 6458); 2 express E 180 St to Gun Hill Rd
-      (car 6303, bypassing a fire); 4 Woodlawn to 161 St (car 1170).
-    - Tue Nov 3, 6:01 pm: W, the rider believes, 30 Av to Queensboro Plaza (car 5546, noted as a wrong number).
-    - Thu Nov 5, 10:06 pm: M, Myrtle-Wyckoff Avs to Central Av (car 8582; only the M goes to Myrtle-Wyckoff),
-      and M Myrtle Av to Marcy Av.
-    - Sat Nov 7, 5:59 pm: N, 30 Av to Queensboro Plaza (car 5078).
-    - The rider thinks they also took the J across the Williamsburg Bridge on some ride: find it.
-    Missed by the open-track grid (`python/experiments/open_track.py` counts a stretch only when both end stations
-    are above ground), to count: the Manhattan Bridge (Sat Oct 24, 10:04 pm, York St to Grand St, car 2718)
-    and the 1's 125 St viaduct (Sat Oct 31, 9:57 pm 137 St to 125 St; Tue Nov 3, 6:59 pm 125 St to 137 St, car 2387;
-    Wed Nov 4, 3:03 am 137 St to 116 St). Fix the grid for bridges and viaducts between underground stations,
-    without matching buses on streets over underground lines (Grand St shuttle bus, Broadway over the 1).
-    Bridges have steep grades (to 5.5% on the Manhattan Bridge), so their acceleration differs: keep grade apart.
-    The 1 viaduct is mostly flat; some downtown trains skipped 125 St.
-    The car model from the car number: look up the fleet number ranges (Wikipedia's car pages), don't guess.
-    The line from GTFS-RT (the trip the train matched), not only the track nearby.
+    per line and car model, to bound and shape the speed between stations (rider, 2026-11-08). Done (2026-11-08).
+    Open track grid (`b7317bc`, `0377dfb`, `6f988ba`): plus OpenStreetMap's subway ways not tagged as tunnels
+    (portals, ramps, open cuts, bridges, viaducts), but not untagged ways in New Jersey (PATH under streets);
+    the rider's M60 on Broadway at 116 to 120 St over the 1 (Sat Nov 7, 2:29 pm) stays 177 m or more off it.
+    Found: the Manhattan Bridge, the 1's 125 St viaduct (three rides), and the Williamsburg Bridge on the M
+    (Thu Nov 5, 10:06 pm: the "J across the bridge" was the M).
+    Curves (`09b1b89`): `crates/cli/examples/accelcurves.rs` over 14 runs on 9 rides (speeds over 6 to 8 s),
+    fit by `data/work/track/fit_curves.py` (constant force, 1/v, 1/v^2) to each 2 mph bin's 90th percentile:
+    fleet `min(1.00, 6.5/v, 75/v^2)`, R188 `min(1.24, 9.5/v, 85/v^2)` (rms 10 to 15%); braking flat about 0.76 to
+    0.8 m/s^2 to 30 mph. All models ridden are rated 2.5 mph/s motoring, 3.0 full service, 3.2 emergency
+    (Wikipedia); only the R188s went over motoring beyond GNSS noise (1.4 to 1.56 m/s^2 at 10 to 18 mph, 7 of 13
+    departures). Car models: 6458, 6303, 1170 R142; 5546 R46 (noted wrong); 8582 R160; 5078 R68A; 2718 R68;
+    2387 R62A; the 7 R188. `subway_accel_limits` is the R188 fit with 15% margin, braking 3.0 mph/s.
+    Open: the CBTC stretches not ridden yet (southern L, lower Culver F) to tell CBTC from the R188;
+    check the R188 starts over the rated rate against the gyro-tracked accelerometer.
 29. Done, not on the phone (`9ad588a`): the NYCT feeds switched to GTFS-RT v2 (rider, 2026-11-08);
     v1 lacked the 2's reroute past a fire (Tue Oct 27). v2 is `nyct-v2%2Fgtfs...`, the same line groups,
     from the MTA's developer group post (for daylight saving time ending 2026-11-01; v1 retires in 2027).
     Checked on 2026-11-08: all eight answer with no key, header version 2.0. Against v1 on the wire:
     past stops (1629 stop updates against 1111 on the B/D/F/M), stop sequences, `direction_id`,
-    a vehicle descriptor, `is_assigned` on every trip, B Division delays as alerts, some trip IDs ending in `_`,
+    a vehicle descriptor (its ID only the trip ID plus `_V`: no car or train), `is_assigned` on every trip,
+    B Division delays as alerts, some entity IDs ending in `_`,
     and vehicles mostly `IN_TRANSIT_TO` where v1 said `STOPPED_AT`. Fusion reads only trip IDs (as keys between polls),
     routes, stop IDs and times (`trips::trip_stops`), so past stops only add the times behind the train;
     nothing reads the status, track labels or trip ID suffixes, and the raw responses are stored unchanged.
