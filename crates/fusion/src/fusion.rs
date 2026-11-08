@@ -3555,8 +3555,15 @@ fn stop_records(
                 .copied()
                 .find(|&d| d > from && d > stop.t_ns + s_ns(DEPART_AFTER_STOP_S) && d < limit)
         };
+        // A lurch just after a departure is its pull ending (see [`LIKELY_AFTER_DEPARTURE_S`]), not a stop to walk
+        // off at: a walk along the M across the Williamsburg Bridge 245 s after one (`20261105-220621`, 10:25 pm)
+        // was taken for walking off, and held the live speed at 0 as a transfer to Bowery at 44 mph.
+        let pull_ending = departures.iter().any(|&d| {
+            let after_s = (stop.t_ns - d) as f64 * 1e-9;
+            after_s > 0.0 && after_s <= LIKELY_AFTER_DEPARTURE_S
+        });
         // Walking off: enough steps in a row, starting before the train's departure.
-        let alighted = (!on_platform)
+        let alighted = (!on_platform && !pull_ending)
             .then(|| {
                 after.windows(ALIGHT_OF).find_map(|w| {
                     (w.iter().filter(|(_, steps)| *steps).count() >= ALIGHT_WINDOWS)
@@ -3594,6 +3601,7 @@ fn stop_records(
                 let (next, ..) = stops.get(k + 1)?;
                 let first = after.iter().find(|&&(t, steps)| steps && t < next.t_ns)?.0 - window_ns;
                 (!on_platform
+                    && !pull_ending
                     && ridden_departure.is_none()
                     && on_platform_at(next.t_ns)
                     && !departures.iter().any(|&d| d > stop.t_ns && d < next.t_ns))
@@ -4030,6 +4038,28 @@ mod tests {
         assert_eq!(r[0].dwell_s(), None);
         // The closing, heard from the platform within a minute, is still the train's.
         assert_eq!(r[0].doors_closed_ns, Some(125 * S));
+    }
+
+    #[test]
+    fn no_walking_off_at_a_departures_pull_ending() {
+        // The M over the Williamsburg Bridge (`20261105-220621`, 10:25 pm): a lurch 13 s after leaving, then a
+        // walk along the train from 245 s later; the next stop is 570 s on. Not a walk off, so no transfer.
+        let r = stop_records(
+            &[stop(100), stop(670)],
+            &[],
+            &[87 * S],
+            &windows(0, 700, 345..470),
+        );
+        assert!(!r[0].rider_left());
+        assert_eq!(r[0].alighted_ns, None);
+        // The same walk after a stop well into the leg is walking off.
+        let r = stop_records(
+            &[stop(100), stop(670)],
+            &[],
+            &[60 * S],
+            &windows(0, 700, 345..470),
+        );
+        assert!(r[0].rider_left());
     }
 
     #[test]
