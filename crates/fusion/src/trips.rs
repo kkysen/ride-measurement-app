@@ -142,19 +142,29 @@ impl Trips {
     /// The route of the trip matching the most of the rider's stops (the last of which must match), then the
     /// smallest mean error; none without feed data, or when another route matches as well.
     /// A trip only matches a stop at a station its line serves: [`stop_ids`] takes in a complex's other
-    /// platforms, so a Q at Union Sq would otherwise match the L stopping there.
+    /// platforms, so a Q at Union Sq would otherwise match the L stopping there; platforms listed at one spot
+    /// count as one (see [`crate::stations::same_spot_lines`]): the N/W at Queensboro Plaza named at its 7 one.
+    /// Only a line stopping at each stop's complex can match.
     /// `now_ns` stands in for the departure of a stop the train hasn't left.
     pub fn route(&self, stops: &[RiderStop], now_ns: i64) -> Option<String> {
         let offset = self.offset_ns?;
         let unix_s = |ns: i64| (ns + offset).div_euclid(1_000_000_000);
-        let stops: Vec<(Vec<&str>, i64, i64, &[String])> = stops
+        // The feeds often no longer list a stop passed before the first poll, so a line that doesn't stop at one
+        // of the rider's stations at all could match the rest: the 7, at Queensboro Plaza then too,
+        // with the N/W boarded at Broadway before (Tue Nov 3, 6:10 pm).
+        let serves_all = |line: &str| {
+            stops
+                .iter()
+                .all(|s| crate::stations::serves(s.station, line))
+        };
+        let stops: Vec<(Vec<&str>, i64, i64, Vec<String>)> = stops
             .iter()
             .map(|s| {
                 (
                     stop_ids(s.station),
                     unix_s(s.stopped_ns),
                     unix_s(s.departed_ns.unwrap_or(now_ns)),
-                    &s.station.lines[..],
+                    crate::stations::same_spot_lines(s.station),
                 )
             })
             .collect();
@@ -163,7 +173,7 @@ impl Trips {
         let mut best: HashMap<&str, (usize, f64)> = HashMap::new();
         for trip in self.trips.values() {
             let line = line_of_route(&trip.route);
-            let error = |(ids, stopped, departed, lines): &(Vec<&str>, i64, i64, &[String])| {
+            let error = |(ids, stopped, departed, lines): &(Vec<&str>, i64, i64, Vec<String>)| {
                 if !lines.is_empty() && !lines.contains(&line) {
                     return None;
                 }
@@ -173,7 +183,7 @@ impl Trips {
                     .map(|&(a, _)| (a - stopped).abs())
                     .min()
             };
-            if error(last).is_none() {
+            if !serves_all(&line) || error(last).is_none() {
                 continue;
             }
             let errors: Vec<i64> = stops.iter().filter_map(error).collect();
@@ -241,6 +251,48 @@ mod tests {
         assert_eq!(trips.route(&stops, at(40)), None);
         trips.on_poll(offset, t0 * 1000, vec![stop("l", "L", "L03", t0)]);
         assert_eq!(trips.route(&stops, at(40)).as_deref(), Some("L"));
+    }
+
+    #[test]
+    fn a_line_not_at_every_stop_does_not_match() {
+        // Tue Nov 3, 6:10 pm: the N/W from Broadway stops at Queensboro Plaza, named at its 7 platform
+        // (listed at the same spot), as a 7 stops there too; the feeds no longer list the W at Broadway.
+        let t0 = 1_793_000_000;
+        let offset = 1_000_000_000_000i64;
+        let named = |name: &str, line: &str| {
+            crate::stations::all()
+                .iter()
+                .find(|s| s.name == name && s.lines.iter().any(|l| l == line))
+                .unwrap()
+        };
+        let mut trips = Trips::default();
+        trips.on_poll(
+            offset,
+            t0 * 1000,
+            vec![
+                stop("7", "7", "718", t0 + 270),
+                stop("w", "W", "R09", t0 + 300),
+            ],
+        );
+        let at = |s: i64| offset + s * 1_000_000_000;
+        let stops = [
+            RiderStop {
+                stopped_ns: at(0),
+                departed_ns: Some(at(30)),
+                station: named("Broadway", "W"),
+            },
+            RiderStop {
+                stopped_ns: at(275),
+                departed_ns: Some(at(320)),
+                station: named("Queensboro Plaza", "7"),
+            },
+        ];
+        assert_eq!(trips.route(&stops, at(330)).as_deref(), Some("W"));
+        // Once the W's stop there is no longer listed either, the 7 still isn't named.
+        let mut seven = Trips::default();
+        seven.on_poll(offset, t0 * 1000, vec![stop("7", "7", "718", t0 + 270)]);
+        assert_eq!(seven.route(&stops, at(330)), None);
+        assert_eq!(seven.route(&stops[1..], at(330)).as_deref(), Some("7"));
     }
 
     #[test]

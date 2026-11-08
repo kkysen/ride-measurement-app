@@ -198,6 +198,23 @@ pub fn complex_lines(station: &Station) -> Vec<String> {
     lines
 }
 
+/// The lines of `station` and of any other listed at the same spot: the MTA lists some platforms apart
+/// at one position (Queensboro Plaza's 7 and N/W), so a stop named at one may be at the other.
+pub fn same_spot_lines(station: &Station) -> Vec<String> {
+    let mut lines: Vec<String> = all()
+        .iter()
+        .filter(|s| meters((station.lat, station.lon), (s.lat, s.lon)) <= SAME_SPOT_M)
+        .flat_map(|s| s.lines.iter().cloned())
+        .chain(station.lines.iter().cloned())
+        .collect();
+    lines.sort();
+    lines.dedup();
+    lines
+}
+
+/// How close (m) two listed stations are to be at one spot (see [`same_spot_lines`]).
+const SAME_SPOT_M: f64 = 1.0;
+
 /// Whether `line` stops at `station` or another part of its complex.
 pub fn serves(station: &Station, line: &str) -> bool {
     station.lines.iter().any(|l| l == line) || complex_lines(station).iter().any(|l| l == line)
