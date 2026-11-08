@@ -1,10 +1,16 @@
 //! Which of the MTA's subway GTFS-realtime feeds to record while riding: the ones for lines with a station near
 //! the rider, so a later analysis knows which trip (and, with its vehicle positions, which train) the rider was on.
-//! The feeds are public and need no key (checked 2026-10-22); all eight together are about 680 KB per poll.
+//! The feeds are public and need no key (checked 2026-10-22, and for v2 on 2026-11-08).
+//! These are the MTA's v2 feeds (GTFS-realtime 2.0, launched before daylight saving time ended on 2026-11-01):
+//! the same line groups as v1, but they handle the repeated 1 am hour, drop non-revenue stops, include past stops
+//! (so a trip's stops behind the train are kept), reflect closed platforms, and relabel tracks.
+//! v1 lacked the 2's reroute past a fire on Tue Oct 27; the MTA plans to retire it in 2027.
+//! With past stops they're bigger: the numbered lines' feed was 91 KB against v1's 51 KB at 4 am on 2026-11-08
+//! (all eight v1 feeds were about 680 KB a poll in the evening of 2026-10-22).
 
 use crate::stations::{all, meters};
 
-const BASE: &str = "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs";
+const BASE: &str = "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct-v2%2Fgtfs";
 /// Every subway feed, by its URL suffix.
 pub const FEEDS: [&str; 8] = ["", "-ace", "-bdfm", "-g", "-jz", "-nqrw", "-l", "-si"];
 /// How often to poll while recording (ms); the feeds update about every 30 s.
