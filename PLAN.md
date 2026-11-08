@@ -1272,6 +1272,18 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     then 55 mph as soon as it moved (11:36 pm; the jump is item 18's).
 33. Walking speed wrong: "walking 55 mph" (Mon Oct 26, 8:08 pm, at 8:41 pm);
     6.7 mph walking at a normal pace with GNSS Doppler (Tue Oct 27, 5:23 pm, at 5:33 pm).
+    Live done, not on the phone (2026-11-08, replayed with `skip_still`): both were walking off a train underground.
+    A likely stop held the shown speed at 0 while the IMU alone ran on (38 mph by 8:41:10 pm);
+    one step window since the stop released the hold and showed the runaway, 39 to 55 mph with the mode "walking"
+    (8:41:17 pm), and 43 to 47 mph from 5:32:37 pm; walking is measured only after 6 windows (24 s),
+    and between trains the cap was 3 m/s, the 6.7 mph shown at 5:33:10 pm, before GNSS came back at 5:33:38 pm
+    (with GNSS the walk read 2 to 4 mph). Now, without recent GNSS, after a likely stop with steps since it
+    or between trains, the live speed shows at most the gait's pace (1.4 m/s walking, 3 m/s running): 3.1 mph.
+    `liveratio` (`no_live_smoothing`, 204 legs): 9 legs shorter, none longer; under 0.5 30 to 31
+    (a 236 s leg averaging 5.4 mph, 0.67 to 0.34, peak 13.6 to 7.4 mph), within 0.7 to 1.3 91, median 0.95, over 1.3 48.
+    Open: offline, the smoothed speed walking off at 8:41 pm still runs 14 to 30 mph (8:40:54 to 8:42:20 pm);
+    on Tue Oct 27 it reads 4 to 6 mph. Offline has no between-trains hold; adding one (or measuring walking sooner)
+    is for the rider to approve, as a live and offline difference.
 34. The 2 from GTFS-RT keeps being lost (Mon Oct 26, 8:08 pm, at 8:19 pm). Check against v2 (item 29).
 35. Station cells missing (the registered cell, item 7 of 2026-10-21):
     none at 138 St and 149 St-Grand Concourse on the 5 (Tue Oct 27, 10:04 pm, at 10:16 and 10:21 pm);
