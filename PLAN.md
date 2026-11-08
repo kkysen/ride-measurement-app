@@ -975,7 +975,14 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     braking at 55 mph doesn't bring the speed down (Tue Oct 27, 10:04 pm),
     and the speed jumps from 0 to 55 mph right after leaving a station (Sun Nov 1, 1:50 am; Tue Oct 27, 10:04 pm).
 19. Braking into a station often shows as accelerating (Thu Oct 29, 1:23 am).
-20. The live map still isn't drawn underground, noted on four rides, the latest Sat Nov 7, 5:59 pm. Top fix.
+20. Partly done (`34cfce3`, `6b7d63f`; unchecked on the phone): the live map underground, noted on four rides,
+    the latest Sat Nov 7, 5:59 pm. Each leg between stations is drawn along the track once the train stops at
+    its far station (`Fusion::recent_track_path`, placed as a past ride's by `track::Along`), under the GPS path.
+    `crates/cli/examples/livetrack.rs`: every past-ride leg drawn live on Sat Nov 7, 5:59 pm (8), Thu Nov 5, 10:06 pm (7),
+    and `20261022-002914` (9), within 4, 7, and 531 m (90th 61 m) of the past-ride path; 59 to 247 us a tick.
+    Left: the leg in progress (toward the next station on the riding line, by the live distance from the last);
+    the tunnel entrance to the first station; following the newest underground point; the 60 St tunnel
+    from Queensboro Plaza, whose first station is elevated, so not an anchor.
 21. Wrong lines and stations in the status:
     "6 train doesn't go anywhere near Astoria Blvd" (Sat Nov 7, 2:29 pm);
     "E at 59th but the E doesn't go there" (Sat Oct 31, 4:58 pm);
