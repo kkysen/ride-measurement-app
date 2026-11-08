@@ -66,6 +66,7 @@ const fn model(name: &'static str, ntt: Option<bool>, beacons: Option<bool>) -> 
 const R62: CarModel = model("R62", Some(false), Some(false));
 const R62A: CarModel = model("R62A", Some(false), Some(false));
 const R142: CarModel = model("R142", Some(true), Some(false));
+const R142A: CarModel = model("R142A", Some(true), Some(false));
 const R188: CarModel = model("R188", Some(true), Some(true));
 const R160: CarModel = model("R160", Some(true), Some(true));
 const R143: CarModel = model("R143", Some(true), Some(true));
@@ -79,6 +80,8 @@ pub fn car_models(line: &str) -> Option<&'static [CarModel]> {
         "1" => &[R62A],
         "3" => &[R62],
         "2" => &[R142],
+        "4" | "5" => &[R142, R142A],
+        "6" => &[R62A, R142A],
         "7" => &[R188],
         "F" | "M" | "R" => &[R160],
         "L" => &[R143, R160],
@@ -327,6 +330,17 @@ mod tests {
         // An NTT chime on the 1 is another train's (a 2 across the platform at 96 St): it says nothing,
         // and nothing else is heard.
         assert_eq!(car_type(Some(true), false, &lines(&["1"])), None);
+        // The 5 at 3 Av-149 St (Tue Oct 27, 10:23 pm): a tone read as the SMEE chime, which no car of the 2's or 5's
+        // makes, says nothing; on the 6, the R62As.
+        assert_eq!(car_type(Some(false), false, &lines(&["2", "5"])), None);
+        assert_eq!(
+            car_type(Some(true), false, &lines(&["2", "5"])),
+            ct(Some(true), None)
+        );
+        assert_eq!(
+            car_type(Some(false), false, &lines(&["4", "5", "6"])),
+            ct(Some(false), Some("R62A"))
+        );
         // The L: NTT either way, R143s or R160s.
         assert_eq!(car_type(None, true, &lines(&["L"])), ct(Some(true), None));
         // A line whose fleet isn't known: no model.
