@@ -955,6 +955,8 @@ impl Fusion {
     /// (`boarded_after`), the newest within [`ROUTE_STOP_S`], matched to the feeds' trips.
     /// Boarding from the platform counts as a stop there (see [`Self::boarding`]): no stop is felt aboard,
     /// so otherwise the boarding station is left out (6 Av on the L, `20261023-193658`).
+    /// A route matched at older stops is kept while the newer ones don't rule it out
+    /// (see [`trips::Trips::held_route`]).
     fn route(&self, t: i64, boarded_after: i64, records: &Records) -> Option<String> {
         let ago = |at: i64| (t - at) as f64 * 1e-9;
         let boarding = self
@@ -994,7 +996,7 @@ impl Fusion {
         if ago(recent.last()?.stopped_ns) > ROUTE_STOP_S {
             return None;
         }
-        self.trips.route(recent, t)
+        self.trips.held_route(recent, t)
     }
 
     /// The lines the rider's train can be, from the stations it stopped at: each stop narrows them to the lines

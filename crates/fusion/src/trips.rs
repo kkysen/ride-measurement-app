@@ -164,6 +164,69 @@ impl Trips {
     /// the A, running local on weekends, at 50 St, which the MTA lists for the C and E (Sat Oct 31, 5:13 pm).
     /// `now_ns` stands in for the departure of a stop the train hasn't left.
     pub fn route(&self, stops: &[RiderStop], now_ns: i64) -> Option<String> {
+        self.best_trip(stops, now_ns).map(|(route, ..)| route)
+    }
+
+    /// [`Self::route`], else the route of the best trip for the stops up to an older one, if it matched each of
+    /// them and the newer stops don't rule it out (see [`Self::contradicts`]). On Tue Nov 3 the W's stop named
+    /// Queensboro Plaza at 6:10:43 pm no longer matched once the feeds settled the W's time there at 6:12:10 pm
+    /// (that stop's cell names the next station early: Broadway at 30 Av, Queensboro Plaza at 39 Av), and the
+    /// stops after, underground through the 60 St tunnel to 57 St-7 Av, had no station, so nothing matched again.
+    /// Only the best trip of older stops is kept, never one found from the newer stops' times alone:
+    /// an N a station ahead lists 5 Av, 57 St, 49 St and Times Sq within seconds of the rider's stops then.
+    pub fn held_route(&self, stops: &[RiderStop], now_ns: i64) -> Option<String> {
+        if let Some((route, ..)) = self.best_trip(stops, now_ns) {
+            return Some(route);
+        }
+        let offset = self.offset_ns?;
+        let unix_s = |ns: i64| (ns + offset).div_euclid(1_000_000_000);
+        (1..stops.len()).rev().find_map(|k| {
+            // Kept only when it matched each of those stops: a W the other way, at Queensboro Plaza as the
+            // rider's train got there, matches it but not Broadway before.
+            let (route, trip, matched) = self.best_trip(&stops[..k], now_ns)?;
+            if matched < k {
+                return None;
+            }
+            let ruled_out = stops[k..].iter().any(|s| {
+                let departed = unix_s(s.departed_ns.unwrap_or(now_ns));
+                Self::contradicts(trip, s.station, departed)
+            });
+            (!ruled_out).then_some(route)
+        })
+    }
+
+    /// The trip's earliest time (unix s) at the station's complex, if the feeds list it there.
+    fn arrival(trip: &Trip, station: &Station) -> Option<i64> {
+        stop_ids(station)
+            .iter()
+            .filter_map(|id| trip.stops.get(*id))
+            .map(|&(a, _)| a)
+            .min()
+    }
+
+    /// Whether a later stop of the rider at `station`, left at `departed` (unix s), rules out the trip:
+    /// its line doesn't stop at the station's platform (or one listed at its spot) nor do the feeds list it there,
+    /// or it reached a stop before this one, in its own order, after the rider left here.
+    /// The platform, not the complex: the rider who rode the Q to Times Sq and walked to the 1 unseen
+    /// (Sat Nov 7, 6:25 pm) stops at the 1's platform, where the Q doesn't.
+    fn contradicts(trip: &Trip, station: &Station, departed: i64) -> bool {
+        let line = line_of_route(&trip.route);
+        let own = own_stop_ids(station);
+        if !crate::stations::same_spot_lines(station).contains(&line)
+            && !own.iter().any(|id| trip.stops.contains_key(*id))
+        {
+            return true;
+        }
+        let Some(here) = Self::arrival(trip, station) else {
+            return false;
+        };
+        trip.stops
+            .values()
+            .any(|&(a, _)| a < here && a > departed + SLACK_S)
+    }
+
+    /// The route of [`Self::route`], its best trip, and how many of the stops that trip matches.
+    fn best_trip(&self, stops: &[RiderStop], now_ns: i64) -> Option<(String, &Trip, usize)> {
         let offset = self.offset_ns?;
         let unix_s = |ns: i64| (ns + offset).div_euclid(1_000_000_000);
         // The feeds often no longer list a stop passed before the first poll, so a line that doesn't stop at one
@@ -192,8 +255,8 @@ impl Trips {
             })
             .collect();
         let (last, _) = stops.split_last()?;
-        // Per route: its best trip's (matches, mean error).
-        let mut best: HashMap<&str, (usize, f64)> = HashMap::new();
+        // Per route: its best trip's (matches, mean error), and that trip.
+        let mut best: HashMap<&str, ((usize, f64), &Trip)> = HashMap::new();
         for trip in self.trips.values() {
             let line = line_of_route(&trip.route);
             let error = |(ids, own, stopped, departed, lines): &Stop| {
@@ -217,19 +280,20 @@ impl Trips {
                 errors.len(),
                 errors.iter().sum::<i64>() as f64 / errors.len() as f64,
             );
-            let b = best.entry(trip.route.as_str()).or_insert(score);
-            if (score.0, -score.1) > (b.0, -b.1) {
-                *b = score;
+            let b = best.entry(trip.route.as_str()).or_insert((score, trip));
+            if (score.0, -score.1) > (b.0.0, -b.0.1) {
+                *b = (score, trip);
             }
         }
-        let mut ranked: Vec<(&str, (usize, f64))> = best.into_iter().collect();
-        ranked.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.1.1.total_cmp(&b.1.1)));
+        let mut ranked: Vec<_> = best.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.0.0.cmp(&a.1.0.0).then(a.1.0.1.total_cmp(&b.1.0.1)));
         match ranked[..] {
             [] => None,
-            [(r, _)] => Some(line_of_route(r)),
-            [(r, a), (r2, b), ..] => {
+            [(r, (a, trip))] => Some((line_of_route(r), trip, a.0)),
+            [(r, (a, trip)), (r2, (b, _)), ..] => {
                 let tied = a.0 == b.0 && b.1 - a.1 < AMBIGUOUS_S;
-                (!tied || line_of_route(r) == line_of_route(r2)).then(|| line_of_route(r))
+                (!tied || line_of_route(r) == line_of_route(r2))
+                    .then(|| (line_of_route(r), trip, a.0))
             }
         }
     }
@@ -319,6 +383,74 @@ mod tests {
         seven.on_poll(offset, t0 * 1000, vec![stop("7", "7", "718", t0 + 270)]);
         assert_eq!(seven.route(&stops, at(330)), None);
         assert_eq!(seven.route(&stops[1..], at(330)).as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn a_route_is_kept_past_a_stop_named_early() {
+        // Tue Nov 3, 6:05 pm: the W from 30 Av, its stops named a station early by the cell (Broadway at 30 Av,
+        // Queensboro Plaza at 39 Av); the feeds settle the W at Queensboro Plaza 1:27 after that stop.
+        // An N a station ahead and a W the other way are in the same polls.
+        let t0 = 1_793_747_140;
+        let offset = 1_000_000_000_000i64;
+        let named = |name: &str, line: &str| {
+            crate::stations::all()
+                .iter()
+                .find(|s| s.name == name && s.lines.iter().any(|l| l == line))
+                .unwrap()
+        };
+        let mut trips = Trips::default();
+        trips.on_poll(
+            offset,
+            t0 * 1000,
+            vec![
+                stop("w", "W", "R04", t0 - 20),
+                stop("w", "W", "R05", t0 + 65),
+                stop("w", "W", "R08", t0 + 276),
+                stop("w", "W", "R09", t0 + 390),
+                stop("w", "W", "R11", t0 + 615),
+                stop("n", "N", "R09", t0 + 50),
+                stop("n", "N", "R11", t0 + 280),
+                stop("w-north", "W", "R09", t0 + 220),
+                stop("w-north", "W", "R08", t0 + 400),
+            ],
+        );
+        let at = |s: i64| offset + s * 1_000_000_000;
+        let stops = [
+            RiderStop {
+                stopped_ns: at(0),
+                departed_ns: Some(at(30)),
+                station: named("Broadway", "W"),
+            },
+            RiderStop {
+                stopped_ns: at(303),
+                departed_ns: Some(at(331)),
+                station: named("Queensboro Plaza", "7"),
+            },
+        ];
+        // No trip matches the newest.
+        assert_eq!(trips.route(&stops, at(500)), None);
+        assert_eq!(trips.held_route(&stops, at(500)).as_deref(), Some("W"));
+        // A newer stop at a station the W doesn't serve rules it out.
+        let off_line = [
+            stops[0],
+            stops[1],
+            RiderStop {
+                stopped_ns: at(700),
+                departed_ns: Some(at(730)),
+                station: named("Grand Central-42 St", "7"),
+            },
+        ];
+        assert_eq!(trips.held_route(&off_line, at(740)), None);
+        // So does one the W reached a stop before only after the rider left it.
+        let behind = [
+            stops[0],
+            RiderStop {
+                stopped_ns: at(150),
+                departed_ns: Some(at(170)),
+                station: named("Queensboro Plaza", "N"),
+            },
+        ];
+        assert_eq!(trips.held_route(&behind, at(500)), None);
     }
 
     #[test]
