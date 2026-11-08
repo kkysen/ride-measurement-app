@@ -49,8 +49,9 @@ object LiveTrack {
      * The path underground: each leg between stations placed along the subway track, from Rust
      * (`Fusion::recent_track_path`, as a past ride's map joins it); each leg's first point starts a segment.
      */
-    private val _underground = MutableStateFlow<List<Point>>(emptyList())
-    val underground: StateFlow<List<Point>> = _underground
+    private val _underground = MutableStateFlow<List<List<Point>>>(emptyList())
+    /** Each leg's points; a leg that didn't change is the same list as before, so drawing can skip it. */
+    val underground: StateFlow<List<List<Point>>> = _underground
     /** Each leg's start, and its points. */
     private var legs = emptyList<Pair<Long, List<Point>>>()
 
@@ -61,12 +62,16 @@ object LiveTrack {
         _underground.value = emptyList()
     }
 
-    /** Keeps the legs from before the smoothing window, which never change again, and replaces the rest. */
+    /**
+     * Replaces the legs Rust gives again (by their start) and drops the others in the smoothing window;
+     * a leg that ended before it never changes again.
+     */
     @Synchronized
     fun applyTrackPath(path: TrackPath) {
         // The wall clock, for the map's times: fusion's are on the `elapsedRealtimeNanos` clock.
         val offsetMs = System.currentTimeMillis() - SystemClock.elapsedRealtimeNanos() / 1_000_000
-        val kept = legs.filter { it.first < path.from }
+        val given = path.legs.mapTo(HashSet()) { it.fromNs }
+        val kept = legs.filter { it.first < path.from && it.first !in given }
         val fresh = path.legs.map { leg ->
             leg.fromNs to leg.points.mapIndexed { i, p ->
                 Point(
@@ -76,11 +81,12 @@ object LiveTrack {
                 )
             }
         }
-        val old = legs.drop(kept.size)
-        // The same legs again (their points are recomputed but often equal): nothing to redraw.
-        if (fresh.map { it.first } == old.map { it.first } && fresh.zip(old).all { (a, b) -> a.second == b.second }) return
-        legs = kept + fresh
-        _underground.value = legs.flatMap { it.second }
+        // A leg given again with the same points keeps its old list, so the map sees it unchanged.
+        val before = legs.associate { it.first to it.second }
+        val updated = (kept + fresh.map { (t, p) -> t to (before[t]?.takeIf { it == p } ?: p) }).sortedBy { it.first }
+        if (updated.size == legs.size && updated.indices.all { updated[it].second === legs[it].second }) return
+        legs = updated
+        _underground.value = updated.map { it.second }
     }
 
     /** Called from the GPS listener; never throws, so the map can't break recording. */

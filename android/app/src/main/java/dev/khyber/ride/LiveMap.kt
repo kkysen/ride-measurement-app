@@ -74,7 +74,7 @@ fun TrackMapScreen(
     onBack: () -> Unit,
     extraButton: @Composable () -> Unit = {},
     gpsFixes: List<LiveTrack.Point> = emptyList(),
-    underground: List<LiveTrack.Point> = emptyList(),
+    underground: List<List<LiveTrack.Point>> = emptyList(),
 ) {
     var follow by remember { mutableStateOf(live) }
     var selected by remember { mutableStateOf<LiveTrack.Point?>(null) }
@@ -107,7 +107,7 @@ fun TrackMapScreen(
                 }) { Text("Scale: " + if (chosenScale == null) "auto" else scale.name) }
             }
         }
-        Text(describe(selected ?: points.lastOrNull(), latest = selected == null, live), style = MaterialTheme.typography.bodyMedium)
+        Text(describe(selected ?: listOfNotNull(points.lastOrNull(), underground.lastOrNull()?.lastOrNull()).maxByOrNull { it.elapsedRealtimeNs }, latest = selected == null, live), style = MaterialTheme.typography.bodyMedium)
         Text(
             (
                 if (colorByAccel) {
@@ -149,9 +149,10 @@ fun TrackMapScreen(
                     if (view !is MapView) return@AndroidView
                     try {
                         track.sync(points, scale.scale, colorByAccel)
-                        undergroundTrack.sync(underground, scale.scale, colorByAccel)
+                        undergroundTrack.syncLegs(underground, scale.scale, colorByAccel)
                         track.syncGps(gpsFixes)
-                        val last = points.lastOrNull()
+                        // The newest of the GPS path and the path along the track underground.
+                        val last = listOfNotNull(points.lastOrNull(), underground.lastOrNull()?.lastOrNull()).maxByOrNull { it.elapsedRealtimeNs }
                         // Pans only once the newest fix nears the edge, so the map isn't always moving and
                         // cancelling tiles that are still loading.
                         if (follow && last != null && !nearCenter(view, last)) view.controller.animateTo(GeoPoint(last.lat, last.lon))
@@ -274,6 +275,34 @@ private class TrackOverlays {
         drawn = points
     }
 
+    private var drawnLegs = emptyList<List<LiveTrack.Point>>()
+
+    /**
+     * [sync] for a path in legs, each starting a segment: redrawn from the first leg that isn't the same list
+     * as drawn, so a tick costs the legs that changed, not the whole ride's.
+     */
+    fun syncLegs(legs: List<List<LiveTrack.Point>>, scale: SpeedScale, byAccel: Boolean) {
+        if (scale != this.scale || byAccel != this.byAccel) {
+            this.scale = scale
+            this.byAccel = byAccel
+            truncate(0)
+            drawnLegs = emptyList()
+        }
+        var same = 0
+        var points = 0
+        while (same < minOf(legs.size, drawnLegs.size) && legs[same] === drawnLegs[same]) points += legs[same++].size
+        if (points < marks.size) truncate(points)
+        var prev: LiveTrack.Point? = legs.getOrNull(same - 1)?.lastOrNull()
+        for (leg in legs.subList(same, legs.size)) {
+            for (p in leg) {
+                add(prev, p)
+                marks.add(Mark(gaps.items.size, casings.items.size, colored.items.size, casing?.actualPoints?.size ?: 0, line?.actualPoints?.size ?: 0, lineColor))
+                prev = p
+            }
+        }
+        drawnLegs = legs
+    }
+
     fun syncGps(fixes: List<LiveTrack.Point>) {
         if (fixes == gpsDrawn) return
         gps.items.clear()
@@ -306,7 +335,8 @@ private class TrackOverlays {
         line = if (m.linePoints == 0) null else (colored.items.lastOrNull() as Polyline?)?.also { it.setPoints(it.actualPoints.take(m.linePoints)) }
         lineColor = m.lineColor
         while (marks.size > n) marks.removeAt(marks.size - 1)
-        drawn = drawn.subList(0, n)
+        // A path drawn by legs keeps no flat copy (see [syncLegs]).
+        drawn = drawn.subList(0, minOf(n, drawn.size))
     }
 
     private fun add(prev: LiveTrack.Point?, p: LiveTrack.Point) {
@@ -353,7 +383,7 @@ private class TrackOverlays {
         val projection = map.projection
         val t = projection.toPixels(tap, null)
         val maxPx = 48 * map.resources.displayMetrics.density
-        return drawn.minByOrNull {
+        return (drawn.asSequence() + drawnLegs.asSequence().flatten()).minByOrNull {
             val q = projection.toPixels(GeoPoint(it.lat, it.lon), null)
             hypot((q.x - t.x).toDouble(), (q.y - t.y).toDouble())
         }?.takeIf {
