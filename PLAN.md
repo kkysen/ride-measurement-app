@@ -1028,6 +1028,23 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     During the Canal St dwell (shown 0), the estimator's own speed ran to -55 mph and the caps pulled the bias down.
     Open: the exact rotation with the speed's scale found elsewhere (the leg cap, anchors), gravity's gyro drift,
     and item 27's holds.
+    With the exact rotation in, what makes the speed low (2026-11-08, stash "item19: exact rotation (test passes)
+    with scratch flags", `data/work/item19bias/`; nothing kept, none reached the baseline):
+    not the axis: re-measured at each departure from the mean acceleration since the stop,
+    it already pointed within cos 0.95 to 1.00 on Sat Nov 7, 5:59 pm;
+    not the caps: with the leg cap, the acceleration ceiling or the anchors off, under 0.5 stays 39 to 49.
+    It's the bias learned underground: with no bias without GNSS, most of the 15 legs that newly fell under 0.5
+    recover (Sat Nov 7, 5:59 pm, 27:59 in: 0.53 to 0.97), but others need it (under 0.5 37, within 76).
+    The ungated stop and door zeros and the caps swing it by 0.2 to 0.6 m/s^2 at a time
+    (+0.65 to -0.29 in 4 min on Sat Nov 7, 5:59 pm), far more than an accelerometer bias moves,
+    and a wrong one drags the speed (-0.15 m/s^2 is 10 m/s over a 75 s leg).
+    Scores (`liveratio` under 0.5 / within / median, `brakecause` falls; baseline 30 / 91 / 0.95, 81):
+    exact rotation 41 / 78 / 0.81, 78; bias frozen at its last GNSS value 40 / 72 / 0.88;
+    bias walk x4 48 / 90 / 0.87; x0.25 35 / 82 / 0.88, 74; accel noise x2 43 / 73 / 0.85, 78;
+    walk x0.25 and noise x2 38 / 82 / 0.90, 68; bias held within 0.2 m/s^2 43 / 86 / 0.84, 78;
+    stops not moving the bias 47 / 67 / 0.82, 77; nor the caps 37 / 80 / 0.96, 73.
+    Open: a bias that only measurements of it move (GNSS, the cars), with the leg's error going to the speed
+    or the distance (anchors) instead.
 20. Done, unchecked on the phone (`34cfce3`, `6b7d63f`, `10fdd80`, `00681c8`): the live map underground, noted on
     four rides, the latest Sat Nov 7, 5:59 pm. `Fusion::recent_track_path`, drawn under the GPS path:
     each leg between stations once the train stops at its far station (placed as a past ride's by `track::Along`);
