@@ -625,6 +625,9 @@ pub struct Fix {
     pub speed_sigma: Option<f64>,
 }
 
+/// How often [`Fusion::recent_track_path`] gives a point along the track (ns).
+const TRACK_PATH_EVERY_NS: i64 = 1_000_000_000;
+
 /// A smoothed speed at a fix or a sample time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SmoothedSpeed {
@@ -2642,6 +2645,49 @@ impl Fusion {
             return self.smooth_window();
         }
         self.recent.iter().copied().collect()
+    }
+
+    /// The live map's path underground: each leg between stations that starts in the window (see
+    /// [`crate::track::legs`]), its smoothed speeds placed along the track as [`crate::track::join`] places a past
+    /// ride's (without [`crate::track::blend`]: the live map draws GPS fixes, not dead reckoning).
+    /// A leg shows once the train stops at its far station. The window's start, and each leg's start with its
+    /// points in time order: a caller keeps the legs it has from before the window, which never change again.
+    #[allow(clippy::type_complexity)]
+    pub fn recent_track_path(&self) -> (i64, Vec<(i64, Vec<(SmoothedSpeed, (f64, f64))>)>) {
+        let speeds = self.recent_smoothed();
+        let Some(first) = speeds.first().map(|s| s.elapsed_realtime_ns) else {
+            return (i64::MIN, Vec::new());
+        };
+        // As the hold in `smooth_window`: a leg starts within a dwell of its first stop.
+        let from = first - (RECORD_MAX_DWELL_S * 1e9) as i64 - 1;
+        let records: Vec<StopRecord> = self.records().since(from).cloned().collect();
+        let fixes = &self.good_fixes[self.good_fixes.partition_point(|&t| t <= from)..];
+        let (legs, _) = crate::track::legs(&records, fixes, None);
+        let legs = legs
+            .iter()
+            .filter(|leg| leg.from_ns >= first)
+            .map(|leg| {
+                let along = crate::track::Along::new(leg, &speeds);
+                // One a second, as `Replay::map_path`, and the stop at the far station.
+                let mut points: Vec<(SmoothedSpeed, (f64, f64))> = Vec::new();
+                let mut end = None;
+                for (s, p) in along.path() {
+                    let t = s.elapsed_realtime_ns;
+                    if points
+                        .last()
+                        .is_none_or(|(l, _)| t - l.elapsed_realtime_ns >= TRACK_PATH_EVERY_NS)
+                    {
+                        points.push((*s, p));
+                        end = None;
+                    } else {
+                        end = Some((*s, p));
+                    }
+                }
+                points.extend(end);
+                (leg.from_ns, points)
+            })
+            .collect();
+        (first, legs)
     }
 
     /// Smoothed speeds at every fix and sample time in the window: the forward estimate there combined with

@@ -326,25 +326,70 @@ pub fn place(
         }
     }
     for leg in &legs {
-        let (from, to) = (leg.from_ns, leg.to_ns);
-        let total = covered_m(speeds, from, to);
-        let length = leg.track.length_m();
-        for (p, placed) in positions
-            .iter_mut()
-            .zip(&mut placed)
-            .filter(|(p, _)| p.elapsed_realtime_ns >= from && p.elapsed_realtime_ns <= to)
-        {
+        let along = Along::new(leg, speeds);
+        for (p, placed) in positions.iter_mut().zip(&mut placed).filter(|(p, _)| {
+            p.elapsed_realtime_ns >= leg.from_ns && p.elapsed_realtime_ns <= leg.to_ns
+        }) {
             *placed = true;
-            let t = p.elapsed_realtime_ns;
-            let share = if total > 0.0 {
-                covered_m(speeds, from, t) / total
-            } else {
-                (t - from) as f64 / (to - from) as f64
-            };
-            (p.lat, p.lon) = leg.track.at(share * length);
+            (p.lat, p.lon) = along.at(p.elapsed_realtime_ns);
         }
     }
     (stats, placed)
+}
+
+/// Where a train is along a [`Leg`]'s track at each time in it: by the share of the leg's distance the
+/// smoothed speeds cover by then (by time, if they cover none). Each speed's distance is summed once,
+/// so placing every sample of a leg costs its samples, not their square.
+pub struct Along<'a> {
+    leg: &'a Leg,
+    /// The leg's speeds, and the distance (m) they cover from the leg's start to each.
+    speeds: &'a [SmoothedSpeed],
+    covered: Vec<f64>,
+}
+
+impl<'a> Along<'a> {
+    pub fn new(leg: &'a Leg, speeds: &'a [SmoothedSpeed]) -> Self {
+        let lo = speeds.partition_point(|s| s.elapsed_realtime_ns < leg.from_ns);
+        let hi = speeds.partition_point(|s| s.elapsed_realtime_ns <= leg.to_ns);
+        let speeds = &speeds[lo..hi];
+        let mut covered = Vec::with_capacity(speeds.len());
+        let mut m = 0.0;
+        for (i, s) in speeds.iter().enumerate() {
+            if i > 0 {
+                let p = &speeds[i - 1];
+                let dt = (s.elapsed_realtime_ns - p.elapsed_realtime_ns) as f64 * 1e-9;
+                m += (p.speed_mps + s.speed_mps) / 2.0 * dt;
+            }
+            covered.push(m);
+        }
+        Along {
+            leg,
+            speeds,
+            covered,
+        }
+    }
+
+    /// The point on the track at `t_ns`, within the leg.
+    pub fn at(&self, t_ns: i64) -> (f64, f64) {
+        let total = self.covered.last().copied().unwrap_or(0.0);
+        let share = if total > 0.0 {
+            // As `covered_m(speeds, from, t)`: the speeds at or before `t`.
+            let k = self
+                .speeds
+                .partition_point(|s| s.elapsed_realtime_ns <= t_ns);
+            k.checked_sub(1).map_or(0.0, |k| self.covered[k]) / total
+        } else {
+            (t_ns - self.leg.from_ns) as f64 / (self.leg.to_ns - self.leg.from_ns) as f64
+        };
+        self.leg.track.at(share * self.leg.track.length_m())
+    }
+
+    /// The leg's speeds, each with its point on the track.
+    pub fn path(&self) -> impl Iterator<Item = (&'a SmoothedSpeed, (f64, f64))> + '_ {
+        self.speeds
+            .iter()
+            .map(|s| (s, self.at(s.elapsed_realtime_ns)))
+    }
 }
 
 /// Shifts each stretch of `positions` that [`place`] left alone by an offset blended, over time,
@@ -486,6 +531,30 @@ mod tests {
                 accel_mps2: 0.0,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_leg_is_placed_by_the_share_of_its_speeds_distance() {
+        let track = between(station("Bedford Av", "L"), station("1 Av", "L")).unwrap();
+        let leg = Leg {
+            from_ns: 100_000_000_000,
+            to_ns: 300_000_000_000,
+            track,
+        };
+        // Faster in the leg's second half: a quarter of the way at half time.
+        let mut v = speeds(0, 400, 2.0);
+        v.iter_mut()
+            .filter(|s| s.elapsed_realtime_ns > 200_000_000_000)
+            .for_each(|s| s.speed_mps = 6.0);
+        let along = Along::new(&leg, &v);
+        for t in [100, 150, 200, 250, 300].map(|s: i64| s * 1_000_000_000) {
+            let share = covered_m(&v, leg.from_ns, t) / covered_m(&v, leg.from_ns, leg.to_ns);
+            let want = leg.track.at(share * leg.track.length_m());
+            assert!(meters(along.at(t), want) < 0.01, "{t}");
+        }
+        let quarter = leg.track.at(leg.track.length_m() / 4.0);
+        assert!(meters(along.at(200_000_000_000), quarter) < 20.0);
+        assert_eq!(along.path().count(), 201);
     }
 
     #[test]

@@ -170,6 +170,30 @@ pub struct StopsDelta {
     pub items: Vec<LiveStop>,
 }
 
+/// The live map's path underground (see [`Fusion::track_path`]): keep the legs starting before `from`,
+/// replace the rest with `legs`.
+#[derive(uniffi::Record)]
+pub struct TrackPath {
+    pub from: i64,
+    pub legs: Vec<TrackLeg>,
+}
+
+/// A train's run between two stations along the track: its points, each with the smoothed speed there.
+#[derive(uniffi::Record)]
+pub struct TrackLeg {
+    pub from_ns: i64,
+    pub points: Vec<TrackPoint>,
+}
+
+#[derive(uniffi::Record)]
+pub struct TrackPoint {
+    pub elapsed_realtime_ns: i64,
+    pub lat: f64,
+    pub lon: f64,
+    pub speed_mps: f64,
+    pub accel_mps2: f64,
+}
+
 /// What changed in the timeline since a caller's copy (see [`Fusion::timeline_since`]), as [`StopsDelta`].
 #[derive(uniffi::Record)]
 pub struct TimelineDelta {
@@ -384,6 +408,31 @@ impl Fusion {
             from: from as u32,
             settled: settled as u32,
             items: items.into_iter().map(LiveStop::from).collect(),
+        }
+    }
+
+    /// The path along the track underground between stations, for the live map: the legs that start in the
+    /// smoothing window, each once the train stops at its far station.
+    pub fn track_path(&self) -> TrackPath {
+        let (from, legs) = self.lock().recent_track_path();
+        TrackPath {
+            from,
+            legs: legs
+                .into_iter()
+                .map(|(from_ns, points)| TrackLeg {
+                    from_ns,
+                    points: points
+                        .into_iter()
+                        .map(|(s, (lat, lon))| TrackPoint {
+                            elapsed_realtime_ns: s.elapsed_realtime_ns,
+                            lat,
+                            lon,
+                            speed_mps: s.speed_mps,
+                            accel_mps2: s.accel_mps2,
+                        })
+                        .collect(),
+                })
+                .collect(),
         }
     }
 
