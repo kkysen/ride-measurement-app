@@ -2,10 +2,13 @@
 from the MTA's GTFS (`data/mta/gtfs`, stop orders and shapes) and station list (`data/mta/stations.csv`, from
 data.ny.gov, with each station's structure). A stretch of a route's shape counts when the stations at both ends
 are above ground (elevated, viaduct, embankment, at grade, or open cut); underground track runs under streets,
-where a car or bus would look like a train. Also every OpenStreetMap subway way not tagged as a tunnel
+where a car or bus would look like a train. Also every OpenStreetMap subway way tagged as a bridge
 (`OSM`, from Overpass: `way["railway"="subway"]` over the city with `out tags geom`, 2026-11-08), for bridges and
 viaducts between underground stations (the Manhattan and Williamsburg Bridges, the 1's 125 St viaduct),
-which the station rule misses; those ways are off the streets, so they don't take in buses. Points every 10 m, deduplicated to 5 m, written as little-endian
+which the station rule misses. Only ways tagged as bridges: about 160 km of untagged OSM subway track
+wasn't on the station rule's open track (yards, PATH partly underground in Jersey City, and 7 km at NYCT
+portals, partly in the tunnel mouth; `data/work/track/check_untagged.txt`), where a bus could look like a train.
+Points every 10 m, deduplicated to 5 m, written as little-endian
 i32 pairs (latitude, longitude, in 1e-5 degrees) to `crates/fusion/data/open_track.bin`."""
 
 import csv
@@ -82,13 +85,13 @@ def main():
                 open_m += add_line(points, p, q)
     osm_m = 0.0
     for way in json.loads(OSM.read_text())["elements"]:
-        if way["tags"].get("tunnel", "no") != "no":
+        if way["tags"].get("bridge", "no") == "no" or way["tags"].get("tunnel", "no") != "no":
             continue
         g = [(n["lat"], n["lon"]) for n in way["geometry"]]
         for p, q in zip(g, g[1:]):
             osm_m += add_line(points, p, q)
     OUT.write_bytes(b"".join(struct.pack("<ii", la, lo) for la, lo in sorted(points)))
-    print(f"{len(points)} points, {open_m / 1000:.0f} km of shapes above ground, {osm_m / 1000:.0f} km of OSM track, {OUT.stat().st_size} bytes")
+    print(f"{len(points)} points, {open_m / 1000:.0f} km of shapes above ground, {osm_m / 1000:.0f} km of OSM bridges, {OUT.stat().st_size} bytes")
 
 
 if __name__ == "__main__":

@@ -24,8 +24,8 @@ const SUBWAY_WIFI_HOLD_NS: i64 = 60_000_000_000;
 const FIX_HOLD_NS: i64 = 10_000_000_000;
 const GOOD_FIX_ACCURACY_M: f64 = 50.0;
 /// The subway's track above ground, from `python/experiments/open_track.py` (MTA GTFS shapes between stations that
-/// are elevated, on a viaduct or embankment, at grade, or in an open cut, and OpenStreetMap's subway track not in a
-/// tunnel, for bridges and viaducts between underground stations): little-endian i32 pairs, latitude and
+/// are elevated, on a viaduct or embankment, at grade, or in an open cut, and OpenStreetMap's subway track tagged as a
+/// bridge, for bridges and viaducts between underground stations): little-endian i32 pairs, latitude and
 /// longitude in 1e-5 degrees, every 10 m. Underground track is left out: it runs under streets.
 const OPEN_TRACK: &[u8] = include_bytes!("../data/open_track.bin");
 /// A good fix this close to open track (m), moving at least [`ON_TRACK_MPS`], is a train on it;
