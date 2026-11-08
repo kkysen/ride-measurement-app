@@ -125,6 +125,13 @@ const LIKELY_DECIDED_BY_S: f64 = train_stops::SEP_S + 12.0;
 /// A false closing heard while pulling in (`20261020-184134`, 7:00 pm) came 5 s before a real stop.
 const FADE_AFTER_CLOSE_S: (f64, f64) = (-0.5, 8.0);
 const FADE_MIN_S: f64 = 7.0;
+/// A likely stop whose lurch comes within this (s) after a departure found live is the departure's pull ending
+/// (motoring cut off, then cruising), not a stop: it doesn't hold the live speed at 0. Over the 37 sessions with
+/// legs, 16 of the 31 legs held under half their length by a likely stop were held by a lurch 6 to 20 s after
+/// the departure, with no closing heard just before (so [`FADE_AFTER_CLOSE_S`] missed them); none of them split
+/// the legs between stop records, so the stop detector dropped them once it had decided ([`LIKELY_DECIDED_BY_S`]).
+/// At 20 s: under 0.5 of the track 46 to 30 legs, within 0.7 to 1.3 82 to 91 (at 15 s: 36 and 85).
+const LIKELY_AFTER_DEPARTURE_S: f64 = 20.0;
 /// The rider walks off at a stop when [`ALIGHT_WINDOWS`] of the next [`ALIGHT_OF`] step-rhythm windows have
 /// steps (12 s or more of the 16), before the departure: a step out of the doors to let others off is shorter.
 /// [`PLATFORM_WINDOWS`] in the [`PLATFORM_BEFORE_S`] before a stop, still walking in the [`PLATFORM_LAST_S`]
@@ -2016,12 +2023,7 @@ impl Fusion {
                     }
                     self.on_train_stop(t_ns, stop)
                 }
-                train_stops::Event::Likely(stop) => {
-                    if self.context.in_subway && !self.departure_fade(&stop) {
-                        self.likely_stop = Some(stop);
-                        self.anchor_at_stop(&stop);
-                    }
-                }
+                train_stops::Event::Likely(stop) => self.on_likely_stop(stop),
                 train_stops::Event::Departed(at) => {
                     if self.context.in_subway
                         && let Some(stop) =
@@ -2323,6 +2325,23 @@ impl Fusion {
     fn between_stations(&self, prev_ns: i64, t_ns: i64) -> bool {
         self.cell_at(t_ns)
             .is_some_and(|c| self.cell_at(prev_ns) == Some(c))
+    }
+
+    /// A likely stop found live (see [`train_stops::Event::Likely`]): it holds the live speed at 0 in the subway,
+    /// unless it's a departure's pull fading or ending.
+    fn on_likely_stop(&mut self, stop: train_stops::Stop) {
+        if self.context.in_subway && !self.departure_fade(&stop) && !self.just_departed(stop.t_ns) {
+            self.likely_stop = Some(stop);
+            self.anchor_at_stop(&stop);
+        }
+    }
+
+    /// Whether a lurch at `t_ns` comes within [`LIKELY_AFTER_DEPARTURE_S`] after the last departure found.
+    fn just_departed(&self, t_ns: i64) -> bool {
+        self.departures.last().is_some_and(|&d| {
+            let after_s = (t_ns - d) as f64 * 1e-9;
+            after_s > 0.0 && after_s <= LIKELY_AFTER_DEPARTURE_S
+        })
     }
 
     /// Whether a found stop is the departure's pull fading (see [`FADE_AFTER_CLOSE_S`]).
@@ -3796,6 +3815,25 @@ mod tests {
     }
 
     const S: i64 = 1_000_000_000;
+
+    #[test]
+    fn no_likely_stop_just_after_departing() {
+        let mut f = Fusion::whole_ride();
+        f.context.in_subway = true;
+        f.departures.push(100 * S);
+        let lurch = |t_s: i64| train_stops::Stop {
+            t_ns: t_s * S,
+            score: 1.0,
+            braking_since_ns: (t_s - 4) * S,
+        };
+        // Motoring cut off 12 s after leaving, no closing heard: not a stop, so the live speed isn't held.
+        f.on_likely_stop(lurch(112));
+        assert_eq!(f.likely_stop_now(113 * S), None);
+        // Later in the leg, a lurch still holds it.
+        f.on_likely_stop(lurch(150));
+        assert_eq!(f.likely_stop_now(151 * S), Some(lurch(150)));
+        assert!(f.estimate(151 * S).stopped);
+    }
 
     fn stop(t_s: i64) -> (train_stops::Stop, Option<&'static Station>, bool) {
         let stop = train_stops::Stop {
