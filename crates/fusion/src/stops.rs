@@ -38,10 +38,18 @@ pub const SEP_S: f64 = 30.0;
 
 /// A start surge: from a steady level (spread under [`STEADY_MPS2`] over [`STEADY_S`]), the 1 s mean steps by over
 /// [`STRONG_MPS2`] and holds along that direction for [`STRONG_S`]. At most one per [`SURGE_EVERY_S`].
+/// A weaker start, the step over [`STRONG_MPS2`] but then only over [`HELD_MPS2`] for [`STRONG_S`], is
+/// [`Event::Started`], at most one per [`SURGE_EVERY_S`] too: a departure's first jerk passes 0.5 m/s^2, then
+/// settles (leaving Fulton St on the 2/3 on `20261026-200816`, it stepped 1.0 and was 0.24 to 0.4 two seconds on,
+/// so the live speed was held at 0 for the 89 s to Park Place; above ground, GNSS's median from a stop was
+/// 0.44 to 0.65 m/s^2 over 6 to 8 s, `crates/cli/examples/accelcurves.rs`). Counted as departures, weaker starts
+/// found 7 more of the rider's 354 "train started" taps but added 42 departures nobody tapped, those checked
+/// on `20261027-220431` all at 17 to 29 mph by GNSS: surges while moving, not starts.
 const STEADY_S: f64 = 4.0;
 const STEADY_MPS2: f64 = 0.06;
 const STRONG_MPS2: f64 = 0.5;
 const STRONG_S: f64 = 3.0;
+const HELD_MPS2: f64 = 0.25;
 const SURGE_EVERY_S: f64 = 20.0;
 
 /// How much history is kept (s): the 20 s of braking before a lurch, and the [`SEP_S`] after it.
@@ -66,6 +74,8 @@ pub enum Event {
     Likely(Stop),
     /// A start surge's beginning: the train pulling away.
     Departed(i64),
+    /// A weaker start (see [`HELD_MPS2`]), which may be one while moving: only for ending a likely stop.
+    Started(i64),
 }
 
 /// A 50 Hz bin being filled: its index, the sum of acceleration and its count, and of rotation rate and its count.
@@ -91,6 +101,7 @@ pub struct StopDetector {
     last_stop: Option<Stop>,
     next_surge: usize,
     last_surge_ns: Option<i64>,
+    last_start_ns: Option<i64>,
 }
 
 impl Stop {
@@ -145,6 +156,7 @@ impl StopDetector {
             last_stop: None,
             next_surge: 0,
             last_surge_ns: None,
+            last_start_ns: None,
         }
     }
 
@@ -493,13 +505,22 @@ impl StopDetector {
                 continue;
             }
             let u = [step[0] / size, step[1] / size];
-            let held = (i..i + ns).all(|k| {
-                let v = m(k);
-                dot([v[0] - base[0], v[1] - base[1]], u) > STRONG_MPS2
-            });
-            if held {
+            let held = |over: f64| {
+                (i..i + ns).all(|k| {
+                    let v = m(k);
+                    dot([v[0] - base[0], v[1] - base[1]], u) > over
+                })
+            };
+            if held(STRONG_MPS2) {
                 self.last_surge_ns = Some(t);
                 events.push(Event::Departed(t));
+            } else if held(HELD_MPS2)
+                && self
+                    .last_start_ns
+                    .is_none_or(|l| (t - l) as f64 * 1e-9 >= SURGE_EVERY_S)
+            {
+                self.last_start_ns = Some(t);
+                events.push(Event::Started(t));
             }
         }
         events

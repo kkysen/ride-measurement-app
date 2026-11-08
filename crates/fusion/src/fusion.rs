@@ -710,6 +710,8 @@ pub struct Fusion {
     stop_detector: StopDetector,
     train_stops: Vec<(train_stops::Stop, Option<&'static Station>, bool)>,
     departures: Vec<i64>,
+    /// Weaker starts ([`train_stops::Event::Started`]), only for ending a likely stop.
+    starts: Vec<i64>,
     /// The timeline's segments kept, and the walks so far (see [`Fusion::timeline`]).
     timeline_kept: std::cell::RefCell<TimelineKept>,
     walks: std::cell::RefCell<Walks>,
@@ -823,6 +825,7 @@ impl Fusion {
             stop_detector: StopDetector::new(),
             train_stops: Vec::new(),
             departures: Vec::new(),
+            starts: Vec::new(),
             settled_records: Default::default(),
             tracks: Default::default(),
             fix_tracks: Default::default(),
@@ -1972,6 +1975,7 @@ impl Fusion {
                     self.departures.push(at);
                     self.confirm_stops(t_ns, at);
                 }
+                train_stops::Event::Started(at) => self.starts.push(at),
             }
         }
         let Some(kept) = kept else {
@@ -2545,7 +2549,9 @@ impl Fusion {
             .estimator
             .last_gnss_speed()
             .is_some_and(|(t, v)| t > stop.t_ns && v > LIKELY_STOP_GNSS_MPS);
-        let departed = self.departed_after(stop.t_ns).is_some();
+        let after = stop.t_ns + (DEPART_AFTER_STOP_S * 1e9) as i64;
+        let departed = self.departed_after(stop.t_ns).is_some()
+            || self.starts.last().is_some_and(|&s| s > after);
         let since_s = (now_ns - stop.t_ns) as f64 * 1e-9;
         // Once the decision is due, it must have kept this lurch (on `135509` and `215922`, 3 of 34 weren't).
         let lag = (RECORDS_SETTLE_S * 1e9) as i64;
