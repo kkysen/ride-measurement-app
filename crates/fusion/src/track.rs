@@ -326,9 +326,62 @@ const AHEAD_STOPS: usize = 4;
 /// away from `prev` where the shape stops there too: where a train leaving `from` is headed. None if no shape
 /// knows the way, or the shapes disagree (no `prev`, or lines going different ways): the way isn't known.
 pub fn ahead(from: &Station, prev: Option<&Station>, lines: &[String]) -> Option<Track> {
+    let (shape, k, far) = ahead_shape(from, prev, lines)?;
+    let mut track = slice(shape, shape.stops[k].1, shape.stops[far].1);
+    track.points[0] = (from.lat, from.lon);
+    Some(track)
+}
+
+/// How far (m) along the track the next stations a train leaving `from` (away from `prev`) can stop at are,
+/// nearest first, on any shape of one of `lines` (any, if none). Where the shapes disagree (lines going
+/// different ways, an express and a local), each is the farthest of them, so a cap from it holds on any of them.
+pub fn stations_ahead_m(from: &Station, prev: Option<&Station>, lines: &[String]) -> Option<Vec<f64>> {
     let ids_from = stop_ids(from);
     let ids_prev = prev.map(stop_ids)?;
-    // The shape, the station's point, the farthest stop's point, and the next station's position.
+    let mut out: Option<Vec<f64>> = None;
+    for shape in shapes() {
+        if !lines.is_empty() && !lines.contains(&line_of_route(&shape.route)) {
+            continue;
+        }
+        let find = |ids: &[&str]| {
+            shape
+                .stops
+                .iter()
+                .position(|(id, _)| ids.contains(&id.as_str()))
+        };
+        let (Some(k), Some(p)) = (find(&ids_from), find(&ids_prev)) else {
+            continue;
+        };
+        let next: Vec<usize> = if p < k {
+            (k + 1..(k + 1 + AHEAD_STOPS).min(shape.stops.len())).collect()
+        } else {
+            (k.saturating_sub(AHEAD_STOPS)..k).rev().collect()
+        };
+        if next.is_empty() {
+            continue;
+        }
+        let here = shape.along[shape.stops[k].1];
+        let d: Vec<f64> = next
+            .into_iter()
+            .map(|j| (shape.along[shape.stops[j].1] - here).abs())
+            .collect();
+        out = Some(match out {
+            None => d,
+            Some(o) => o.iter().zip(&d).map(|(a, b)| a.max(*b)).collect(),
+        });
+    }
+    out
+}
+
+/// The shape of [`ahead`], with the stop index of `from` on it and of the farthest station ahead.
+fn ahead_shape(
+    from: &Station,
+    prev: Option<&Station>,
+    lines: &[String],
+) -> Option<(&'static Shape, usize, usize)> {
+    let ids_from = stop_ids(from);
+    let ids_prev = prev.map(stop_ids)?;
+    // The shape, the station's stop, the farthest stop, and the next station's position.
     let mut found: Option<(&Shape, usize, usize, (f64, f64))> = None;
     for shape in shapes() {
         if !lines.is_empty() && !lines.contains(&line_of_route(&shape.route)) {
@@ -363,13 +416,11 @@ pub fn ahead(from: &Station, prev: Option<&Station>, lines: &[String]) -> Option
             // Another shape to the same next station (within a platform's length): the same way.
             Some((.., q)) if meters(q, to) <= 200.0 => {}
             Some(_) => return None,
-            None => found = Some((shape, shape.stops[k].1, shape.stops[far].1, to)),
+            None => found = Some((shape, k, far, to)),
         }
     }
-    let (shape, k, i, _) = found?;
-    let mut track = slice(shape, k, i);
-    track.points[0] = (from.lat, from.lon);
-    Some(track)
+    let (shape, k, far, _) = found?;
+    Some((shape, k, far))
 }
 
 /// The shortest track from `from` to the next station a shape of one of `lines` (any, if none) stops at,

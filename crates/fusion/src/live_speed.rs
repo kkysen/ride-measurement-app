@@ -14,7 +14,8 @@
 //! - The travel axis's sign (which way is forward) comes from GNSS speed changes, or from a departure from a stop
 //!   (a train or bus accelerates forward when leaving). Until it's known, speed is the magnitude of the integral.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Sensor {
@@ -51,6 +52,14 @@ pub struct Estimate {
     /// The fastest the vehicle can go now (m/s), if limited (see [`LiveSpeedEstimator::set_max_speed`]):
     /// the speed is held under it, but its sigma isn't, so the speed and sigma together can exceed it.
     pub max_speed_mps: Option<f64>,
+}
+
+/// A leg between stations underground: when the train left, and for each station ahead, nearest first,
+/// the soonest a train could stand there (s since the departure) and the fastest it goes on the way.
+#[derive(Clone, Debug)]
+struct Leg {
+    since_ns: i64,
+    stations: VecDeque<(f64, f64)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -163,6 +172,65 @@ pub fn subway_accel_limits(speed_mps: f64) -> (f64, f64) {
     let v = speed_mps.max(1e-3);
     ((10.9 / v).min(98.0 / (v * v)).min(1.43), 3.0 * 0.44704)
 }
+/// A train speeding up from a stand as fast as [`subway_accel_limits`] allows (at most [`SUBWAY_MAX_SPEED_MPS`]):
+/// its speed every [`REACH_STEP_M`] along, and every [`REACH_STEP_S`] since it started.
+fn reach_tables() -> &'static (Vec<f64>, Vec<f64>) {
+    static TABLES: OnceLock<(Vec<f64>, Vec<f64>)> = OnceLock::new();
+    TABLES.get_or_init(|| {
+        let dt = 0.01;
+        let (mut v, mut x, mut t) = (0.0_f64, 0.0_f64, 0.0_f64);
+        let (mut by_m, mut by_s) = (vec![0.0], vec![0.0]);
+        while v < SUBWAY_MAX_SPEED_MPS || by_m.len() < 2 {
+            let a = subway_accel_limits(v).0;
+            x += (v + 0.5 * a * dt) * dt;
+            v = (v + a * dt).min(SUBWAY_MAX_SPEED_MPS);
+            t += dt;
+            while x >= by_m.len() as f64 * REACH_STEP_M {
+                by_m.push(v);
+            }
+            while t >= by_s.len() as f64 * REACH_STEP_S {
+                by_s.push(v);
+            }
+        }
+        (by_m, by_s)
+    })
+}
+
+fn lookup(table: &[f64], x: f64) -> f64 {
+    let i = x.max(0.0) as usize;
+    match (table.get(i), table.get(i + 1)) {
+        (Some(a), Some(b)) => a + (b - a) * (x.max(0.0) - i as f64),
+        _ => SUBWAY_MAX_SPEED_MPS,
+    }
+}
+
+/// The fastest a train can be going (m/s) `distance_m` from a stand (see [`reach_tables`]).
+pub fn subway_reach_mps(distance_m: f64) -> f64 {
+    lookup(&reach_tables().0, distance_m / REACH_STEP_M)
+}
+
+/// The fastest a train can be going (m/s) `seconds` after starting from a stand (see [`reach_tables`]).
+pub fn subway_reach_by_time_mps(seconds: f64) -> f64 {
+    lookup(&reach_tables().1, seconds / REACH_STEP_S)
+}
+
+/// The fastest a train goes (m/s) between two stops `length_m` apart along the track: where speeding up as fast
+/// as it can ([`subway_reach_mps`]) meets braking as hard as it can into the far stop.
+pub fn subway_peak_mps(length_m: f64) -> f64 {
+    let braking = subway_accel_limits(0.0).1;
+    (0..=(length_m / REACH_STEP_M) as usize)
+        .map(|i| {
+            let x = i as f64 * REACH_STEP_M;
+            subway_reach_mps(x).min((2.0 * braking * (length_m - x).max(0.0)).sqrt())
+        })
+        .fold(0.0, f64::max)
+}
+const REACH_STEP_M: f64 = 5.0;
+const REACH_STEP_S: f64 = 0.5;
+/// On a leg (see [`LiveSpeedEstimator::start_leg`]), the cap never goes under this (m/s), for the departure's
+/// time found a moment late.
+const LEG_CAP_FLOOR_MPS: f64 = 2.0;
+
 /// The slack (m/s) over [`subway_accel_limits`]'s ceiling, for the phone's noise.
 const ACCEL_LIMIT_SLACK_MPS: f64 = 0.3;
 /// Trains, buses, and planes in normal operation stay well under 1 g along the track,
@@ -321,6 +389,8 @@ pub struct LiveSpeedEstimator {
     backward: bool,
     /// The most the train could be going (m/s), from the last stop or GNSS speed (see [`Self::limit_accel`]).
     ceiling_mps: Option<f64>,
+    /// The leg in progress since a departure from a station (see [`Self::start_leg`]).
+    leg: Option<Leg>,
     /// The steady cars' accelerometers, and the current comparison window: since when,
     /// and the phone's along-axis acceleration integrated over it.
     cars: Vec<CarAxis>,
@@ -378,6 +448,7 @@ impl Default for LiveSpeedEstimator {
             max_speed_mps: None,
             backward: false,
             ceiling_mps: None,
+            leg: None,
             cars: Vec::new(),
             window_ns: 0,
             window_along_sum: 0.0,
@@ -587,6 +658,7 @@ impl LiveSpeedEstimator {
             self.mark_used(Sensor::SpeedLimit, t_ns);
         }
         self.limit_accel(t_ns, dt);
+        self.limit_on_leg(t_ns);
         self.along_since_gnss += along * dt;
         for c in &mut self.cars {
             c.pending_sum += along * dt;
@@ -1044,6 +1116,60 @@ impl LiveSpeedEstimator {
         false
     }
 
+    /// A train left a station underground at `since_ns`, the next stations its line stops at `stations_m` along
+    /// the track ([`crate::track::stations_ahead_m`]): until [`Self::end_leg`], the speed is capped as on
+    /// [`Self::limit_on_leg`].
+    pub fn start_leg(&mut self, since_ns: i64, stations_m: &[f64]) {
+        self.leg = (!stations_m.is_empty()).then(|| Leg {
+            since_ns,
+            stations: stations_m
+                .iter()
+                .map(|&d| (crate::track::least_s(d), subway_peak_mps(d)))
+                .collect(),
+        });
+    }
+
+    /// The train stopped (or the way ahead isn't known): the leg's cap is off.
+    pub fn end_leg(&mut self) {
+        self.leg = None;
+    }
+
+    /// On a leg underground without recent GNSS, from known inputs only (the departure's time, the stations'
+    /// places on the track, the learned curves), never the estimate itself: the speed is at most what a train
+    /// reaches in the time since the departure ([`subway_reach_by_time_mps`]), and at most the fastest a train goes
+    /// on the way to the next station it stops at ([`subway_peak_mps`]). Once a train could have stood at that
+    /// station and no stop was found, it may have run through, so the one after counts, which only loosens the cap;
+    /// past the last station known, the leg ends. The cap is projected like [`Self::set_max_speed`]'s bound.
+    fn limit_on_leg(&mut self, t_ns: i64) {
+        let gnss_recent =
+            self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+        if self.backward || self.max_speed_mps != Some(SUBWAY_MAX_SPEED_MPS) || gnss_recent {
+            return;
+        }
+        let Some(leg) = self.leg.as_mut() else {
+            return;
+        };
+        let since_s = (t_ns - leg.since_ns) as f64 * 1e-9;
+        while leg.stations.front().is_some_and(|&(least, _)| least < since_s) {
+            leg.stations.pop_front();
+        }
+        let Some(&(_, peak)) = leg.stations.front() else {
+            self.leg = None;
+            return;
+        };
+        let cap = subway_reach_by_time_mps(since_s)
+            .min(peak)
+            .max(LEG_CAP_FLOOR_MPS);
+        if self.v.abs() > cap {
+            let y = self.v.signum() * cap - self.v;
+            if self.p00 > 0.0 {
+                self.b += self.p01 / self.p00 * y;
+            }
+            self.v += y;
+            self.mark_used(Sensor::SpeedLimit, t_ns);
+        }
+    }
+
     /// On the subway (its top speed is the bound), keeps the speed under the most a train could reach
     /// since the last stop or GNSS speed: the ceiling starts there and rises along [`subway_accel_limits`],
     /// and a speed over it is projected back like [`Self::set_max_speed`]'s bound.
@@ -1292,4 +1418,28 @@ fn distance_m(a: &Fix, b: &Fix) -> f64 {
     let dl = (b.lon - a.lon).to_radians();
     let h = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
     2.0 * r * h.min(1.0).sqrt().asin()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_train_reaches_speed_along_the_motoring_curve() {
+        let mph = |m: f64| subway_reach_mps(m) / 0.44704;
+        assert_eq!(subway_reach_mps(0.0), 0.0);
+        // About 1.4 m/s^2 at first: 20 mph (8.9 m/s) takes about 28 m.
+        assert!((18.0..23.0).contains(&mph(28.0)), "{}", mph(28.0));
+        // A station spacing of 600 m allows under 50 mph, and it only rises.
+        assert!((35.0..50.0).contains(&mph(600.0)), "{}", mph(600.0));
+        assert!((0..300).all(|i| subway_reach_mps(i as f64 * 10.0) <= subway_reach_mps(i as f64 * 10.0 + 10.0)));
+        assert_eq!(subway_reach_mps(1e6), SUBWAY_MAX_SPEED_MPS);
+        // About 6 s to 20 mph.
+        let s20 = (0..200).find(|&i| subway_reach_by_time_mps(i as f64 * 0.1) >= 20.0 * 0.44704).unwrap();
+        assert!((50..80).contains(&s20), "{s20}");
+        // 600 m between stations: no train passes about 45 mph; 2.2 km, about 55.
+        let peak = subway_peak_mps(600.0) / 0.44704;
+        assert!((40.0..48.0).contains(&peak), "{peak}");
+        assert!(subway_peak_mps(2200.0) / 0.44704 > 50.0);
+    }
 }
