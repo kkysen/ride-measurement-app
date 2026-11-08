@@ -28,7 +28,9 @@ use ride_session::proto::{GnssMeasurementsEvent, GnssNavigationMessage};
 use crate::car_beacons::{self, CarReading, CarTracker};
 use crate::doors::ChimeCars;
 use crate::doors::{DoorCycle, DoorDetector};
-use crate::live_speed::{Estimate, LiveSpeedEstimator, SUBWAY_MAX_SPEED_MPS};
+use crate::live_speed::{
+    Estimate, LiveSpeedEstimator, RUNNING_MPS, SUBWAY_MAX_SPEED_MPS, WALKING_MPS,
+};
 use crate::position::{PositionEstimate, PositionInput, smooth};
 use crate::stations::{self, CarType, Station};
 use crate::stops::{self as train_stops, StopDetector};
@@ -101,8 +103,6 @@ const MOVED_ON_AFTER_S: f64 = 20.0;
 const MOVED_ON_HELD_S: f64 = 10.0;
 /// A transfer (see [`Fusion::transfer_s`]) is shown for at most this long (s): a late night wait for a train.
 const TRANSFER_MAX_S: f64 = 1_800.0;
-/// Between trains (see [`Fusion::transfer_s`]) the live speed shows at most a run (m/s).
-const BETWEEN_TRAINS_MAX_MPS: f64 = 3.0;
 /// A departure is the rider's new train if no step window ends within this before and after it (s).
 const TRANSFER_STILL_S: (f64, f64) = (10.0, 5.0);
 /// A car heard as the rider's this long (s) is their train's, not one standing at the platform:
@@ -2693,29 +2693,54 @@ impl Fusion {
         // The IMU alone ran to the 55 mph cap standing on the platforms at 6 Av and 14 St (`20261023-193658`).
         // That bound is for the IMU alone: with recent GNSS, its speed stands, as for the subway's caps
         // (boarded at 30 Av, `20261103-180153`, the boarding missed, GNSS read 26 to 30 mph held at 0).
+        // On foot, the IMU alone runs away: the phone swings with each step, and walking it measures only after
+        // [`crate::walking::IN_A_ROW`] windows. So the walking pace shows, at most: walking off at 8:41 pm on
+        // `20261026-200816` showed the IMU's 55 mph, and at 5:33 pm on `20261027-172356` the old 3 m/s cap, 6.7 mph.
+        let pace = self.pace_now();
         if !self.estimator.gnss_recent(now_ns) && self.transfer_s(now_ns, &self.records()).is_some()
         {
-            let walking = self.step_windows.last().is_some_and(|&(_, steps)| steps);
-            e.speed_mps = if walking {
-                e.speed_mps.min(BETWEEN_TRAINS_MAX_MPS)
-            } else {
-                0.0
-            };
+            e.speed_mps = pace.map_or(0.0, |p| e.speed_mps.min(p));
             e.accel_mps2 = 0.0;
-            e.stopped = !walking;
+            e.stopped = pace.is_none();
             return e;
         }
-        if self.likely_stop_now(now_ns).is_some() {
-            e.speed_mps = 0.0;
+        if let Some(stop) = self.likely_stop_unwalked(now_ns) {
             e.accel_mps2 = 0.0;
-            e.stopped = true;
+            // Walking since the stop: the rider is moving (off the train, or along it), at the walking pace.
+            match pace.filter(|_| self.walked_since(stop.t_ns)) {
+                Some(p) => e.speed_mps = e.speed_mps.min(p),
+                None => {
+                    e.speed_mps = 0.0;
+                    e.stopped = true;
+                }
+            }
         }
         e
+    }
+
+    /// The rider's pace (m/s), if the last step window had steps: running, or else walking.
+    fn pace_now(&self) -> Option<f64> {
+        let steps = self.step_windows.last().is_some_and(|&(_, steps)| steps);
+        let running = matches!(self.walking.last_gait(), Some((_, Some(Gait::Running))));
+        steps.then_some(if running { RUNNING_MPS } else { WALKING_MPS })
+    }
+
+    /// Whether the last step window, after `t_ns`, had steps.
+    fn walked_since(&self, t_ns: i64) -> bool {
+        self.step_windows
+            .last()
+            .is_some_and(|&(t, steps)| steps && t > t_ns)
     }
 
     /// The likely stop the train is standing at now, if any: not departed since, no GNSS speed since says it's
     /// moving, the rider not walking now, and under [`RECORD_MAX_DWELL_S`] ago. A later lurch replaces it.
     fn likely_stop_now(&self, now_ns: i64) -> Option<train_stops::Stop> {
+        self.likely_stop_unwalked(now_ns)
+            .filter(|stop| !self.walked_since(stop.t_ns))
+    }
+
+    /// [`Self::likely_stop_now`], walking since it or not.
+    fn likely_stop_unwalked(&self, now_ns: i64) -> Option<train_stops::Stop> {
         let stop = self.likely_stop?;
         let moving_gnss = self
             .estimator
@@ -2732,17 +2757,11 @@ impl Fusion {
                 .iter()
                 .any(|(s, ..)| s.t_ns == stop.t_ns);
         let old = since_s > RECORD_MAX_DWELL_S;
-        // Walking since the stop: the rider is moving (off the train, or along it), so the walking pace shows.
-        let walking = self
-            .step_windows
-            .last()
-            .is_some_and(|&(t, steps)| steps && t > stop.t_ns);
         (self.context.in_subway
             && !moving_gnss
             && !departed
             && !dropped
             && !old
-            && !walking
             && !self.moved_on(stop.t_ns, now_ns))
         .then_some(stop)
     }
@@ -3901,6 +3920,30 @@ mod tests {
         f.on_likely_stop(lurch(150));
         assert_eq!(f.likely_stop_now(151 * S), Some(lurch(150)));
         assert!(f.estimate(151 * S).stopped);
+    }
+
+    #[test]
+    fn walking_off_a_likely_stop_shows_the_walking_pace() {
+        let mut f = Fusion::whole_ride();
+        f.context.in_subway = true;
+        // The IMU alone ran away while the likely stop held the shown speed at 0 (8:41 pm on `20261026-200816`).
+        f.estimator.on_gnss_speed(100 * S, 20.0, 0.5);
+        assert!(f.estimate_unheld(157 * S).speed_mps > 10.0);
+        let lurch = train_stops::Stop {
+            t_ns: 150 * S,
+            score: 1.0,
+            braking_since_ns: 146 * S,
+        };
+        f.on_likely_stop(lurch);
+        let held = f.estimate(152 * S);
+        assert!(held.stopped && held.speed_mps == 0.0);
+        // Steps since the stop: the walking pace, not what the IMU integrated.
+        f.step_windows.push((156 * S, true));
+        let e = f.estimate(157 * S);
+        assert!(e.speed_mps <= WALKING_MPS, "{}", e.speed_mps);
+        // Standing again, it holds again.
+        f.step_windows.push((160 * S, false));
+        assert_eq!(f.estimate(161 * S).speed_mps, 0.0);
     }
 
     fn stop(t_s: i64) -> (train_stops::Stop, Option<&'static Station>, bool) {
