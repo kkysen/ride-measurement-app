@@ -1191,12 +1191,24 @@ impl Fusion {
             .filter(|_| aboard)
             .map(|(_, c)| c);
         let car = self.cars.current_at(t);
-        let route = self.route(t, boarded_after, &records).filter(|_| aboard);
+        // A line is only named at a station it serves: one matched from earlier stops is stale at a station
+        // of another line (the 6 from 125 St still shown at Astoria Blvd, Sat Nov 7, 2:57 pm).
+        let route = self
+            .route(t, boarded_after, &records)
+            .filter(|_| aboard)
+            .filter(|r| station.as_ref().is_none_or(|s| stations::serves(s, r)));
         // The route if the feeds give it, else the lines the train has been on, else the station's:
         // between trains, all the lines of its complex, any of which the rider may take next.
         let lines = match &route {
             Some(r) => vec![r.clone()],
-            None if !riding.is_empty() && aboard => riding,
+            None if !riding.is_empty() && aboard => {
+                let at: Vec<String> = riding
+                    .iter()
+                    .filter(|l| station.as_ref().is_none_or(|s| stations::serves(s, l)))
+                    .cloned()
+                    .collect();
+                if at.is_empty() { riding } else { at }
+            }
             None if transfer_s.is_some() => station
                 .as_ref()
                 .map(stations::complex_lines)

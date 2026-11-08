@@ -198,6 +198,11 @@ pub fn complex_lines(station: &Station) -> Vec<String> {
     lines
 }
 
+/// Whether `line` stops at `station` or another part of its complex.
+pub fn serves(station: &Station, line: &str) -> bool {
+    station.lines.iter().any(|l| l == line) || complex_lines(station).iter().any(|l| l == line)
+}
+
 /// How far apart (m) the parts of one station complex can be (Times Sq to 42 St-Port Authority is about 250).
 const COMPLEX_M: f64 = 350.0;
 
@@ -244,6 +249,20 @@ mod tests {
         let (s, d) = nearest(40.7556, -73.9870).unwrap();
         assert!(s.name.starts_with("Times Sq"), "{s:?}");
         assert!(d < 100.0);
+    }
+
+    #[test]
+    fn a_line_serves_only_its_stations_complexes() {
+        let named = |n: &str| all().iter().find(|s| s.name == n).unwrap();
+        assert!(!serves(named("Astoria Blvd"), "6"));
+        assert!(serves(named("Astoria Blvd"), "N"));
+        // 59 St-Columbus Circle's A/B/C/D platforms, and its 1 platform, but no E.
+        let columbus = all()
+            .iter()
+            .find(|s| s.name == "59 St-Columbus Circle" && s.lines.contains(&"A".to_string()))
+            .unwrap();
+        assert!(serves(columbus, "1"));
+        assert!(!serves(columbus, "E"));
     }
 
     #[test]
