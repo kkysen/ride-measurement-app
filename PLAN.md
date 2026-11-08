@@ -1102,8 +1102,12 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     and the N the rider left reached Times Sq within the slack of the Q, so the N, matched at 5 Av/59 St too, wins.
     Left: a sensor sign of a change across the platform; Tue Nov 3 also shows the 7 from Queensboro Plaza
     to Times Sq (the stops between have no station; item 21's stale line).
-23. Graph, map and replay (Mon Oct 26, 8:08 pm): timestamps on the graph;
-    on the map, show where the rider taps; a taps button when replaying a ride, with taps on the graph and map.
+23. Done, not on the phone (`4affdf5`, `a27cacf`, `e1d4f91`): graph, map and replay (Mon Oct 26, 8:08 pm).
+    The graph's time axis shows round 12-hour New York times, as many as fit (`clock_ticks`).
+    The live map pins each tap where the rider was (`positions_at`), underground once its leg is drawn.
+    A replayed ride has a "Taps" button: its taps as pins on the map and lines on the graph, labeled where there's room;
+    the replay's buttons are on their own row with fixed widths, so none moves.
+    The tap lists show 12-hour times too.
 24. Check "says SMEE chime on NTT 5 train" (Tue Oct 27, 10:04 pm).
 25. Audio. Recording now takes every microphone at its native rate (`4ec4350`, `6000ec9`), untested on the phone:
     check a ride has 48 kHz, 3 channels, no sameness or missing-channel `Health` reports, and the microphone info.
