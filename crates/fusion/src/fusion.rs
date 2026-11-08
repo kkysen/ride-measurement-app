@@ -664,8 +664,8 @@ pub struct SmoothedSpeed {
     pub sigma_mps: f64,
     pub forward_mps: f64,
     pub backward_mps: f64,
-    /// Acceleration in the direction of travel (m/s^2): the passes' low-passed rates of change of the fused speed,
-    /// weighted like the speed. Their lags run opposite ways in time, so the combination is roughly centered.
+    /// Acceleration in the direction of travel (m/s^2): the slope of the smoothed speeds themselves, centered
+    /// (see [`accel_from_speeds`]).
     pub accel_mps2: f64,
 }
 
@@ -3220,7 +3220,41 @@ impl Fusion {
             let (legs, _) = crate::track::legs(&records, fixes, None);
             crate::track::hold_to_track(&mut out, &legs);
         }
+        accel_from_speeds(&mut out);
         out
+    }
+}
+
+/// Half the span (ns) each smoothed acceleration is the shown speed's slope over (see [`accel_from_speeds`]):
+/// over a second, as the samples are about a second apart (a little over: 1.001 s), to reach one each side.
+const ACCEL_HALF_SPAN_NS: i64 = 1_500_000_000;
+
+/// Sets each smoothed speed's acceleration to the slope of the speeds themselves, as shown, from
+/// [`ACCEL_HALF_SPAN_NS`] before to as long after (or as far as the speeds go).
+/// Not the passes' own rates combined: their weights change along the way, and the speeds are then bounded
+/// and held to the track, so that combination rose while the shown speed fell braking into a station
+/// (item 19, 18 St on `20261029-012337`: up to +2.2 m/s^2 while the speed fell from 18 to 4 mph).
+fn accel_from_speeds(out: &mut [SmoothedSpeed]) {
+    let speeds: Vec<(i64, f64)> = out
+        .iter()
+        .map(|s| (s.elapsed_realtime_ns, s.speed_mps))
+        .collect();
+    let (mut lo, mut hi) = (0, 0);
+    for (i, s) in out.iter_mut().enumerate() {
+        let t = speeds[i].0;
+        while speeds[lo].0 < t - ACCEL_HALF_SPAN_NS {
+            lo += 1;
+        }
+        hi = hi.max(i);
+        while hi + 1 < speeds.len() && speeds[hi + 1].0 <= t + ACCEL_HALF_SPAN_NS {
+            hi += 1;
+        }
+        let ((ta, va), (tb, vb)) = (speeds[lo], speeds[hi]);
+        s.accel_mps2 = if tb > ta {
+            (vb - va) / ((tb - ta) as f64 * 1e-9)
+        } else {
+            0.0
+        };
     }
 }
 
@@ -3750,6 +3784,25 @@ fn departure_fade(stop: &train_stops::Stop, door_cycles: &[DoorCycle]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn braking_reads_negative_whatever_the_passes_rates() {
+        // Item 19: the shown speed falls into a station while the passes' rates said speeding up.
+        let mut out: Vec<SmoothedSpeed> = (0..=20)
+            .map(|i| SmoothedSpeed {
+                elapsed_realtime_ns: i * 1_000_000_000,
+                speed_mps: 20.0 - i as f64,
+                sigma_mps: 1.0,
+                forward_mps: 20.0,
+                backward_mps: 0.0,
+                accel_mps2: 2.0,
+            })
+            .collect();
+        accel_from_speeds(&mut out);
+        for s in &out {
+            assert!((s.accel_mps2 + 1.0).abs() < 1e-9, "{s:?}");
+        }
+    }
 
     #[test]
     fn route_from_the_feeds() {
