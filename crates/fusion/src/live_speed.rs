@@ -114,6 +114,11 @@ const AXIS_GNSS_MIN_SPEED_MPS: f64 = 3.0;
 /// a subway curve of 300 m radius at 25 mph turns at 0.04, and faster is the rider turning the phone, where the
 /// yaw rate times a wrong speed would push the speed further off (35 mph stopped in a cut on `20261023-011209`).
 const CENTRIPETAL_MAX_YAW_RAD_S: f64 = 0.1;
+/// No train turns faster than about 0.18 rad/s about the vertical (sqrt of 1.5 m/s^2 sideways over a 45 m radius,
+/// at any speed), so turning faster than this is the phone in a hand, which turns the travel axis in its frame
+/// (once GNSS has given the axis, nothing else re-learns it underground: 58 deg at 1.2 rad/s braking into a stop
+/// at 6:13 pm on `20261107-175954` left the axis 60 to 80 deg off, so departures barely registered).
+const HANDLED_YAW_RAD_S: f64 = 0.25;
 /// Process noise: unmodeled along-axis acceleration (m/s^2 per sqrt(s)), and bias random walk.
 const ACCEL_NOISE: f64 = 0.3;
 const BIAS_WALK: f64 = 0.005;
@@ -482,10 +487,16 @@ impl LiveSpeedEstimator {
         // the phone, so only the phone's tilting (rotation about horizontal axes) moves the axis in its frame.
         // A turn of the phone in hand about the vertical looks the same as a curve; GNSS re-learns the axis then.
         let g_norm = norm(&self.gravity);
+        // Turning about the vertical faster than any train turns is the phone turning in a hand: the axis turns
+        // with it then, or it would stay where the phone was pointing.
         let tilting = if g_norm > 1e-6 {
             let up = self.gravity.map(|x| x / g_norm);
             let about_up = dot(&self.omega, &up);
-            std::array::from_fn(|i| self.omega[i] - about_up * up[i])
+            if about_up.abs() > HANDLED_YAW_RAD_S {
+                self.omega
+            } else {
+                std::array::from_fn(|i| self.omega[i] - about_up * up[i])
+            }
         } else {
             self.omega
         };
