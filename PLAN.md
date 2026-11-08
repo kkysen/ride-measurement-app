@@ -983,6 +983,20 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     no grade term yet, so the 60 St tunnel's 60 to 62 mph coasting is still cut at 55 without GNSS;
     the 0 to 55 jump after a station and braking at 55 are untouched.
 19. Braking into a station often shows as accelerating (Thu Oct 29, 1:23 am).
+    Done in part (2026-11-08, `e5b11a3`), not on the phone: the replay's acceleration was the two passes' rates
+    combined by the speed's weights, which change along the way, before the speeds are bounded and held to the track;
+    at 18 St it read up to +2.2 m/s² while the shown speed fell from 18 to 4 mph.
+    Now it's the shown speed's own slope over about a second each side (`accel_from_speeds`); speeds unchanged.
+    Checked with `crates/cli/examples/brakesign.rs` (scratch, `skip_still`), the 20 s before each stop on 7 rides
+    (Thu Oct 29, 11:07 pm to Sat Nov 7, 5:59 pm, 136 stops): samples where the replay's speed falls but its acceleration
+    reads positive went from 74 to 38.
+    Open: the live acceleration's sign was already right (the rate of the live speed shown); what's wrong is the live
+    speed itself, which rises into many stops: it falls over those 20 s at only 79 of 147 stops (8 of 11 on Thu Oct 29).
+    Underground, braking integrates past zero and the shown magnitude climbs again (18 St, 96 St on Thu Oct 29),
+    or the live speed is stuck low then rises (item 27).
+    Clamping the signed speed at zero once the axis sign is known was tried and dropped: on those 7 rides,
+    stops where the live speed falls went from 71 to 55.
+    The replay also reads positive where its speed itself rises before a stop (Sat Nov 7, 2:29 pm).
 20. Done, unchecked on the phone (`34cfce3`, `6b7d63f`, `10fdd80`, `00681c8`): the live map underground, noted on
     four rides, the latest Sat Nov 7, 5:59 pm. `Fusion::recent_track_path`, drawn under the GPS path:
     each leg between stations once the train stops at its far station (placed as a past ride's by `track::Along`);
