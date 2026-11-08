@@ -2688,7 +2688,10 @@ impl Fusion {
         let mut e = self.estimate_unheld(now_ns);
         // Between trains the rider is on foot: standing on a platform, or walking at most at a run.
         // The IMU alone ran to the 55 mph cap standing on the platforms at 6 Av and 14 St (`20261023-193658`).
-        if self.transfer_s(now_ns, &self.records()).is_some() {
+        // That bound is for the IMU alone: with recent GNSS, its speed stands, as for the subway's caps
+        // (boarded at 30 Av, `20261103-180153`, the boarding missed, GNSS read 26 to 30 mph held at 0).
+        if !self.estimator.gnss_recent(now_ns) && self.transfer_s(now_ns, &self.records()).is_some()
+        {
             let walking = self.step_windows.last().is_some_and(|&(_, steps)| steps);
             e.speed_mps = if walking {
                 e.speed_mps.min(BETWEEN_TRAINS_MAX_MPS)

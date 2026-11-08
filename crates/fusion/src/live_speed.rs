@@ -629,8 +629,7 @@ impl LiveSpeedEstimator {
         rotate_world_fixed(&tilting, &mut self.axis_cross, dt);
         rotate_world_fixed(&tilting, &mut self.h_since_gnss, dt);
         self.rotate_cov(&tilting, dt);
-        let gnss_recent =
-            self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+        let gnss_recent = self.gnss_recent(t_ns);
         let w = norm(&self.omega);
         self.turning += (1.0 - (-dt / HANDLED_TAU_S).exp()) * (w - self.turning);
         let tau = if still {
@@ -702,8 +701,7 @@ impl LiveSpeedEstimator {
         self.mark_used(Sensor::Imu, t_ns);
         // The bounds are for the IMU alone: with recent GNSS, its speed stands (a train above 55 mph on a downgrade,
         // or speeding up faster than the curves, is what GNSS measured).
-        let gnss_recent =
-            self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+        let gnss_recent = self.gnss_recent(t_ns);
         if let Some(max) = self.max_speed_mps
             && self.v.abs() > max
             && !gnss_recent
@@ -736,8 +734,7 @@ impl LiveSpeedEstimator {
             // Like a door cycle, not gated without recent GNSS: underground the speed's sigma grows to a few m/s,
             // so the gate rejected the quiet phone's zero exactly when the speed had run away
             // (`rejected as outliers: stop`, standing on the platforms at 6 Av and 14 St on `20261023-193658`).
-            let gnss_recent =
-                self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+            let gnss_recent = self.gnss_recent(t_ns);
             let r = STOP_SIGMA_MPS * STOP_SIGMA_MPS;
             if gnss_recent {
                 self.update(0.0, r, Sensor::Stop, t_ns);
@@ -871,8 +868,7 @@ impl LiveSpeedEstimator {
             c.car_sum = 0.0;
             c.car_n = 0;
         }
-        let gnss_recent =
-            self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+        let gnss_recent = self.gnss_recent(t_ns);
         if USE_CAR_ACCEL && !stopped && !gnss_recent {
             let r = CAR_SIGMA_MPS2 * CAR_SIGMA_MPS2 * (CAR_SHARED + (1.0 - CAR_SHARED) / n);
             self.update_bias(z, r, Sensor::Car, t_ns);
@@ -912,8 +908,7 @@ impl LiveSpeedEstimator {
         self.inflate_to(now_ns);
         let z = self.v - then;
         let r = DOOR_STOP_SIGMA_MPS * DOOR_STOP_SIGMA_MPS;
-        let gnss_recent =
-            self.last_gnss_ns != 0 && (now_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+        let gnss_recent = self.gnss_recent(now_ns);
         let before = self.v;
         if gnss_recent {
             self.update(z, r, Sensor::Doors, now_ns);
@@ -928,6 +923,11 @@ impl LiveSpeedEstimator {
             }
         }
         self.track_accel(now_ns);
+    }
+
+    /// Whether GNSS measured the speed within [`GNSS_RECENT_S`] before `t_ns`.
+    pub fn gnss_recent(&self, t_ns: i64) -> bool {
+        self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S
     }
 
     /// The last plausible GNSS speed (m/s) and its time.
@@ -960,8 +960,7 @@ impl LiveSpeedEstimator {
         };
         let z = if self.v < 0.0 { -pace } else { pace };
         let r = sigma * sigma;
-        let gnss_recent =
-            self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+        let gnss_recent = self.gnss_recent(t_ns);
         // A walking pace says little about the accelerometer's bias (the phone swings with each step), so it keeps it.
         let (b, p11) = (self.b, self.p11);
         if gnss_recent {
@@ -1257,8 +1256,7 @@ impl LiveSpeedEstimator {
     /// station and no stop was found, it may have run through, so the one after counts, which only loosens the cap;
     /// past the last station known, the leg ends. The cap is projected like [`Self::set_max_speed`]'s bound.
     fn limit_on_leg(&mut self, t_ns: i64, dt: f64) {
-        let gnss_recent =
-            self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
+        let gnss_recent = self.gnss_recent(t_ns);
         let Some(leg) = self.leg.as_mut() else {
             return;
         };
