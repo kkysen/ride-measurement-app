@@ -975,14 +975,19 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     braking at 55 mph doesn't bring the speed down (Tue Oct 27, 10:04 pm),
     and the speed jumps from 0 to 55 mph right after leaving a station (Sun Nov 1, 1:50 am; Tue Oct 27, 10:04 pm).
 19. Braking into a station often shows as accelerating (Thu Oct 29, 1:23 am).
-20. Partly done (`34cfce3`, `6b7d63f`; unchecked on the phone): the live map underground, noted on four rides,
-    the latest Sat Nov 7, 5:59 pm. Each leg between stations is drawn along the track once the train stops at
-    its far station (`Fusion::recent_track_path`, placed as a past ride's by `track::Along`), under the GPS path.
-    `crates/cli/examples/livetrack.rs`: every past-ride leg drawn live on Sat Nov 7, 5:59 pm (8), Thu Nov 5, 10:06 pm (7),
-    and `20261022-002914` (9), within 4, 7, and 531 m (90th 61 m) of the past-ride path; 59 to 247 us a tick.
-    Left: the leg in progress (toward the next station on the riding line, by the live distance from the last);
-    the tunnel entrance to the first station; following the newest underground point; the 60 St tunnel
-    from Queensboro Plaza, whose first station is elevated, so not an anchor.
+20. Done, unchecked on the phone (`34cfce3`, `6b7d63f`, `10fdd80`, `00681c8`): the live map underground, noted on
+    four rides, the latest Sat Nov 7, 5:59 pm. `Fusion::recent_track_path`, drawn under the GPS path:
+    each leg between stations once the train stops at its far station (placed as a past ride's by `track::Along`);
+    into a tunnel from the last good fix to the first station (`track::to_station`; Queensboro Plaza to 5 Av/59 St
+    on Sat Nov 7), and out of one; the leg in progress through the next 4 stations on the riding line
+    (`track::ahead`), by the live speeds' distance times the median of the window's legs' track over it.
+    The map follows the newest point of either path. `crates/cli/examples/livetrack.rs` (`skip_still`):
+    legs within 4 and 7 m of the past-ride path; the newest point at each tick against the whole-ride replay's place:
+    Sat Nov 7, 5:59 pm median 0 m, 90th 54 m, max 635 m; Thu Nov 5, 10:06 pm 0, 653, 1033 m. 173 to 225 us a tick.
+    Left: the leg in progress lags or leads by up to 1 km (live speeds underground); a station stop the app
+    misses makes a leg past it; walking into a station (no train path from the street) isn't drawn, by design.
+    The Queensboro Plaza walk off at 6:11 pm on Sat Nov 7 (then a departure at 6:13 pm) is the app's guess, not the rider's:
+    the rider doesn't remember changing trains there; check it against the steps.
 21. Wrong lines and stations in the status:
     "6 train doesn't go anywhere near Astoria Blvd" (Sat Nov 7, 2:29 pm);
     "E at 59th but the E doesn't go there" (Sat Oct 31, 4:58 pm);
