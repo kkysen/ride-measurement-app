@@ -2908,7 +2908,8 @@ impl Fusion {
 
     /// How much farther than the live speeds say the train goes: the median over the legs in the window that
     /// ended by `left` of each's track over their distance, within [`AHEAD_SCALE`]; 1 without one.
-    /// Underground the live speeds often cover half the track or less.
+    /// A stopgap: underground the live speeds' distance is 0 to 2.4 times the track (median 0.76 over 43 legs on
+    /// 8 rides, `crates/cli/examples/liveratio.rs`), with no steady factor; to go once the live speed is fixed.
     fn ahead_scale(&self, legs: &[crate::track::Leg], left: i64) -> f64 {
         let mut ratios: Vec<f64> = legs
             .iter()

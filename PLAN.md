@@ -980,7 +980,8 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     each leg between stations once the train stops at its far station (placed as a past ride's by `track::Along`);
     into a tunnel from the last good fix to the first station (`track::to_station`; Queensboro Plaza to 5 Av/59 St
     on Sat Nov 7), and out of one; the leg in progress through the next 4 stations on the riding line
-    (`track::ahead`), by the live speeds' distance times the median of the window's legs' track over it.
+    (`track::ahead`), by the live speeds' distance times the median of the window's legs' track over it
+    (a stopgap: see item 27; the live speed underground has no steady factor).
     The map follows the newest point of either path. `crates/cli/examples/livetrack.rs` (`skip_still`):
     legs within 4 and 7 m of the past-ride path; the newest point at each tick against the whole-ride replay's place:
     Sat Nov 7, 5:59 pm median 0 m, 90th 54 m, max 635 m; Thu Nov 5, 10:06 pm 0, 653, 1033 m. 173 to 225 us a tick.
@@ -1009,6 +1010,15 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
 26. Labels from notes to learn from: the W parked on the center track at 30 Av (Sat Nov 7, 5:59 pm),
     the M4 bus (Thu Nov 5, 4:30 pm), the Grand St to W 4 St shuttle bus (Thu Oct 29, 10:22 pm), car numbers.
     All notes are listed by `ride summary`; a copy of them is in `data/work/notes.txt`.
+27. The live speed underground (rider, 2026-11-08: "just fix the live speed").
+    `crates/cli/examples/liveratio.rs` (`skip_still`, about 1:15 a ride): over 43 legs on 8 rides, the live speed's
+    distance over the track's length is 0 to 2.4 (10th 0.16, median 0.76, 90th 1.79); per-ride medians 0.36 to 1.87.
+    Not "about half", as said before (that was the smoothed speeds' 0.46 from item 8). Two failures:
+    runaway (peak at the 55 mph cap, 1.3 to 2.4 times the track) and stuck low (peak 6 to 14 mph on legs averaging
+    over 20; `20261026-200816` 13:37, 0 m in 89 s), sometimes both in one leg (Sat Nov 7, 5:59 pm, 25:53).
+    Plan: find the stuck-low cause first; then along-track distance measurements in the forward filter:
+    a stop at a named station (the track since the departure) and the radio naming a station on the line
+    (`station_history`, from network fixes and tagged cells), weighted for the radio's lag. Then drop `ahead_scale`.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
