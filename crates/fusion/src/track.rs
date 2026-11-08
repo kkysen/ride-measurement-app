@@ -336,14 +336,15 @@ pub fn ahead(from: &Station, prev: Option<&Station>, lines: &[String]) -> Option
 /// How far (m) along the track the next stations a train leaving `from` (away from `prev`) can stop at are,
 /// nearest first, on any shape of one of `lines` (any, if none). Where the shapes disagree (lines going
 /// different ways, an express and a local), each is the farthest of them, so a cap from it holds on any of them.
+/// With each, whether the whole way to it is CBTC track on every such shape ([`cbtc_stretch`]).
 pub fn stations_ahead_m(
     from: &Station,
     prev: Option<&Station>,
     lines: &[String],
-) -> Option<Vec<f64>> {
+) -> Option<Vec<(f64, bool)>> {
     let ids_from = stop_ids(from);
     let ids_prev = prev.map(stop_ids)?;
-    let mut out: Option<Vec<f64>> = None;
+    let mut out: Option<Vec<(f64, bool)>> = None;
     for shape in shapes() {
         if !lines.is_empty() && !lines.contains(&line_of_route(&shape.route)) {
             continue;
@@ -366,16 +367,79 @@ pub fn stations_ahead_m(
             continue;
         }
         let here = shape.along[shape.stops[k].1];
-        let d: Vec<f64> = next
+        let mut last = k;
+        let mut cbtc = true;
+        let d: Vec<(f64, bool)> = next
             .into_iter()
-            .map(|j| (shape.along[shape.stops[j].1] - here).abs())
+            .map(|j| {
+                cbtc &= cbtc_stretch(&shape.route, &shape.stops[last].0, &shape.stops[j].0);
+                last = j;
+                ((shape.along[shape.stops[j].1] - here).abs(), cbtc)
+            })
             .collect();
         out = Some(match out {
             None => d,
-            Some(o) => o.iter().zip(&d).map(|(a, b)| a.max(*b)).collect(),
+            Some(o) => o
+                .iter()
+                .zip(&d)
+                .map(|(a, b)| (a.0.max(b.0), a.1 && b.1))
+                .collect(),
         });
     }
     out
+}
+
+/// The track signaled by CBTC, as (where, lines, the parent stop IDs it spans): a stretch between consecutive
+/// stops is CBTC when both ends are in one of these on one of its lines. CBTC is per track, not per line,
+/// so a line can be CBTC in part, and a line sharing the track elsewhere isn't.
+/// Sources and what's uncertain:
+/// - Flushing (7), 34 St-Hudson Yards to Flushing-Main St: in full CBTC service since November 2018
+///   (<https://en.wikipedia.org/wiki/IRT_Flushing_Line>).
+/// - Canarsie (L), 8 Av to Canarsie-Rockaway Pkwy: the first CBTC line, in full service since 2009
+///   (<https://en.wikipedia.org/wiki/BMT_Canarsie_Line>).
+/// - Queens Boulevard west (E, F, M, R): phase one, "50th Street/8th Avenue and 47th-50th Streets-Rockefeller
+///   Center to Kew Gardens-Union Turnpike", its last section activated in February 2022
+///   (<https://en.wikipedia.org/wiki/IND_Queens_Boulevard_Line>; MTA, December 2021,
+///   <https://www.mta.info/press-release/mta-announces-extension-of-signal-modernization-queens-boulevard-line>).
+///   Uncertain: the 63 St line (21 St-Queensbridge, the F) isn't named in phase one, so it's left out;
+///   the eastern phase past Kew Gardens (contracts from December 2021) has no date in service found, so it's out.
+/// - Culver (F), Church Av to W 8 St-NY Aquarium: CBTC installed under a February 2019 contract,
+///   substantial completion expected August 2022 (<https://en.wikipedia.org/wiki/IND_Culver_Line>;
+///   <https://www.railwayage.com/?p=47501>). Uncertain: no source found confirms its date in service.
+///   The test installation on the express track from 4 Av to Church Av (2015) isn't counted, since the F runs local.
+const CBTC_TRACK: &[(&str, &[&str], &[&str])] = &[
+    ("Flushing", &["7"], &["7*"]),
+    ("Canarsie", &["L"], &["L*"]),
+    (
+        "Queens Boulevard",
+        &["E", "F", "M", "R"],
+        &[
+            "F06", "F07", "G08", "G09", "G10", "G11", "G12", "G13", "G14", "G15", "G16", "G18",
+            "G19", "G20", "G21", "F09", "F11", "F12", "D14", "A25", "D15",
+        ],
+    ),
+    (
+        "Culver",
+        &["F"],
+        &[
+            "F27", "F29", "F30", "F31", "F32", "F33", "F34", "F35", "F36", "F38", "F39", "D42",
+        ],
+    ),
+];
+
+/// Whether the stretch from parent stop `a` to the next stop `b` on `route` is CBTC track ([`CBTC_TRACK`]).
+/// A trailing `*` in a stop ID matches every stop starting with the rest.
+pub fn cbtc_stretch(route: &str, a: &str, b: &str) -> bool {
+    let has = |ids: &[&str], id: &str| {
+        ids.iter().any(|&p| match p.strip_suffix('*') {
+            Some(prefix) => id.starts_with(prefix),
+            None => p == id,
+        })
+    };
+    let line = line_of_route(route);
+    CBTC_TRACK
+        .iter()
+        .any(|(_, lines, ids)| lines.contains(&line.as_str()) && has(ids, a) && has(ids, b))
 }
 
 /// The IRT Capacity Study's event recorder runs (July 2020, Figures F.2-1 to F.2-28, the 1, 2, 4, 5 and 6 both
@@ -860,6 +924,50 @@ mod tests {
             .iter()
             .find(|s| s.name == name && s.lines.iter().any(|l| l == line))
             .unwrap()
+    }
+
+    #[test]
+    fn cbtc_is_per_track_not_per_line() {
+        assert!(cbtc_stretch("7", "725", "724"));
+        assert!(cbtc_stretch("7X", "702", "707"));
+        assert!(cbtc_stretch("L", "L01", "L02"));
+        // Queens Boulevard: CBTC from Kew Gardens west, not east of it yet.
+        assert!(cbtc_stretch("F", "G14", "G08"));
+        assert!(cbtc_stretch("E", "F06", "F07"));
+        assert!(!cbtc_stretch("F", "F06", "F05"));
+        assert!(!cbtc_stretch("E", "G06", "G07"));
+        // The same E off Queens Boulevard, on the 8 Av line: no CBTC.
+        assert!(!cbtc_stretch("E", "A25", "A27"));
+        // The F on Culver past Church Av, but not north of it.
+        assert!(cbtc_stretch("F", "F35", "F36"));
+        assert!(!cbtc_stretch("F", "F26", "F27"));
+        // Lines on other track through the same IDs: the G ends at Church Av, the N, Q aren't listed.
+        assert!(!cbtc_stretch("G", "F27", "F29"));
+        assert!(!cbtc_stretch("N", "G14", "G08"));
+    }
+
+    #[test]
+    fn stations_ahead_know_their_cbtc() {
+        let l = ["L".to_string()];
+        let ahead = stations_ahead_m(station("1 Av", "L"), Some(station("3 Av", "L")), &l).unwrap();
+        assert!(ahead.iter().all(|a| a.1), "{ahead:?}");
+        let f = ["F".to_string()];
+        // The F south from Fort Hamilton Pkwy: Church Av is still off CBTC, so nothing past it counts.
+        let ahead = stations_ahead_m(
+            station("Fort Hamilton Pkwy", "F"),
+            Some(station("15 St-Prospect Park", "F")),
+            &f,
+        )
+        .unwrap();
+        assert!(ahead.iter().all(|a| !a.1), "{ahead:?}");
+        // From Church Av on, all CBTC.
+        let ahead = stations_ahead_m(
+            station("Church Av", "F"),
+            Some(station("Fort Hamilton Pkwy", "F")),
+            &f,
+        )
+        .unwrap();
+        assert!(ahead.iter().all(|a| a.1), "{ahead:?}");
     }
 
     #[test]

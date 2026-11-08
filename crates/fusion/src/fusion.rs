@@ -2397,8 +2397,7 @@ impl Fusion {
             Some(ahead) => {
                 let recorded =
                     crate::track::recorded_peak_mph(station, prev, &lines).map(|mph| mph * 0.44704);
-                let line_max = crate::live_speed::line_max_mps(&lines);
-                self.estimator.start_leg(at, &ahead, recorded, line_max);
+                self.estimator.start_leg(at, &ahead, recorded);
                 self.leg_since_ns = Some(at);
                 self.leg_from = Some(station);
                 self.leg_radio = None;

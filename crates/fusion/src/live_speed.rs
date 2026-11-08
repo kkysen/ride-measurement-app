@@ -64,10 +64,9 @@ pub struct Estimate {
 #[derive(Clone, Debug)]
 struct Leg {
     since_ns: i64,
-    stations: VecDeque<(f64, f64)>,
+    /// Also whether the whole way to it is CBTC track ([`crate::track::cbtc_stretch`]).
+    stations: VecDeque<(f64, f64, bool)>,
     covered_m: f64,
-    /// The most a train can go on the leg's line (m/s), if lower than the subway's ([`CBTC_POWERED_MAX_MPS`]).
-    line_max_mps: Option<f64>,
     /// The last known place: when, and how far along the track from the departure (m).
     known: (i64, f64),
 }
@@ -166,26 +165,24 @@ pub const MAX_SPEED_MPS: f64 = 343.0;
 /// NYC subway trains cruise at 40 to 45 mph and may reach 50, where power cuts off; they never exceed 55 mph.
 /// Other rail (LIRR, Metro-North) is faster, so this is only for subway rides.
 pub const SUBWAY_MAX_SPEED_MPS: f64 = 55.0 * 0.44704;
-/// On CBTC lines, a train can't use its motors past 50 mph (the rider, 2026-11-08; PLAN.md item 18),
-/// and their tunnels have no long downgrade to coast faster on, so this caps the speed on their legs.
+/// On CBTC track, a train can't use its motors to speed up past 50 mph (the rider, 2026-11-08; PLAN.md item 18).
+/// It may still coast faster down a grade, so this bounds powered acceleration, not the speed:
+/// the reach from a stand ([`leg_cap_mps`]) and the ceiling's rise ([`LiveSpeedEstimator::limit_accel`]) stop here.
+/// CBTC is per track, not per line ([`crate::track::cbtc_stretch`]).
 pub const CBTC_POWERED_MAX_MPS: f64 = 50.0 * 0.44704;
-/// The most a train can go (m/s) `since_s` after a departure, on a leg whose next station allows at most `peak_mps`
-/// on a line allowing at most `line_max_mps` (see [`LiveSpeedEstimator::start_leg`]).
-fn leg_cap_mps(since_s: f64, peak_mps: f64, line_max_mps: Option<f64>) -> f64 {
-    subway_reach_by_time_mps(since_s)
-        .min(peak_mps)
-        .min(line_max_mps.unwrap_or(f64::INFINITY))
-        .max(LEG_CAP_FLOOR_MPS)
+/// The most a train can go (m/s) `since_s` after a departure, on a leg whose next station allows at most `peak_mps`,
+/// with the way there all CBTC track or not (see [`LiveSpeedEstimator::start_leg`]).
+/// From a stand, only the motors speed a train up, so on CBTC its reach stops at [`CBTC_POWERED_MAX_MPS`];
+/// with no grade term, coasting past it downhill isn't modeled.
+fn leg_cap_mps(since_s: f64, peak_mps: f64, cbtc: bool) -> f64 {
+    let reach = subway_reach_by_time_mps(since_s);
+    let reach = if cbtc {
+        reach.min(CBTC_POWERED_MAX_MPS)
+    } else {
+        reach
+    };
+    reach.min(peak_mps).max(LEG_CAP_FLOOR_MPS)
 }
-
-/// The most a train can go (m/s) on any of `lines`, if lower than the subway's: [`CBTC_POWERED_MAX_MPS`]
-/// when every line it could be is in [`CBTC_LINES`].
-pub fn line_max_mps(lines: &[String]) -> Option<f64> {
-    let cbtc = !lines.is_empty() && lines.iter().all(|l| CBTC_LINES.contains(&l.as_str()));
-    cbtc.then_some(CBTC_POWERED_MAX_MPS)
-}
-/// The lines run by CBTC end to end. Queens Boulevard and Culver are only in part, so they keep the usual cap.
-pub const CBTC_LINES: &[&str] = &["7", "L"];
 /// How fast a subway train can speed up and slow down (m/s^2) at a speed (m/s), as (motoring, braking).
 /// Motoring is the traction motors' three regions: constant force, then constant power (1/v),
 /// then their natural region (1/v^2). Fit by `data/work/track/fit_curves.py` to the 90th percentile per 2 mph
@@ -1181,20 +1178,19 @@ impl LiveSpeedEstimator {
     /// `recorded_mps` is the most a recorded train went to the next station
     /// ([`crate::track::recorded_peak_mph`]), if known: the cap to it is no higher, with [`RECORDED_MARGIN_MPS`]
     /// or [`RECORDED_MARGIN_SHARE`].
-    /// `line_max_mps` is the most a train can go on the line, if lower than the subway's (see [`CBTC_LINES`]).
+    /// With each station, whether the whole way to it is CBTC track ([`CBTC_POWERED_MAX_MPS`]).
     pub fn start_leg(
         &mut self,
         since_ns: i64,
-        stations_m: &[f64],
+        stations_m: &[(f64, bool)],
         recorded_mps: Option<f64>,
-        line_max_mps: Option<f64>,
     ) {
         self.leg = (!stations_m.is_empty()).then(|| Leg {
             since_ns,
             stations: stations_m
                 .iter()
                 .enumerate()
-                .map(|(i, &d)| {
+                .map(|(i, &(d, cbtc))| {
                     let peak = subway_peak_mps(d);
                     let peak = match recorded_mps {
                         Some(r) if i == 0 => {
@@ -1202,11 +1198,10 @@ impl LiveSpeedEstimator {
                         }
                         _ => peak,
                     };
-                    (crate::track::least_s(d), peak)
+                    (crate::track::least_s(d), peak, cbtc)
                 })
                 .collect(),
             covered_m: 0.0,
-            line_max_mps,
             known: (since_ns, 0.0),
         });
     }
@@ -1268,15 +1263,15 @@ impl LiveSpeedEstimator {
         while leg
             .stations
             .front()
-            .is_some_and(|&(least, _)| least < since_s)
+            .is_some_and(|&(least, _, _)| least < since_s)
         {
             leg.stations.pop_front();
         }
-        let Some(&(_, peak)) = leg.stations.front() else {
+        let Some(&(_, peak, cbtc)) = leg.stations.front() else {
             self.leg = None;
             return;
         };
-        let cap = leg_cap_mps(since_s, peak, leg.line_max_mps);
+        let cap = leg_cap_mps(since_s, peak, cbtc);
         if self.v.abs() > cap {
             let y = self.v.signum() * cap - self.v;
             if self.p00 > 0.0 {
@@ -1302,6 +1297,17 @@ impl LiveSpeedEstimator {
             return;
         };
         let (motoring, braking) = subway_accel_limits(*c);
+        // On CBTC track, the motors stop at 50 mph: the ceiling rises no further, but isn't pulled down to it.
+        let cbtc = self
+            .leg
+            .as_ref()
+            .and_then(|l| l.stations.front())
+            .is_some_and(|s| s.2);
+        let motoring = if cbtc && *c >= CBTC_POWERED_MAX_MPS {
+            0.0
+        } else {
+            motoring
+        };
         *c += if self.backward { braking } else { motoring } * dt;
         let bounded = self.v.abs().min(*c + ACCEL_LIMIT_SLACK_MPS);
         if bounded != self.v.abs() {
@@ -1567,21 +1573,40 @@ mod tests {
     }
 
     #[test]
-    fn cbtc_lines_cap_a_leg_at_50_mph() {
-        let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(line_max_mps(&lines(&["7"])), Some(CBTC_POWERED_MAX_MPS));
-        assert_eq!(line_max_mps(&lines(&["L"])), Some(CBTC_POWERED_MAX_MPS));
-        // Unknown, or possibly a line without CBTC: the usual cap.
-        assert_eq!(line_max_mps(&[]), None);
-        assert_eq!(line_max_mps(&lines(&["7", "N"])), None);
+    fn cbtc_track_stops_powered_reach_at_50_mph() {
         let peak = subway_peak_mps(2200.0);
-        let cbtc = leg_cap_mps(120.0, peak, Some(CBTC_POWERED_MAX_MPS));
+        let cbtc = leg_cap_mps(120.0, peak, true);
         assert!((cbtc / 0.44704 - 50.0).abs() < 1e-9, "{cbtc}");
-        assert!(leg_cap_mps(120.0, peak, None) / 0.44704 > 50.0);
+        assert!(leg_cap_mps(120.0, peak, false) / 0.44704 > 50.0);
         // Early on, the motoring curve is still the lower.
-        assert_eq!(
-            leg_cap_mps(5.0, peak, Some(CBTC_POWERED_MAX_MPS)),
-            leg_cap_mps(5.0, peak, None)
+        assert_eq!(leg_cap_mps(5.0, peak, true), leg_cap_mps(5.0, peak, false));
+    }
+
+    #[test]
+    fn cbtc_ceiling_stops_rising_but_is_not_pulled_down() {
+        let mut e = LiveSpeedEstimator::new();
+        e.max_speed_mps = Some(SUBWAY_MAX_SPEED_MPS);
+        e.start_leg(0, &[(3000.0, true)], None);
+        let below = CBTC_POWERED_MAX_MPS - 1.0;
+        e.ceiling_mps = Some(below);
+        for _ in 0..1000 {
+            e.limit_accel(0, 0.01);
+        }
+        let c = e.ceiling_mps.unwrap();
+        assert!(
+            (CBTC_POWERED_MAX_MPS..CBTC_POWERED_MAX_MPS + 0.1).contains(&c),
+            "{c}"
         );
+        // Coasting faster (known from GNSS) keeps its ceiling: it's not a speed cap.
+        e.ceiling_mps = Some(26.0);
+        e.limit_accel(0, 0.01);
+        assert_eq!(e.ceiling_mps, Some(26.0));
+        // Off CBTC track the motors keep going.
+        e.start_leg(0, &[(3000.0, false)], None);
+        e.ceiling_mps = Some(below);
+        for _ in 0..1000 {
+            e.limit_accel(0, 0.01);
+        }
+        assert!(e.ceiling_mps.unwrap() > CBTC_POWERED_MAX_MPS + 0.5);
     }
 }
