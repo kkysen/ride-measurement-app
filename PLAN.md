@@ -1008,7 +1008,13 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     The cap: on Thu Nov 5 the bias reaches -1 to -2 m/s^2 underground (a gravity tilt leak, not the accelerometer)
     and pins the speed at 55 mph through braking into 50 St and 14 St.
     Keeping the caps from moving the bias: 79 to 73; resetting the bias at each stillness without GNSS: 79 to 75.
-    Open: where the bias of -2 m/s^2 comes from (the gravity's 600 s time constant underground?), and item 27's holds.
+    Not a gravity tilt leak (checked 2026-11-08, stash "item19: gravity tilt leak probe"):
+    at each stop 2 s still, the accelerometer's mean against gravity as carried into the stop, along the axis.
+    On Thu Nov 5, 10:06 pm, at the three underground stops 24 to 36 min from GNSS,
+    the live gravity leaked -0.09, -0.10 and -0.34 m/s^2 while the bias read -1.59, -0.67 and -0.29;
+    gravity carried by the gyro alone since the last stop leaked -1.49, -3.96 and -0.36 (the gyro's drift),
+    so the 600 s time constant helps and dropping it would make it worse.
+    Open: where the bias of -1 to -2 m/s^2 comes from (the filter's own bias updates, not tilt), and item 27's holds.
 20. Done, unchecked on the phone (`34cfce3`, `6b7d63f`, `10fdd80`, `00681c8`): the live map underground, noted on
     four rides, the latest Sat Nov 7, 5:59 pm. `Fusion::recent_track_path`, drawn under the GPS path:
     each leg between stations once the train stops at its far station (placed as a past ride's by `track::Along`);
