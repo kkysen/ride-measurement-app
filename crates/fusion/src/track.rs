@@ -4,6 +4,7 @@
 //! Each sample between two stops is placed along the track by the share of the distance its speeds cover,
 //! so the speeds still set when the train was where.
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::fusion::{SmoothedSpeed, StopRecord};
@@ -369,6 +370,58 @@ pub fn stations_ahead_m(from: &Station, prev: Option<&Station>, lines: &[String]
             None => d,
             Some(o) => o.iter().zip(&d).map(|(a, b)| a.max(*b)).collect(),
         });
+    }
+    out
+}
+
+/// The IRT Capacity Study's event recorder runs (July 2020, Figures F.2-1 to F.2-28, the 1, 2, 4, 5 and 6 both
+/// ways; the 3's two charts aren't read yet): the highest speed (mph) any recorded train reached on each stretch
+/// between consecutive stops, by route and the stretch's parent stop IDs. Read off the charts by
+/// `python/experiments/irt_peaks.py` (to within about 0.3 mph), the stations placed by the GTFS shapes' distances.
+const IRT_RECORDED_PEAKS: &str = include_str!("../data/irt_recorded_peaks.csv");
+
+fn irt_recorded_peaks() -> &'static HashMap<(String, String, String), f64> {
+    static PEAKS: OnceLock<HashMap<(String, String, String), f64>> = OnceLock::new();
+    PEAKS.get_or_init(|| {
+        IRT_RECORDED_PEAKS
+            .lines()
+            .skip(1)
+            .filter_map(|l| {
+                let mut f = l.split(',');
+                let key = (f.next()?.to_string(), f.next()?.to_string(), f.next()?.to_string());
+                Some((key, f.next()?.parse().ok()?))
+            })
+            .collect()
+    })
+}
+
+/// The most any recorded train went (mph) leaving `from` (away from `prev`) to the next stop, on every shape of
+/// one of `lines` (any, if none) that could be the train's: the highest of them, so it holds on any.
+/// None if any of them has no record (outside the IRT, or a stretch the study didn't chart).
+pub fn recorded_peak_mph(from: &Station, prev: Option<&Station>, lines: &[String]) -> Option<f64> {
+    let ids_from = stop_ids(from);
+    let ids_prev = prev.map(stop_ids)?;
+    let mut out: Option<f64> = None;
+    for shape in shapes() {
+        if !lines.is_empty() && !lines.contains(&line_of_route(&shape.route)) {
+            continue;
+        }
+        let find = |ids: &[&str]| {
+            shape
+                .stops
+                .iter()
+                .position(|(id, _)| ids.contains(&id.as_str()))
+        };
+        let (Some(k), Some(p)) = (find(&ids_from), find(&ids_prev)) else {
+            continue;
+        };
+        let j = if p < k { k.checked_add(1) } else { k.checked_sub(1) };
+        let Some((next, _)) = j.and_then(|j| shape.stops.get(j)) else {
+            continue;
+        };
+        let key = (line_of_route(&shape.route), shape.stops[k].0.clone(), next.clone());
+        let peak = *irt_recorded_peaks().get(&key)?;
+        out = Some(out.map_or(peak, |o| o.max(peak)));
     }
     out
 }
@@ -791,6 +844,17 @@ mod tests {
             .iter()
             .find(|s| s.name == name && s.lines.iter().any(|l| l == line))
             .unwrap()
+    }
+
+    #[test]
+    fn recorded_peaks_by_stretch() {
+        let lines = ["1".to_string()];
+        // The 1 northbound, Chambers St to Franklin St: 32.6 mph on the study's Figure F.2-1.
+        let mph = recorded_peak_mph(station("Chambers St", "1"), Some(station("WTC Cortlandt", "1")), &lines);
+        assert!(mph.is_some_and(|m| (32.0..33.5).contains(&m)), "{mph:?}");
+        // Off the IRT, nothing recorded.
+        let l = ["L".to_string()];
+        assert_eq!(recorded_peak_mph(station("Lorimer St", "L"), Some(station("Graham Av", "L")), &l), None);
     }
 
     #[test]

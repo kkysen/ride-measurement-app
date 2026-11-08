@@ -255,6 +255,9 @@ const LEG_CAP_FLOOR_MPS: f64 = 2.0;
 /// An anchor ([`LiveSpeedEstimator::anchor`]) this soon after the last known place (s) says too little,
 /// and the bias moves by at most this (m/s^2) for one.
 const ANCHOR_MIN_S: f64 = 15.0;
+/// Over a recorded peak ([`LiveSpeedEstimator::start_leg`]), the cap allows this (m/s, 3 mph): the study's own
+/// speedometer error (2 mph) and overspeed allowance (1.5 mph), and trains a little faster than those recorded.
+const RECORDED_MARGIN_MPS: f64 = 3.0 * 0.44704;
 const ANCHOR_MAX_DB_MPS2: f64 = 0.3;
 
 /// The slack (m/s) over [`subway_accel_limits`]'s ceiling, for the phone's noise.
@@ -1145,12 +1148,22 @@ impl LiveSpeedEstimator {
     /// A train left a station underground at `since_ns`, the next stations its line stops at `stations_m` along
     /// the track ([`crate::track::stations_ahead_m`]): until [`Self::end_leg`], the speed is capped as on
     /// [`Self::limit_on_leg`].
-    pub fn start_leg(&mut self, since_ns: i64, stations_m: &[f64]) {
+    /// `recorded_mps` is the most a recorded train went to the next station
+    /// ([`crate::track::recorded_peak_mph`]), if known: the cap to it is no higher, with [`RECORDED_MARGIN_MPS`].
+    pub fn start_leg(&mut self, since_ns: i64, stations_m: &[f64], recorded_mps: Option<f64>) {
         self.leg = (!stations_m.is_empty()).then(|| Leg {
             since_ns,
             stations: stations_m
                 .iter()
-                .map(|&d| (crate::track::least_s(d), subway_peak_mps(d)))
+                .enumerate()
+                .map(|(i, &d)| {
+                    let peak = subway_peak_mps(d);
+                    let peak = match recorded_mps {
+                        Some(r) if i == 0 => peak.min(r + RECORDED_MARGIN_MPS),
+                        _ => peak,
+                    };
+                    (crate::track::least_s(d), peak)
+                })
                 .collect(),
             covered_m: 0.0,
             known: (since_ns, 0.0),

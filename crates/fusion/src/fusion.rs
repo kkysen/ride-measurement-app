@@ -2325,9 +2325,11 @@ impl Fusion {
             .rev()
             .filter_map(|x| x.1)
             .find(|s| !stations::same_complex(station, s));
-        match crate::track::stations_ahead_m(station, prev, &self.riding_lines(at)) {
+        let lines = self.riding_lines(at);
+        match crate::track::stations_ahead_m(station, prev, &lines) {
             Some(ahead) => {
-                self.estimator.start_leg(at, &ahead);
+                let recorded = crate::track::recorded_peak_mph(station, prev, &lines).map(|mph| mph * 0.44704);
+                self.estimator.start_leg(at, &ahead, recorded);
                 self.leg_since_ns = Some(at);
                 self.leg_from = Some(station);
                 self.leg_radio = None;
