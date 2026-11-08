@@ -974,6 +974,14 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Also from notes: "55 mph ± 28 mph is meaningless since it's supposed to be a cap",
     braking at 55 mph doesn't bring the speed down (Tue Oct 27, 10:04 pm),
     and the speed jumps from 0 to 55 mph right after leaving a station (Sun Nov 1, 1:50 am; Tue Oct 27, 10:04 pm).
+    Done in part (2026-11-08, `bd29c7b`), not on the phone: a leg underground whose riding lines are all CBTC
+    end to end (the 7, the L: `live_speed::CBTC_LINES`) is capped at 50 mph, not 55.
+    Fast sweep (203 legs, `no_live_smoothing`): 5 legs changed, 4 on Fri Oct 23, 7:36 pm (the L),
+    one 1.22 to 1.05 (peak 55 to 50 mph); counts unchanged (30 under 0.5, 91 within 0.7 to 1.3, median 0.95, 47 over 1.3).
+    Open: off a leg (no station known, or no track ahead), the cap and the acceleration ceiling are still 55 mph;
+    Queens Boulevard (E, F, M, R) and Culver (F) are CBTC only in part, so they keep 55 until it's per segment;
+    no grade term yet, so the 60 St tunnel's 60 to 62 mph coasting is still cut at 55 without GNSS;
+    the 0 to 55 jump after a station and braking at 55 are untouched.
 19. Braking into a station often shows as accelerating (Thu Oct 29, 1:23 am).
 20. Done, unchecked on the phone (`34cfce3`, `6b7d63f`, `10fdd80`, `00681c8`): the live map underground, noted on
     four rides, the latest Sat Nov 7, 5:59 pm. `Fusion::recent_track_path`, drawn under the GPS path:
