@@ -50,20 +50,22 @@ import uniffi.ride_ffi.speedScaleForTopSpeed
 import uniffi.ride_ffi.speedScaleName
 
 /**
- * The live map: the current recording's GPS path colored by speed or acceleration, following the newest fix.
+ * The live map: the current recording's GPS path colored by speed or acceleration, following the newest fix,
+ * and underground, each leg between stations along the subway track once the train reaches its far station.
  * Dragging the map stops following; "Follow" resumes it. Tapping the path shows the speed and acceleration there.
  */
 @Composable
 fun LiveMapScreen(onBack: () -> Unit) {
     val points by LiveTrack.points.collectAsStateWithLifecycle()
-    TrackMapScreen(points, live = true, onBack)
+    val underground by LiveTrack.underground.collectAsStateWithLifecycle()
+    TrackMapScreen(points, live = true, onBack, underground = underground)
 }
 
 /**
  * A GPS path colored by speed or acceleration: the current recording's ([live], following the newest fix),
  * or a past ride's, shown whole.
  * A past ride's [points] are its fused path (joined to the subway track underground), and [gpsFixes] the GPS fixes
- * themselves, drawn as a thin dark line over it.
+ * themselves, drawn as a thin dark line over it. The live map's [underground] legs are drawn under its GPS path.
  */
 @Composable
 fun TrackMapScreen(
@@ -72,6 +74,7 @@ fun TrackMapScreen(
     onBack: () -> Unit,
     extraButton: @Composable () -> Unit = {},
     gpsFixes: List<LiveTrack.Point> = emptyList(),
+    underground: List<LiveTrack.Point> = emptyList(),
 ) {
     var follow by remember { mutableStateOf(live) }
     var selected by remember { mutableStateOf<LiveTrack.Point?>(null) }
@@ -122,12 +125,13 @@ fun TrackMapScreen(
         // The map view draws past its own bounds (over the text above, and flickering below while tiles load).
         Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
             val track = remember { TrackOverlays() }
+            val undergroundTrack = remember { TrackOverlays() }
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { context ->
                     // A map failure shows as text here; it can't affect recording.
                     try {
-                        newMapView(context, track, onDrag = { follow = false }, onTap = { selected = it })
+                        newMapView(context, track, undergroundTrack, onDrag = { follow = false }, onTap = { selected = it })
                             .apply {
                                 clipToOutline = true
                                 // A past ride doesn't move: show all of it.
@@ -145,6 +149,7 @@ fun TrackMapScreen(
                     if (view !is MapView) return@AndroidView
                     try {
                         track.sync(points, scale.scale, colorByAccel)
+                        undergroundTrack.sync(underground, scale.scale, colorByAccel)
                         track.syncGps(gpsFixes)
                         val last = points.lastOrNull()
                         // Pans only once the newest fix nears the edge, so the map isn't always moving and
@@ -186,6 +191,7 @@ private fun describe(p: LiveTrack.Point?, latest: Boolean, live: Boolean): Strin
 private fun newMapView(
     context: Context,
     track: TrackOverlays,
+    underground: TrackOverlays,
     onDrag: () -> Unit,
     onTap: (LiveTrack.Point?) -> Unit,
 ): MapView {
@@ -212,13 +218,17 @@ private fun newMapView(
     map.overlays.add(
         MapEventsOverlay(object : MapEventsReceiver {
             override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
-                onTap(track.nearest(map, p))
+                onTap(track.nearest(map, p) ?: underground.nearest(map, p))
                 return true
             }
 
             override fun longPressHelper(p: GeoPoint) = false
         }),
     )
+    // Underground first, so the GPS path (and its dashed gaps) draws over it.
+    map.overlays.add(underground.gaps)
+    map.overlays.add(underground.casings)
+    map.overlays.add(underground.colored)
     map.overlays.add(track.gaps)
     map.overlays.add(track.casings)
     map.overlays.add(track.colored)

@@ -3,7 +3,9 @@ package dev.khyber.ride
 import android.location.Location
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import android.os.SystemClock
 import uniffi.ride_ffi.SmoothedSpeed
+import uniffi.ride_ffi.TrackPath
 import uniffi.ride_ffi.trackMaxGapNs
 
 /**
@@ -43,8 +45,42 @@ object LiveTrack {
     private val _points = MutableStateFlow<List<Point>>(emptyList())
     val points: StateFlow<List<Point>> = _points
 
+    /**
+     * The path underground: each leg between stations placed along the subway track, from Rust
+     * (`Fusion::recent_track_path`, as a past ride's map joins it); each leg's first point starts a segment.
+     */
+    private val _underground = MutableStateFlow<List<Point>>(emptyList())
+    val underground: StateFlow<List<Point>> = _underground
+    /** Each leg's start, and its points. */
+    private var legs = emptyList<Pair<Long, List<Point>>>()
+
+    @Synchronized
     fun reset() {
         _points.value = emptyList()
+        legs = emptyList()
+        _underground.value = emptyList()
+    }
+
+    /** Keeps the legs from before the smoothing window, which never change again, and replaces the rest. */
+    @Synchronized
+    fun applyTrackPath(path: TrackPath) {
+        // The wall clock, for the map's times: fusion's are on the `elapsedRealtimeNanos` clock.
+        val offsetMs = System.currentTimeMillis() - SystemClock.elapsedRealtimeNanos() / 1_000_000
+        val kept = legs.filter { it.first < path.from }
+        val fresh = path.legs.map { leg ->
+            leg.fromNs to leg.points.mapIndexed { i, p ->
+                Point(
+                    p.elapsedRealtimeNs, offsetMs + p.elapsedRealtimeNs / 1_000_000, p.lat, p.lon,
+                    fusedSpeedMps = null, gpsSpeedMps = null, gpsSpeedAccuracyMps = null, accuracyM = null,
+                    startsSegment = i == 0, smoothedSpeedMps = p.speedMps, smoothedAccelMps2 = p.accelMps2,
+                )
+            }
+        }
+        val old = legs.drop(kept.size)
+        // The same legs again (their points are recomputed but often equal): nothing to redraw.
+        if (fresh.map { it.first } == old.map { it.first } && fresh.zip(old).all { (a, b) -> a.second == b.second }) return
+        legs = kept + fresh
+        _underground.value = legs.flatMap { it.second }
     }
 
     /** Called from the GPS listener; never throws, so the map can't break recording. */
