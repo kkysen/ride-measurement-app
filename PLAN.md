@@ -1072,6 +1072,17 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     none at 103 St; 18 St from 1:25:38 am instead of 1:26:08 am.
     Left: the station itself can be wrong, from the cell at speed (103 St on the 3; the rider was on the 3,
     and once the 1 is matched there); a route stale from before a walk (the 6) still needs the station to show.
+    Stale line, done in part (2026-11-08), not on the phone: the 7 on Tue Nov 3 was matched at Queensboro Plaza,
+    named at its 7 platform (the MTA lists the 7 and N/W ones at one spot), with the W's stops no longer in the feeds.
+    Platforms at one spot count as one, and only a line serving every stop's complex matches (`83660f7`);
+    the riding lines narrow by complex, so that stop doesn't start them over as the 7 (`018956c`).
+    Replayed (`skip_still`): the W at Queensboro Plaza, then no route to Times Sq instead of the 7;
+    the N, not the 7, there on Sat Nov 7, 5:59 pm; no 6 at 125 St on the bus on Sat Nov 7, 2:29 pm;
+    Sat Oct 31, 4:58 pm names the C for the A from 125 St (R211 cars either way);
+    Thu Oct 29 (1:23 am, 4:29 pm, 11:07 pm) and Fri Oct 23, 7:36 pm unchanged.
+    Tried and dropped: no route after walking since its newest stop (2 step windows, as `walked`):
+    steps in the car dropped the right 3 for minutes on Thu Oct 29, 11:07 pm.
+    Still left: the 3 kept after the walk across 96 St to the 1 (Thu Oct 29, 11:19 pm) until 103 St is named.
     `just test-rust` fails on the untracked `crates/cli/examples/entrance_export.rs` (no `no_live_smoothing`).
 22. Missed transfers and switches: 3 to 1 (Thu Oct 29, 4:29 pm); "switched to Q" (Tue Nov 3, 6:01 pm; Sat Nov 7, 5:59 pm).
     Looked into (2026-11-08, `skip_still`), nothing fixed: all three are changes across the platform
