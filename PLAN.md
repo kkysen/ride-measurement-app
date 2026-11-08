@@ -1104,6 +1104,16 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     steps in the car dropped the right 3 for minutes on Thu Oct 29, 11:07 pm.
     Still left: the 3 kept after the walk across 96 St to the 1 (Thu Oct 29, 11:19 pm) until 103 St is named.
     `just test-rust` fails on the untracked `crates/cli/examples/entrance_export.rs` (no `no_live_smoothing`).
+    A or C on Sat Oct 31, 4:58 pm, done (2026-11-08, `41c2dd4`), not on the phone: the A, from the recorded GTFS-RT.
+    That weekend the A ran local below 59 St (track A2), then express from 59 St to 125 St (A4),
+    and the C ran only from 59 St north.
+    The A's trip `097250_A..N` lists 42 St-Port Authority, 50 St, 59 St, 125 St and 145 St
+    within a minute or two of the rider's stops (left 42 St 5:12:28 pm, 125 St at 5:24:28 pm);
+    the C left 59 St at 5:12:52 pm, before the rider got there.
+    The status dropped the A because the MTA lists 50 St for the C and E only, and the E stopping there won ("says E at 59th").
+    A trip the feeds list at a stop's own platform now counts as serving it.
+    Replayed (`skip_still`): the A from 50 St on, through 59 St and 125 St to 168 St, but for one C at 125 St (5:25:59 pm);
+    no change on Thu Oct 29, 4:29 pm, Tue Nov 3, 6:01 pm, or Sat Nov 7 (2:29 pm, 5:59 pm).
 22. Missed transfers and switches: 3 to 1 (Thu Oct 29, 4:29 pm); "switched to Q" (Tue Nov 3, 6:01 pm; Sat Nov 7, 5:59 pm).
     Looked into (2026-11-08, `skip_still`), nothing fixed: all three are changes across the platform
     with almost no steps (7 s, 17 s; at 96 St the rider stood 1:42), so no walk off is found
