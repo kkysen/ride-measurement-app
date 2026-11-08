@@ -32,7 +32,8 @@ pub enum Sensor {
     SpeedLimit,
     /// The car's own accelerometer, from its beacon (see [`crate::car_beacons`]): the phone's bias along the axis.
     Car,
-    /// A known place on a leg underground: standing at a station (see [`LiveSpeedEstimator::anchor`]).
+    /// A known place on a leg underground: standing at a station, or passing one the radio names
+    /// (see [`LiveSpeedEstimator::anchor`]).
     Anchor,
 }
 
@@ -181,12 +182,12 @@ pub fn subway_accel_limits(speed_mps: f64) -> (f64, f64) {
 }
 /// A train speeding up from a stand as fast as [`subway_accel_limits`] allows (at most [`SUBWAY_MAX_SPEED_MPS`]):
 /// its speed every [`REACH_STEP_M`] along, and every [`REACH_STEP_S`] since it started.
-fn reach_tables() -> &'static (Vec<f64>, Vec<f64>) {
-    static TABLES: OnceLock<(Vec<f64>, Vec<f64>)> = OnceLock::new();
+fn reach_tables() -> &'static (Vec<f64>, Vec<f64>, Vec<f64>) {
+    static TABLES: OnceLock<(Vec<f64>, Vec<f64>, Vec<f64>)> = OnceLock::new();
     TABLES.get_or_init(|| {
         let dt = 0.01;
         let (mut v, mut x, mut t) = (0.0_f64, 0.0_f64, 0.0_f64);
-        let (mut by_m, mut by_s) = (vec![0.0], vec![0.0]);
+        let (mut by_m, mut by_s, mut m_by_s) = (vec![0.0], vec![0.0], vec![0.0]);
         while v < SUBWAY_MAX_SPEED_MPS || by_m.len() < 2 {
             let a = subway_accel_limits(v).0;
             x += (v + 0.5 * a * dt) * dt;
@@ -197,9 +198,10 @@ fn reach_tables() -> &'static (Vec<f64>, Vec<f64>) {
             }
             while t >= by_s.len() as f64 * REACH_STEP_S {
                 by_s.push(v);
+                m_by_s.push(x);
             }
         }
-        (by_m, by_s)
+        (by_m, by_s, m_by_s)
     })
 }
 
@@ -219,6 +221,19 @@ pub fn subway_reach_mps(distance_m: f64) -> f64 {
 /// The fastest a train can be going (m/s) `seconds` after starting from a stand (see [`reach_tables`]).
 pub fn subway_reach_by_time_mps(seconds: f64) -> f64 {
     lookup(&reach_tables().1, seconds / REACH_STEP_S)
+}
+
+/// The farthest a train can be (m) `seconds` after starting from a stand (see [`reach_tables`]),
+/// going on at [`SUBWAY_MAX_SPEED_MPS`] once it reaches it.
+pub fn subway_reach_by_time_m(seconds: f64) -> f64 {
+    let table = &reach_tables().2;
+    let x = seconds.max(0.0) / REACH_STEP_S;
+    let last = (table.len() - 1) as f64;
+    if x <= last {
+        lookup(table, x)
+    } else {
+        table[table.len() - 1] + (x - last) * REACH_STEP_S * SUBWAY_MAX_SPEED_MPS
+    }
 }
 
 /// The fastest a train goes (m/s) between two stops `length_m` apart along the track: where speeding up as fast
@@ -1143,7 +1158,7 @@ impl LiveSpeedEstimator {
     }
 
     /// On a leg, the train is known to be `along_m` along the track from the departure at `t_ns`
-    /// (standing at a station), with `weight` (0 to 1) for how sure that is.
+    /// (standing at a station, or passing one the radio names), with `weight` (0 to 1) for how sure that is.
     /// Since the last known place, where the speed was right (0 at the departure), a steady bias error grows the
     /// speed error as `db t` and the distance's as `db t^2 / 2`: so the estimate's distance over the known one
     /// gives the bias, corrected by half of it times `weight` (at most [`ANCHOR_MAX_DB_MPS2`]), and the speed by

@@ -115,6 +115,8 @@ const BOARDING_STOP_S: f64 = 30.0;
 const LINE_RESET_WINDOWS: usize = 2;
 /// A GNSS speed over this after a likely stop means the train is moving after all.
 const LIKELY_STOP_GNSS_MPS: f64 = 1.0;
+/// How much a station the radio names on a leg counts as a known place (see [`Fusion::anchor_by_radio`]).
+const RADIO_ANCHOR_WEIGHT: f64 = 0.5;
 /// By when (s after the lurch) the stop detector has decided on it: [`train_stops::SEP_S`] and the 10 s it waits more.
 const LIKELY_DECIDED_BY_S: f64 = train_stops::SEP_S + 12.0;
 /// A "stop" whose braking began within [`FADE_AFTER_CLOSE_S`] after a door closing, and lasted at least
@@ -713,9 +715,10 @@ pub struct Fusion {
     /// Weaker starts ([`train_stops::Event::Started`]), only for ending a likely stop.
     starts: Vec<i64>,
     /// The departure the speed's leg cap counts from (see [`LiveSpeedEstimator::start_leg`]), if on one,
-    /// and the station it left.
+    /// the station it left, and the last station the radio named on the way (see [`Fusion::anchor_by_radio`]).
     leg_since_ns: Option<i64>,
     leg_from: Option<&'static Station>,
+    leg_radio: Option<&'static Station>,
     /// The timeline's segments kept, and the walks so far (see [`Fusion::timeline`]).
     timeline_kept: std::cell::RefCell<TimelineKept>,
     walks: std::cell::RefCell<Walks>,
@@ -832,6 +835,7 @@ impl Fusion {
             starts: Vec::new(),
             leg_since_ns: None,
             leg_from: None,
+            leg_radio: None,
             settled_records: Default::default(),
             tracks: Default::default(),
             fix_tracks: Default::default(),
@@ -1860,6 +1864,7 @@ impl Fusion {
                 self.cells.push((t_ns, c));
             }
             self.note_station(t_ns);
+            self.anchor_by_radio(t_ns);
             return;
         }
         if let Pending::NetworkFix(lat, lon, accuracy) = input {
@@ -1867,6 +1872,7 @@ impl Fusion {
                 .filter(|&(_, d)| accuracy <= NETWORK_FIX_M && d <= NETWORK_STATION_M.max(accuracy))
                 .map(|(s, _)| (t_ns, s));
             self.note_station(t_ns);
+            self.anchor_by_radio(t_ns);
             return;
         }
         if let Pending::Car(r) = input {
@@ -2324,6 +2330,7 @@ impl Fusion {
                 self.estimator.start_leg(at, &ahead);
                 self.leg_since_ns = Some(at);
                 self.leg_from = Some(station);
+                self.leg_radio = None;
             }
             None => self.end_leg(),
         }
@@ -2333,6 +2340,7 @@ impl Fusion {
         self.estimator.end_leg();
         self.leg_since_ns = None;
         self.leg_from = None;
+        self.leg_radio = None;
     }
 
     /// The train stands at `stop` on a leg: if a station other than the departure's is named, it stands that
@@ -2345,6 +2353,30 @@ impl Fusion {
             self.estimator.anchor(stop.t_ns, track.length_m(), 1.0);
         }
         self.end_leg();
+    }
+
+    /// On a leg, the radio names a station on the way (a tagged cell, or a network fix at one): the train is
+    /// passing it, so that station's track from the departure's is a known place, at half weight for the radio's
+    /// lag (cells and network fixes come late or early by up to a station's length). Only once per station, and
+    /// only one a train could have reached by now ([`subway_reach_by_time_m`]).
+    fn anchor_by_radio(&mut self, t_ns: i64) {
+        let (Some(from), Some(since)) = (self.leg_from, self.leg_since_ns) else {
+            return;
+        };
+        let Some(at) = self.station_now(t_ns) else {
+            return;
+        };
+        if stations::same_complex(from, at) || self.leg_radio.is_some_and(|r| stations::same_complex(r, at)) {
+            return;
+        }
+        self.leg_radio = Some(at);
+        let Some(track) = crate::track::between(from, at) else {
+            return;
+        };
+        let since_s = (t_ns - since) as f64 * 1e-9;
+        if track.length_m() <= crate::live_speed::subway_reach_by_time_m(since_s) {
+            self.estimator.anchor(t_ns, track.length_m(), RADIO_ANCHOR_WEIGHT);
+        }
     }
 
     /// The train's stopping lurch, found at `t_ns` ([`train_stops::SEP_S`] and a bit after it): in the subway,
