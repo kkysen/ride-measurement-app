@@ -255,9 +255,11 @@ const LEG_CAP_FLOOR_MPS: f64 = 2.0;
 /// An anchor ([`LiveSpeedEstimator::anchor`]) this soon after the last known place (s) says too little,
 /// and the bias moves by at most this (m/s^2) for one.
 const ANCHOR_MIN_S: f64 = 15.0;
-/// Over a recorded peak ([`LiveSpeedEstimator::start_leg`]), the cap allows this (m/s, 3 mph): the study's own
-/// speedometer error (2 mph) and overspeed allowance (1.5 mph), and trains a little faster than those recorded.
-const RECORDED_MARGIN_MPS: f64 = 3.0 * 0.44704;
+/// Over a recorded peak ([`LiveSpeedEstimator::start_leg`]), the cap allows the more of this (m/s, 5 mph) and
+/// [`RECORDED_MARGIN_SHARE`] of it: the study's own speedometer error (2 mph) and overspeed allowance (1.5 mph),
+/// and speed limits changed since its 2018 runs (some raised), somewhat but not massively.
+const RECORDED_MARGIN_MPS: f64 = 5.0 * 0.44704;
+const RECORDED_MARGIN_SHARE: f64 = 0.15;
 const ANCHOR_MAX_DB_MPS2: f64 = 0.3;
 
 /// The slack (m/s) over [`subway_accel_limits`]'s ceiling, for the phone's noise.
@@ -1156,7 +1158,8 @@ impl LiveSpeedEstimator {
     /// the track ([`crate::track::stations_ahead_m`]): until [`Self::end_leg`], the speed is capped as on
     /// [`Self::limit_on_leg`].
     /// `recorded_mps` is the most a recorded train went to the next station
-    /// ([`crate::track::recorded_peak_mph`]), if known: the cap to it is no higher, with [`RECORDED_MARGIN_MPS`].
+    /// ([`crate::track::recorded_peak_mph`]), if known: the cap to it is no higher, with [`RECORDED_MARGIN_MPS`]
+    /// or [`RECORDED_MARGIN_SHARE`].
     pub fn start_leg(&mut self, since_ns: i64, stations_m: &[f64], recorded_mps: Option<f64>) {
         self.leg = (!stations_m.is_empty()).then(|| Leg {
             since_ns,
@@ -1166,7 +1169,7 @@ impl LiveSpeedEstimator {
                 .map(|(i, &d)| {
                     let peak = subway_peak_mps(d);
                     let peak = match recorded_mps {
-                        Some(r) if i == 0 => peak.min(r + RECORDED_MARGIN_MPS),
+                        Some(r) if i == 0 => peak.min(r + RECORDED_MARGIN_MPS.max(r * RECORDED_MARGIN_SHARE)),
                         _ => peak,
                     };
                     (crate::track::least_s(d), peak)
