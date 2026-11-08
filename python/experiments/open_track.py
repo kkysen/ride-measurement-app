@@ -2,10 +2,14 @@
 from the MTA's GTFS (`data/mta/gtfs`, stop orders and shapes) and station list (`data/mta/stations.csv`, from
 data.ny.gov, with each station's structure). A stretch of a route's shape counts when the stations at both ends
 are above ground (elevated, viaduct, embankment, at grade, or open cut); underground track runs under streets,
-where a car or bus would look like a train. Points every 10 m, deduplicated to 5 m, written as little-endian
+where a car or bus would look like a train. Also every OpenStreetMap subway way not tagged as a tunnel
+(`OSM`, from Overpass: `way["railway"="subway"]` over the city with `out tags geom`, 2026-11-08), for bridges and
+viaducts between underground stations (the Manhattan and Williamsburg Bridges, the 1's 125 St viaduct),
+which the station rule misses; those ways are off the streets, so they don't take in buses. Points every 10 m, deduplicated to 5 m, written as little-endian
 i32 pairs (latitude, longitude, in 1e-5 degrees) to `crates/fusion/data/open_track.bin`."""
 
 import csv
+import json
 import math
 import struct
 from collections import defaultdict
@@ -13,6 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GTFS = ROOT / "data/mta/gtfs"
+OSM = ROOT / "data/downloads/osm-subway-20261108c/subway_ways.json"
 OUT = ROOT / "crates/fusion/data/open_track.bin"
 STEP_M = 10.0
 
@@ -26,6 +31,17 @@ def meters(a, b):
     dn = math.radians(a[0] - b[0]) * 6_371_000
     de = math.radians(a[1] - b[1]) * 6_371_000 * math.cos(math.radians(a[0]))
     return math.hypot(dn, de)
+
+
+def add_line(points, p, q):
+    """Points every `STEP_M` from p to q (not q), at 5e-5 degrees, and the length (m)."""
+    d = meters(p, q)
+    n = max(1, int(d // STEP_M))
+    for k in range(n):
+        la = p[0] + (q[0] - p[0]) * k / n
+        lo = p[1] + (q[1] - p[1]) * k / n
+        points.add((round(la * 2e4) * 5, round(lo * 2e4) * 5))
+    return d
 
 
 def main():
@@ -63,15 +79,16 @@ def main():
             if structure.get(a, "Subway") == "Subway" or structure.get(b, "Subway") == "Subway":
                 continue
             for p, q in zip(pts[i:j], pts[i + 1 : j + 1]):
-                d = meters(p, q)
-                open_m += d
-                n = max(1, int(d // STEP_M))
-                for k in range(n):
-                    la = p[0] + (q[0] - p[0]) * k / n
-                    lo = p[1] + (q[1] - p[1]) * k / n
-                    points.add((round(la * 2e4) * 5, round(lo * 2e4) * 5))
+                open_m += add_line(points, p, q)
+    osm_m = 0.0
+    for way in json.loads(OSM.read_text())["elements"]:
+        if way["tags"].get("tunnel", "no") != "no":
+            continue
+        g = [(n["lat"], n["lon"]) for n in way["geometry"]]
+        for p, q in zip(g, g[1:]):
+            osm_m += add_line(points, p, q)
     OUT.write_bytes(b"".join(struct.pack("<ii", la, lo) for la, lo in sorted(points)))
-    print(f"{len(points)} points, {open_m / 1000:.0f} km of shapes above ground, {OUT.stat().st_size} bytes")
+    print(f"{len(points)} points, {open_m / 1000:.0f} km of shapes above ground, {osm_m / 1000:.0f} km of OSM track, {OUT.stat().st_size} bytes")
 
 
 if __name__ == "__main__":
