@@ -995,6 +995,14 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     103 St on the 3, which doesn't stop there (Thu Oct 29, 11:07 pm);
     14 St while at 18 St, corrected later (Thu Oct 29, 1:23 am).
     A line must serve the station it's named at.
+    Done in part (2026-11-08), not on the phone: a route that doesn't stop at the station's complex
+    (`stations::serves`) isn't named, and the riding lines narrow to those that do (`be81507`);
+    a stop since the last door cycle names the station, not that cycle's (`169868d`).
+    Replayed (`skip_still`): no route at Astoria Blvd until the N matches, none at 59 St (R211 cars named),
+    none at 103 St; 18 St from 1:25:38 am instead of 1:26:08 am.
+    Left: the station itself can be wrong, from the cell at speed (103 St on the 3; the rider was on the 3,
+    and once the 1 is matched there); a route stale from before a walk (the 6) still needs the station to show.
+    `just test-rust` fails on the untracked `crates/cli/examples/entrance_export.rs` (no `no_live_smoothing`).
 22. Missed transfers and switches: 3 to 1 (Thu Oct 29, 4:29 pm); "switched to Q" (Tue Nov 3, 6:01 pm; Sat Nov 7, 5:59 pm).
 23. Graph, map and replay (Mon Oct 26, 8:08 pm): timestamps on the graph;
     on the map, show where the rider taps; a taps button when replaying a ride, with taps on the graph and map.
