@@ -55,6 +55,9 @@ private val WINDOWS_MIN = listOf(5, 15, 60, null)
 private val NEW_YORK = ZoneId.of("America/New_York")
 private val CLOCK = DateTimeFormatter.ofPattern("h:mm a", java.util.Locale.US).withZone(NEW_YORK)
 
+/** The rider's taps' lines on the graphs. */
+private val TAP_COLOR = Color(0xFFD81B60)
+
 /** The narrowest the zoomed graph gets (ns). */
 private const val MIN_SPAN_NS = 30_000_000_000L
 
@@ -75,6 +78,7 @@ fun LiveGraphScreen(onBack: () -> Unit) {
 /**
  * The graphs for the current recording, or for a past ride if [pastClockOffsetMs] (unix ms minus elapsed-realtime ms
  * over that ride) is given: then the ride's end stands for now, and it's shown whole at first.
+ * [taps] are drawn as lines across both graphs, labeled on the speed graph where there's room.
  */
 @Composable
 fun SpeedGraphScreen(
@@ -83,7 +87,8 @@ fun SpeedGraphScreen(
     timeline: List<TimelineSegment>,
     pastClockOffsetMs: Long?,
     onBack: () -> Unit,
-    extraButton: @Composable () -> Unit = {},
+    extraButtons: (@Composable () -> Unit)? = null,
+    taps: List<TapMark> = emptyList(),
 ) {
     var window by rememberSaveable { mutableIntStateOf(if (pastClockOffsetMs == null) 1 else WINDOWS_MIN.lastIndex) }
     // The zoom (1 shows the whole window), and how far before the window's end the view ends (ns).
@@ -97,7 +102,6 @@ fun SpeedGraphScreen(
     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             HapticButton(onClick = onBack) { Text("Back") }
-            extraButton()
             HapticButton(onClick = {
                 window = (window + 1) % WINDOWS_MIN.size
                 zoom = 1f
@@ -106,6 +110,8 @@ fun SpeedGraphScreen(
                 Text(WINDOWS_MIN[window]?.let { if (it < 60) "Last $it min" else "Last ${it / 60} h" } ?: "Whole ride")
             }
         }
+        // A past ride's own buttons, on their own row so they never push the others off the screen.
+        extraButtons?.let { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { it() } }
         if (samples.size < 2) {
             Text(if (pastClockOffsetMs == null) "No speeds yet: they start once a recording does." else "No speeds on this ride.")
             return@Column
@@ -124,6 +130,7 @@ fun SpeedGraphScreen(
         val startNs = endNs - spanNs
         val shown = samples.filter { it.elapsedRealtimeNs in startNs..endNs }
         val shownStops = stops.filter { (it.departedNs ?: it.leftNs ?: nowNs) >= startNs && it.stoppedNs <= endNs }
+        val shownTaps = taps.filter { it.ns in startNs..endNs }
         // The gestures outlive each frame's range (now moves on), so they read the latest one.
         val view by rememberUpdatedState(longArrayOf(windowEndNs, windowSpanNs, startNs, spanNs))
         val gestures = Modifier
@@ -153,11 +160,11 @@ fun SpeedGraphScreen(
         }
         Text("Speed (${Units.speedUnit})", color = speedColor)
         Canvas(Modifier.fillMaxWidth().weight(1f).then(gestures)) {
-            plot(text, ink, speedColor, shown.map { it.elapsedRealtimeNs to Units.speed(it.speedMps) }, startNs, endNs, shownStops, nowNs, zeroBased = true, labels = true)
+            plot(text, ink, speedColor, shown.map { it.elapsedRealtimeNs to Units.speed(it.speedMps) }, startNs, endNs, shownStops, shownTaps, nowNs, zeroBased = true, labels = true)
         }
         Text("Acceleration (${Units.accelUnit}), negative is braking", color = accelColor)
         Canvas(Modifier.fillMaxWidth().weight(1f).then(gestures)) {
-            plot(text, ink, accelColor, shown.map { it.elapsedRealtimeNs to Units.accel(it.accelMps2) }, startNs, endNs, shownStops, nowNs, zeroBased = false, labels = false)
+            plot(text, ink, accelColor, shown.map { it.elapsedRealtimeNs to Units.accel(it.accelMps2) }, startNs, endNs, shownStops, shownTaps, nowNs, zeroBased = false, labels = false)
         }
         Canvas(Modifier.fillMaxWidth().height(20.dp).then(gestures)) {
             timeAxis(text, ink, clockOffsetMs, startNs, endNs)
@@ -177,6 +184,7 @@ private fun DrawScope.plot(
     startNs: Long,
     endNs: Long,
     stops: List<LiveStop>,
+    taps: List<TapMark>,
     nowNs: Long,
     zeroBased: Boolean,
     labels: Boolean,
@@ -249,6 +257,19 @@ private fun DrawScope.plot(
             y += line.size.height
         }
         labelsEnd = sx + lines.maxOf { it.size.width } + 4.dp.toPx()
+    }
+
+    // Each tap's line, and on the speed graph its label at the bottom, where it doesn't run into the previous one's.
+    val tapStyle = TextStyle(color = TAP_COLOR, fontSize = 10.sp)
+    var tapLabelsEnd = left
+    for (t in taps) {
+        val tx = x(t.ns)
+        drawLine(TAP_COLOR.copy(alpha = 0.7f), Offset(tx, top), Offset(tx, size.height), 1.5f)
+        if (!labels || tx < tapLabelsEnd) continue
+        val label = text.measure(t.label, tapStyle)
+        if (tx + 2.dp.toPx() + label.size.width > size.width) continue
+        drawText(label, topLeft = Offset(tx + 2.dp.toPx(), size.height - label.size.height))
+        tapLabelsEnd = tx + 2.dp.toPx() + label.size.width + 4.dp.toPx()
     }
 
     val path = Path()

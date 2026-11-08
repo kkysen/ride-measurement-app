@@ -40,6 +40,7 @@ import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.FolderOverlay
 import org.osmdroid.views.overlay.MapEventsOverlay
+import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import uniffi.ride_ffi.SpeedScale
 import uniffi.ride_ffi.accelBoundsMps2
@@ -58,7 +59,32 @@ import uniffi.ride_ffi.speedScaleName
 fun LiveMapScreen(onBack: () -> Unit) {
     val points by LiveTrack.points.collectAsStateWithLifecycle()
     val underground by LiveTrack.underground.collectAsStateWithLifecycle()
-    TrackMapScreen(points, live = true, onBack, underground = underground)
+    val marks by RecorderService.marks.collectAsStateWithLifecycle()
+    val taps = remember(marks) {
+        marks.filter { !it.deleted }.map { m ->
+            TapMark(m.receivedNs, m.wallMs, kindLabel(m.kind) + if (m.text.isNotEmpty()) ": ${m.text}" else "")
+        }
+    }
+    // Each tap's place, kept once found, so a new fix costs only the taps not placed yet and the path since them.
+    // Underground, a tap is placed along the track once its leg is drawn there.
+    val found = remember { HashMap<Long, Pair<TapMark, LiveTrack.Point>>() }
+    val placed = remember(taps, points, underground) {
+        try {
+            val newestNs = listOfNotNull(points.lastOrNull(), underground.lastOrNull()?.lastOrNull()).maxOfOrNull { it.elapsedRealtimeNs }
+            val pending = taps.filter { found[it.ns]?.first != it && newestNs != null && newestNs - it.ns < GIVE_UP_PLACING_NS }
+            if (pending.isNotEmpty()) {
+                val fromNs = pending.minOf { it.ns } - GIVE_UP_PLACING_NS
+                val recent = points.subList(points.firstIndexAtOrAfter(fromNs), points.size) +
+                    underground.filter { (it.lastOrNull()?.elapsedRealtimeNs ?: Long.MIN_VALUE) >= fromNs }.flatten()
+                placeTaps(pending, recent.sortedBy { it.elapsedRealtimeNs }).forEach { found[it.first.ns] = it }
+            }
+            taps.mapNotNull { found[it.ns]?.takeIf { f -> f.first == it } }
+        } catch (e: Throwable) {
+            Log.e("RideLogger", "placing taps failed", e)
+            emptyList()
+        }
+    }
+    TrackMapScreen(points, live = true, onBack, underground = underground, taps = placed)
 }
 
 /**
@@ -72,9 +98,10 @@ fun TrackMapScreen(
     points: List<LiveTrack.Point>,
     live: Boolean,
     onBack: () -> Unit,
-    extraButton: @Composable () -> Unit = {},
+    extraButtons: (@Composable () -> Unit)? = null,
     gpsFixes: List<LiveTrack.Point> = emptyList(),
     underground: List<List<LiveTrack.Point>> = emptyList(),
+    taps: List<Pair<TapMark, LiveTrack.Point>> = emptyList(),
 ) {
     var follow by remember { mutableStateOf(live) }
     var selected by remember { mutableStateOf<LiveTrack.Point?>(null) }
@@ -96,7 +123,6 @@ fun TrackMapScreen(
     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             HapticButton(onClick = onBack) { Text("Back") }
-            extraButton()
             if (live) HapticButton(onClick = { follow = true }, enabled = !follow) { Text("Follow") }
             HapticButton(onClick = { colorByAccel = !colorByAccel }) { Text(if (colorByAccel) "Color: accel" else "Color: speed") }
             // Cycles automatic, then each scale.
@@ -107,6 +133,8 @@ fun TrackMapScreen(
                 }) { Text("Scale: " + if (chosenScale == null) "auto" else scale.name) }
             }
         }
+        // A past ride's own buttons, on their own row so they never push the others off the screen.
+        extraButtons?.let { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { it() } }
         Text(describe(selected ?: listOfNotNull(points.lastOrNull(), underground.lastOrNull()?.lastOrNull()).maxByOrNull { it.elapsedRealtimeNs }, latest = selected == null, live), style = MaterialTheme.typography.bodyMedium)
         Text(
             (
@@ -126,12 +154,13 @@ fun TrackMapScreen(
         Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
             val track = remember { TrackOverlays() }
             val undergroundTrack = remember { TrackOverlays() }
+            val tapOverlays = remember { TapOverlays() }
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { context ->
                     // A map failure shows as text here; it can't affect recording.
                     try {
-                        newMapView(context, track, undergroundTrack, onDrag = { follow = false }, onTap = { selected = it })
+                        newMapView(context, track, undergroundTrack, tapOverlays.folder, onDrag = { follow = false }, onTap = { selected = it })
                             .apply {
                                 clipToOutline = true
                                 // A past ride doesn't move: show all of it.
@@ -151,6 +180,7 @@ fun TrackMapScreen(
                         track.sync(points, scale.scale, colorByAccel)
                         undergroundTrack.syncLegs(underground, scale.scale, colorByAccel)
                         track.syncGps(gpsFixes)
+                        tapOverlays.sync(view, taps)
                         // The newest of the GPS path and the path along the track underground.
                         val last = listOfNotNull(points.lastOrNull(), underground.lastOrNull()?.lastOrNull()).maxByOrNull { it.elapsedRealtimeNs }
                         // Pans only once the newest fix nears the edge, so the map isn't always moving and
@@ -165,6 +195,20 @@ fun TrackMapScreen(
             )
         }
     }
+}
+
+/** How long after a tap (ns) the live map stops trying to place it: by then its leg would have been drawn. */
+private const val GIVE_UP_PLACING_NS = 30 * 60_000_000_000L
+
+/** The first point at or after `ns`, by binary search (points are in time order), or the size if none. */
+private fun List<LiveTrack.Point>.firstIndexAtOrAfter(ns: Long): Int {
+    var lo = 0
+    var hi = size
+    while (lo < hi) {
+        val mid = (lo + hi) ushr 1
+        if (this[mid].elapsedRealtimeNs < ns) lo = mid + 1 else hi = mid
+    }
+    return lo
 }
 
 /** Whether a point is in the middle 60% of the visible map, both ways. */
@@ -193,6 +237,7 @@ private fun newMapView(
     context: Context,
     track: TrackOverlays,
     underground: TrackOverlays,
+    taps: FolderOverlay,
     onDrag: () -> Unit,
     onTap: (LiveTrack.Point?) -> Unit,
 ): MapView {
@@ -234,6 +279,7 @@ private fun newMapView(
     map.overlays.add(track.casings)
     map.overlays.add(track.colored)
     map.overlays.add(track.gps)
+    map.overlays.add(taps)
     return map
 }
 
@@ -390,6 +436,26 @@ private class TrackOverlays {
             val q = projection.toPixels(GeoPoint(it.lat, it.lon), null)
             hypot((q.x - t.x).toDouble(), (q.y - t.y).toDouble()) <= maxPx
         }
+    }
+}
+
+/** The rider's taps as pins, each showing its time and kind when tapped; rebuilt only when the taps change. */
+private class TapOverlays {
+    val folder = FolderOverlay()
+    private var drawn = emptyList<Pair<TapMark, LiveTrack.Point>>()
+
+    fun sync(map: MapView, taps: List<Pair<TapMark, LiveTrack.Point>>) {
+        if (taps == drawn) return
+        folder.items.forEach { (it as? Marker)?.closeInfoWindow() }
+        folder.items.clear()
+        for ((tap, p) in taps) {
+            folder.add(Marker(map).apply {
+                position = GeoPoint(p.lat, p.lon)
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                title = "${clockTime(tap.unixMs)} ${tap.label}"
+            })
+        }
+        drawn = taps
     }
 }
 

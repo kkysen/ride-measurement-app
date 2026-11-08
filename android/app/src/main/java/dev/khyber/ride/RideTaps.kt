@@ -26,9 +26,6 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import dev.khyber.ride.proto.ManualEvent
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,7 +54,6 @@ fun RideTapsScreen(sessionId: String, onBack: () -> Unit) {
     var changing by remember { mutableStateOf<Long?>(null) }
     var confirming by remember { mutableStateOf<Long?>(null) }
     val scope = rememberCoroutineScope()
-    val format = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
     LaunchedEffect(reload) {
         withContext(Dispatchers.IO) {
             try {
@@ -97,7 +93,7 @@ fun RideTapsScreen(sessionId: String, onBack: () -> Unit) {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            "${format.format(Date(mark.unixMs))}  ${kindLabel(kind)}" +
+                            "${clockTime(mark.unixMs)}  ${kindLabel(kind)}" +
                                 (if (mark.text.isNotEmpty()) ": ${mark.text}" else "") +
                                 (if (mark.edited) " (changed)" else ""),
                             Modifier.weight(1f),

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LinearProgressIndicator
@@ -37,7 +38,9 @@ import uniffi.ride_ffi.RideReplay
 import uniffi.ride_ffi.SessionSpan
 import uniffi.ride_ffi.cachedReplay
 import uniffi.ride_ffi.replaySession
+import uniffi.ride_ffi.sessionMarks
 import uniffi.ride_ffi.sessionSpan
+import dev.khyber.ride.proto.ManualEvent
 
 /** One recording on the phone, as far as its files tell without decoding them. */
 private data class PastRide(val id: String, val bytes: Long, val recompressed: Boolean)
@@ -144,6 +147,19 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
     var replay by remember { mutableStateOf<RideReplay?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var showGraph by remember { mutableStateOf(false) }
+    // The ride's taps (not deleted ones), shown on the graph and map with the "Taps" button.
+    var showTaps by remember { mutableStateOf(false) }
+    var taps by remember { mutableStateOf<List<TapMark>>(emptyList()) }
+    LaunchedEffect(id) {
+        taps = withContext(Dispatchers.IO) {
+            runCatching { sessionMarks(File(RecorderService.sessionsDir(), id).path) }
+                .onFailure { Log.e("RideLogger", "reading taps failed", it) }
+                .getOrDefault(emptyList())
+        }.filter { !it.deleted }.map { m ->
+            val kind = ManualEvent.Kind.forNumber(m.kind) ?: ManualEvent.Kind.UNRECOGNIZED
+            TapMark(m.receivedNs, m.unixMs, kindLabel(kind) + if (m.text.isNotEmpty()) ": ${m.text}" else "")
+        }
+    }
     // How far the replay has got, once the session is read, and when that was (elapsed realtime ms).
     var progress by remember { mutableStateOf<Double?>(null) }
     var progressStartMs by remember { mutableStateOf(0L) }
@@ -226,12 +242,15 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
         }
         return
     }
+    // Fixed widths, so the button after one never moves when its text changes.
     val toggle = @Composable {
-        HapticButton(onClick = { showGraph = !showGraph }) { Text(if (showGraph) "Map" else "Graph") }
+        HapticButton(onClick = { showGraph = !showGraph }, Modifier.width(96.dp)) { Text(if (showGraph) "Map" else "Graph") }
+        HapticButton(onClick = { showTaps = !showTaps }, Modifier.width(112.dp)) { Text(if (showTaps) "Taps: on" else "Taps: off") }
     }
+    val shownTaps = if (showTaps) taps else emptyList()
     if (showGraph) {
         val samples = remember(r) { r.smoothed.map { LiveSeries.Sample(it.elapsedRealtimeNs, it.speedMps, it.accelMps2) } }
-        SpeedGraphScreen(samples, r.stops, r.timeline, pastClockOffsetMs = r.clockOffsetMs, onBack, toggle)
+        SpeedGraphScreen(samples, r.stops, r.timeline, pastClockOffsetMs = r.clockOffsetMs, onBack, toggle, taps = shownTaps)
     } else {
         val fixes = remember(r) {
             r.track.map {
@@ -263,10 +282,17 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
                 )
             }
         }
+        // On the fused path, or the fixes if there's none; from Rust (`positions_at`), once per ride.
+        val placed = remember(r, taps) {
+            runCatching { placeTaps(taps, points.ifEmpty { fixes }) }
+                .onFailure { Log.e("RideLogger", "placing taps failed", it) }
+                .getOrDefault(emptyList())
+        }
+        val shownPlaced = if (showTaps) placed else emptyList()
         if (points.isEmpty()) {
-            TrackMapScreen(fixes, live = false, onBack, toggle)
+            TrackMapScreen(fixes, live = false, onBack, toggle, taps = shownPlaced)
         } else {
-            TrackMapScreen(points, live = false, onBack, toggle, gpsFixes = fixes)
+            TrackMapScreen(points, live = false, onBack, toggle, gpsFixes = fixes, taps = shownPlaced)
         }
     }
 }
