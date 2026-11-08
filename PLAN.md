@@ -1104,6 +1104,16 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
       heard (motoring cut off); a likely stop within 20 s of a departure no longer holds (live only: the stop
       records never kept them). Under 0.5 46 to 30, within 0.7 to 1.3 82 to 91, median 0.85 to 0.95,
       over 1.3 43 to 47; 19 legs nearer the track by over 0.15, 3 further (4:13 on Mon Oct 26, 8:08 pm, 0.88 to 1.63).
+    - Held at 0 then released (2026-11-08, `brakecause`, 147 stops): of the 16, 9 by a likely stop and 7 by a transfer.
+      A transfer clamped a GNSS speed: boarding at 30 Av missed (Tue Nov 3, 6:01 pm), GNSS read 26 to 30 mph
+      shown as 0; with GNSS in the last 5 s the clamp stands aside (`4178971`).
+      Bowery at 44 mph (Thu Nov 5, 10:06 pm): a lurch 13 s after leaving, before the Williamsburg Bridge,
+      was kept as a stop, and a walk along the M 245 s later counted as walking off at it;
+      a stop within 20 s after a departure takes no walk off now (`59b151b`, offline too).
+      Falls 79 to 81 of 147, held 16 to 13; `liveratio` unchanged (30 under 0.5, 91 within, median 0.95, 47 over).
+      Open: likely stops with the departure missed, held the whole next leg: Times Sq to 50 St
+      (Sun Nov 1, 1:50 am, 2 min dwell, then a slow pull at 0.2 to 0.4 m/s^2, under the surge's 0.5 and the weak start);
+      the rest held under 8 mph by the replay (walking, slow pulls into stations).
     Open: stuck-low legs (30 under 0.5): held from a stop with no departure found, offline or live
       (the leg starts at the stop: Wed Oct 21, 6:21 pm, 11:28, the phone in hand); lurches mid-leg 40 to 80 s
       after the departure; slow integration without a hold (15);
