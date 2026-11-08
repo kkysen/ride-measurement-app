@@ -32,6 +32,8 @@ pub enum Sensor {
     SpeedLimit,
     /// The car's own accelerometer, from its beacon (see [`crate::car_beacons`]): the phone's bias along the axis.
     Car,
+    /// A known place on a leg underground: standing at a station (see [`LiveSpeedEstimator::anchor`]).
+    Anchor,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -55,11 +57,16 @@ pub struct Estimate {
 }
 
 /// A leg between stations underground: when the train left, and for each station ahead, nearest first,
-/// the soonest a train could stand there (s since the departure) and the fastest it goes on the way.
+/// the soonest a train could stand there (s since the departure) and the fastest it goes on the way;
+/// and how far the estimate has gone since the departure, or since a known place ([`LiveSpeedEstimator::anchor`]),
+/// only for measuring its error at the next known place, never for the cap.
 #[derive(Clone, Debug)]
 struct Leg {
     since_ns: i64,
     stations: VecDeque<(f64, f64)>,
+    covered_m: f64,
+    /// The last known place: when, and how far along the track from the departure (m).
+    known: (i64, f64),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -230,6 +237,10 @@ const REACH_STEP_S: f64 = 0.5;
 /// On a leg (see [`LiveSpeedEstimator::start_leg`]), the cap never goes under this (m/s), for the departure's
 /// time found a moment late.
 const LEG_CAP_FLOOR_MPS: f64 = 2.0;
+/// An anchor ([`LiveSpeedEstimator::anchor`]) this soon after the last known place (s) says too little,
+/// and the bias moves by at most this (m/s^2) for one.
+const ANCHOR_MIN_S: f64 = 15.0;
+const ANCHOR_MAX_DB_MPS2: f64 = 0.3;
 
 /// The slack (m/s) over [`subway_accel_limits`]'s ceiling, for the phone's noise.
 const ACCEL_LIMIT_SLACK_MPS: f64 = 0.3;
@@ -658,7 +669,7 @@ impl LiveSpeedEstimator {
             self.mark_used(Sensor::SpeedLimit, t_ns);
         }
         self.limit_accel(t_ns, dt);
-        self.limit_on_leg(t_ns);
+        self.limit_on_leg(t_ns, dt);
         self.along_since_gnss += along * dt;
         for c in &mut self.cars {
             c.pending_sum += along * dt;
@@ -1126,7 +1137,41 @@ impl LiveSpeedEstimator {
                 .iter()
                 .map(|&d| (crate::track::least_s(d), subway_peak_mps(d)))
                 .collect(),
+            covered_m: 0.0,
+            known: (since_ns, 0.0),
         });
+    }
+
+    /// On a leg, the train is known to be `along_m` along the track from the departure at `t_ns`
+    /// (standing at a station), with `weight` (0 to 1) for how sure that is.
+    /// Since the last known place, where the speed was right (0 at the departure), a steady bias error grows the
+    /// speed error as `db t` and the distance's as `db t^2 / 2`: so the estimate's distance over the known one
+    /// gives the bias, corrected by half of it times `weight` (at most [`ANCHOR_MAX_DB_MPS2`]), and the speed by
+    /// the error it made since. The distance counts from the known place on.
+    pub fn anchor(&mut self, t_ns: i64, along_m: f64, weight: f64) {
+        let Some(leg) = self.leg.as_mut() else {
+            return;
+        };
+        let (known_ns, known_m) = leg.known;
+        let t = (t_ns - known_ns) as f64 * 1e-9;
+        let (estimated, known) = (leg.covered_m - known_m, along_m - known_m);
+        leg.covered_m = along_m;
+        leg.known = (t_ns, along_m);
+        if t < ANCHOR_MIN_S || known <= 0.0 {
+            return;
+        }
+        let gain = 0.5 * weight.clamp(0.0, 1.0);
+        let db = (2.0 * (estimated - known) / (t * t)).clamp(-ANCHOR_MAX_DB_MPS2, ANCHOR_MAX_DB_MPS2);
+        // The speed is signed along the axis; the distance is its magnitude's.
+        let sign = if self.v < 0.0 { -1.0 } else { 1.0 };
+        self.b += sign * gain * db;
+        let dv = gain * db * t;
+        if self.v.abs() > dv.abs() || dv < 0.0 {
+            self.v -= sign * dv;
+        } else {
+            self.v = 0.0;
+        }
+        self.mark_used(Sensor::Anchor, t_ns);
     }
 
     /// The train stopped (or the way ahead isn't known): the leg's cap is off.
@@ -1140,15 +1185,16 @@ impl LiveSpeedEstimator {
     /// on the way to the next station it stops at ([`subway_peak_mps`]). Once a train could have stood at that
     /// station and no stop was found, it may have run through, so the one after counts, which only loosens the cap;
     /// past the last station known, the leg ends. The cap is projected like [`Self::set_max_speed`]'s bound.
-    fn limit_on_leg(&mut self, t_ns: i64) {
+    fn limit_on_leg(&mut self, t_ns: i64, dt: f64) {
         let gnss_recent =
             self.last_gnss_ns != 0 && (t_ns - self.last_gnss_ns) as f64 * 1e-9 < GNSS_RECENT_S;
-        if self.backward || self.max_speed_mps != Some(SUBWAY_MAX_SPEED_MPS) || gnss_recent {
-            return;
-        }
         let Some(leg) = self.leg.as_mut() else {
             return;
         };
+        leg.covered_m += self.v.abs() * dt;
+        if self.backward || self.max_speed_mps != Some(SUBWAY_MAX_SPEED_MPS) || gnss_recent {
+            return;
+        }
         let since_s = (t_ns - leg.since_ns) as f64 * 1e-9;
         while leg.stations.front().is_some_and(|&(least, _)| least < since_s) {
             leg.stations.pop_front();

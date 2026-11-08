@@ -712,8 +712,10 @@ pub struct Fusion {
     departures: Vec<i64>,
     /// Weaker starts ([`train_stops::Event::Started`]), only for ending a likely stop.
     starts: Vec<i64>,
-    /// The departure the speed's leg cap counts from (see [`LiveSpeedEstimator::start_leg`]), if on one.
+    /// The departure the speed's leg cap counts from (see [`LiveSpeedEstimator::start_leg`]), if on one,
+    /// and the station it left.
     leg_since_ns: Option<i64>,
+    leg_from: Option<&'static Station>,
     /// The timeline's segments kept, and the walks so far (see [`Fusion::timeline`]).
     timeline_kept: std::cell::RefCell<TimelineKept>,
     walks: std::cell::RefCell<Walks>,
@@ -829,6 +831,7 @@ impl Fusion {
             departures: Vec::new(),
             starts: Vec::new(),
             leg_since_ns: None,
+            leg_from: None,
             settled_records: Default::default(),
             tracks: Default::default(),
             fix_tracks: Default::default(),
@@ -1962,14 +1965,14 @@ impl Fusion {
                 train_stops::Event::Stopped(stop) => {
                     // Found [`train_stops::SEP_S`] late: it ends the leg only if it came after the leg began.
                     if self.leg_since_ns.is_some_and(|l| stop.t_ns > l) {
-                        self.end_leg();
+                        self.anchor_at_stop(&stop);
                     }
                     self.on_train_stop(t_ns, stop)
                 }
                 train_stops::Event::Likely(stop) => {
                     if self.context.in_subway && !self.departure_fade(&stop) {
                         self.likely_stop = Some(stop);
-                        self.end_leg();
+                        self.anchor_at_stop(&stop);
                     }
                 }
                 train_stops::Event::Departed(at) => {
@@ -2320,6 +2323,7 @@ impl Fusion {
             Some(ahead) => {
                 self.estimator.start_leg(at, &ahead);
                 self.leg_since_ns = Some(at);
+                self.leg_from = Some(station);
             }
             None => self.end_leg(),
         }
@@ -2328,6 +2332,19 @@ impl Fusion {
     fn end_leg(&mut self) {
         self.estimator.end_leg();
         self.leg_since_ns = None;
+        self.leg_from = None;
+    }
+
+    /// The train stands at `stop` on a leg: if a station other than the departure's is named, it stands that
+    /// station's track from the departure's (see [`LiveSpeedEstimator::anchor`]); then the leg ends.
+    fn anchor_at_stop(&mut self, stop: &train_stops::Stop) {
+        if let (Some(from), Some(at)) = (self.leg_from, self.station_now(stop.t_ns))
+            && !stations::same_complex(from, at)
+            && let Some(track) = crate::track::between(from, at)
+        {
+            self.estimator.anchor(stop.t_ns, track.length_m(), 1.0);
+        }
+        self.end_leg();
     }
 
     /// The train's stopping lurch, found at `t_ns` ([`train_stops::SEP_S`] and a bit after it): in the subway,
