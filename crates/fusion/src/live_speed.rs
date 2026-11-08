@@ -1579,6 +1579,9 @@ mod tests {
         assert!((cbtc / 0.44704 - 50.0).abs() < 1e-9, "{cbtc}");
         assert!(leg_cap_mps(120.0, peak, None) / 0.44704 > 50.0);
         // Early on, the motoring curve is still the lower.
-        assert_eq!(leg_cap_mps(5.0, peak, Some(CBTC_POWERED_MAX_MPS)), leg_cap_mps(5.0, peak, None));
+        assert_eq!(
+            leg_cap_mps(5.0, peak, Some(CBTC_POWERED_MAX_MPS)),
+            leg_cap_mps(5.0, peak, None)
+        );
     }
 }
