@@ -1043,8 +1043,13 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     bias walk x4 48 / 90 / 0.87; x0.25 35 / 82 / 0.88, 74; accel noise x2 43 / 73 / 0.85, 78;
     walk x0.25 and noise x2 38 / 82 / 0.90, 68; bias held within 0.2 m/s^2 43 / 86 / 0.84, 78;
     stops not moving the bias 47 / 67 / 0.82, 77; nor the caps 37 / 80 / 0.96, 73.
-    Open: a bias that only measurements of it move (GNSS, the cars), with the leg's error going to the speed
-    or the distance (anchors) instead.
+    A bias that only measurements of it move (GNSS, the cars), with the exact rotation (2026-11-08,
+    stash "item19: exact rotation with only measurements moving the bias"; `liveratio` only, nothing kept):
+    stops, doors and caps correcting only the speed (a Schmidt update: the bias and its variance kept),
+    and the anchors too, 42 / 74 / 0.89; anchors still moving it, with the bias walk x4, 37 / 71 / 0.96;
+    x0.25, 36 / 77 / 0.95 (over 1.3: 55, 67, 61, against 47).
+    So the stop zeros were absorbing a real along-axis error that a frozen bias leaves in the speed.
+    Open: what that error is (gravity's gyro drift, the axis between departures), rather than tuning the bias.
 20. Done, unchecked on the phone (`34cfce3`, `6b7d63f`, `10fdd80`, `00681c8`): the live map underground, noted on
     four rides, the latest Sat Nov 7, 5:59 pm. `Fusion::recent_track_path`, drawn under the GPS path:
     each leg between stations once the train stops at its far station (placed as a past ride's by `track::Along`);
