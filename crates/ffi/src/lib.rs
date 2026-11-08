@@ -4,6 +4,8 @@
 
 use std::sync::{Arc, Mutex};
 
+mod display;
+
 use ride_fusion::live_speed;
 use ride_fusion::speed_colors::{self, SpeedScale as Scale};
 
@@ -601,6 +603,46 @@ pub fn speed_scale_name(scale: SpeedScale) -> String {
 #[uniffi::export]
 pub fn speed_scale_bands_kmh(scale: SpeedScale) -> Vec<u32> {
     Scale::from(scale).bands_kmh().into()
+}
+
+/// Round clock times (unix ms) to label the graph's time axis with, at most `max_ticks`; see [`display::clock_ticks`].
+#[uniffi::export]
+pub fn clock_ticks(
+    start_unix_ms: i64,
+    end_unix_ms: i64,
+    utc_offset_ms: i64,
+    max_ticks: u32,
+) -> Vec<i64> {
+    display::clock_ticks(start_unix_ms, end_unix_ms, utc_offset_ms, max_ticks)
+}
+
+/// A point on the map.
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct LatLon {
+    pub lat: f64,
+    pub lon: f64,
+}
+
+/// Where a path (`path_ns`, `path_lat`, `path_lon`, in time order) was at each of `times_ns`, such as the rider's taps;
+/// `None` off the path or in a gap over `max_gap_ns`. See [`display::positions_at`].
+#[uniffi::export]
+pub fn positions_at(
+    times_ns: Vec<i64>,
+    path_ns: Vec<i64>,
+    path_lat: Vec<f64>,
+    path_lon: Vec<f64>,
+    max_gap_ns: i64,
+) -> Vec<Option<LatLon>> {
+    let path: Vec<_> = path_ns
+        .into_iter()
+        .zip(path_lat)
+        .zip(path_lon)
+        .map(|((t, lat), lon)| (t, lat, lon))
+        .collect();
+    display::positions_at(&times_ns, &path, max_gap_ns)
+        .into_iter()
+        .map(|p| p.map(|(lat, lon)| LatLon { lat, lon }))
+        .collect()
 }
 
 #[uniffi::export]
