@@ -978,8 +978,16 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     end to end (the 7, the L: `live_speed::CBTC_LINES`) is capped at 50 mph, not 55.
     Fast sweep (203 legs, `no_live_smoothing`): 5 legs changed, 4 on Fri Oct 23, 7:36 pm (the L),
     one 1.22 to 1.05 (peak 55 to 50 mph); counts unchanged (30 under 0.5, 91 within 0.7 to 1.3, median 0.95, 47 over 1.3).
+    Done (2026-11-08, `1a4ea9c`), not on the phone: CBTC per track segment, not per line (the rider):
+    `track::CBTC_TRACK` by line and GTFS stop IDs (the 7, the L, Queens Boulevard 50 St to Kew Gardens,
+    Culver Church Av to W 8 St; sources in the code), and the bound on the motors, not the speed:
+    on a CBTC stretch, the reach from a stand and the acceleration ceiling's rise stop at 50 mph,
+    a faster speed known from GNSS isn't pulled down. `CBTC_LINES` is gone.
+    Fast sweep (204 legs, against `HEAD` the same way): counts unchanged (30, 91, 48), median 0.96 to 0.95;
+    3 legs changed, all Tue Oct 20, 6:41 pm on Queens Boulevard (one 1.00 to 0.89, peak 55 to 50 mph).
+    Uncertain: Culver's date in service (no source confirms it); the 63 St line and Queens Boulevard east of
+    Kew Gardens are left out until a source shows them in service.
     Open: off a leg (no station known, or no track ahead), the cap and the acceleration ceiling are still 55 mph;
-    Queens Boulevard (E, F, M, R) and Culver (F) are CBTC only in part, so they keep 55 until it's per segment;
     no grade term yet, so the 60 St tunnel's 60 to 62 mph coasting is still cut at 55 without GNSS;
     the 0 to 55 jump after a station and braking at 55 are untouched.
 19. Braking into a station often shows as accelerating (Thu Oct 29, 1:23 am).
