@@ -24,9 +24,10 @@ const SUBWAY_WIFI_HOLD_NS: i64 = 60_000_000_000;
 const FIX_HOLD_NS: i64 = 10_000_000_000;
 const GOOD_FIX_ACCURACY_M: f64 = 50.0;
 /// The subway's track above ground, from `python/experiments/open_track.py` (MTA GTFS shapes between stations that
-/// are elevated, on a viaduct or embankment, at grade, or in an open cut, and OpenStreetMap's subway track tagged as a
-/// bridge, for bridges and viaducts between underground stations): little-endian i32 pairs, latitude and
-/// longitude in 1e-5 degrees, every 10 m. Underground track is left out: it runs under streets.
+/// are elevated, on a viaduct or embankment, at grade, or in an open cut, and OpenStreetMap's subway track not in a
+/// tunnel, for bridges, viaducts, portals and open cuts between underground stations, but not untagged track in
+/// New Jersey, where PATH runs under streets): little-endian i32 pairs, latitude and longitude in 1e-5 degrees,
+/// every 10 m. Underground track is left out: it runs under streets.
 const OPEN_TRACK: &[u8] = include_bytes!("../data/open_track.bin");
 /// A good fix this close to open track (m), moving at least [`ON_TRACK_MPS`], is a train on it;
 /// it counts for [`ON_TRACK_HOLD_NS`]. Elevated lines see street Wi-Fi and keep GNSS, so nothing else catches them.
@@ -264,6 +265,9 @@ mod tests {
         assert!(open_track_m(40.7074, -73.9907).is_some_and(|d| d < 25.0));
         assert!(open_track_m(40.8155, -73.9586).is_some_and(|d| d < 25.0));
         assert!(open_track_m(40.7190, -73.9935).is_none_or(|d| d > 50.0));
+        // Broadway at 118 St, over the 1 underground, where the rider rode the M60 (Sat Nov 7, 2:29 pm):
+        // its fixes from 116 to 120 St were all 177 m or more from open track.
+        assert!(open_track_m(40.8090, -73.9632).is_none_or(|d| d > 100.0));
         let mut d = SubwayDetector::default();
         d.on_fix(0, 40.74685, -73.89135, Some(5.0), Some(12.0));
         assert!(d.in_subway(S));
