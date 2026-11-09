@@ -1148,6 +1148,23 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     The rider (2026-11-08): the GTFS-RT is often off by a little, so its times can't settle it,
     but the train didn't stop at 49 St, so it was a Q on the express track.
     Next: use the stop pattern itself (a station passed without stopping) to rule out the locals that stop there.
+    Done (2026-11-08, `b8f5187`, scored by `crates/cli/examples/passes.rs`, `a1d1cfd`), not on the phone:
+    a station passed (`Fusion::passes`) is one the radio named in the subway with no lurch (kept or not),
+    stop, departure or door cycle within 20 s, the live speed at least 3 m/s while named,
+    no stop or lurch at its complex within 2 min, and stops felt before and after at other stations;
+    decided 15 s after. The riding lines and the feeds' trips drop the lines stopping at its platform;
+    with none left, the rider changed at the stop before (57 St-7 Av), to its lines that passing leaves.
+    The status's lines shown with no route are the riding lines aboard.
+    Replayed (`skip_still`), Tue Nov 3: 49 St passed (6:20:25 to 6:21:22 pm), the W still shown to 6:21:43 pm
+    (the pass is decided only then), the Q at Times Sq from 6:22:03 pm until walking off.
+    Over the 37 rides with legs, 33 passes: express 2/3 past the 1's stations, the 4 past Spring St and Canal St,
+    the F past 36 St; the 1 to the 2/3 after 96 St (Mon Oct 26, 11:22 am; Sat Oct 24, 9:09 am)
+    and from 72 St (Mon Oct 26, 8:39 pm); none on the A/C on Sat Oct 31.
+    Without the stops felt around it, missed stops read as passes: the 1 from 137 St to 96 St
+    (Sat Oct 31, 10:13 to 10:20 pm, no stop felt or tapped at four stations) dropped its route.
+    Left, likely wrong: 79 St at 3:13 am (Thu Oct 22, 12:29 am), when every train is local there;
+    the live speed underground isn't evidence (it ran to the 55 mph cap through the Q's pass);
+    the change is shown only 35 s after the station's last naming.
 23. Done, not on the phone (`4affdf5`, `a27cacf`, `e1d4f91`): graph, map and replay (Mon Oct 26, 8:08 pm).
     The graph's time axis shows round 12-hour New York times, as many as fit (`clock_ticks`).
     The live map pins each tap where the rider was (`positions_at`), underground once its leg is drawn.
