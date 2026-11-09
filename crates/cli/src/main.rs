@@ -64,7 +64,7 @@ enum Command {
         #[arg(long)]
         accel: bool,
     },
-    /// Post-ride recompression, as the app does it: each stream rewritten at a high zstd level, and audio as FLAC.
+    /// Post-ride recompression, as the app does it: each stream rewritten at a high zstd level, audio as FLAC, and sensor streams in columns (value tables, delta-of-delta timestamps).
     /// A stream is replaced only once its new file decodes to exactly what the original held.
     Recompress {
         #[arg(required = true)]

@@ -5,6 +5,8 @@
 //! any failure, including an original that doesn't decode cleanly (e.g. a crash-truncated tail), keeps the original.
 //! Audio streams also have each chunk's PCM moved into FLAC (`crate::audio_flac`); their content is compared
 //! with every chunk converted back, which gives the original chunks byte for byte.
+//! Sensor streams are written in columns (`crate::sensor_columns`) where those give every chunk back byte for byte,
+//! else as plain zstd; their content is compared after decoding the columns.
 
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read, Write};
@@ -59,6 +61,20 @@ pub fn audio_streams_for_test(dir: &Path) -> std::collections::BTreeMap<String, 
     audio_streams(dir)
 }
 
+/// The session's sensor streams' file names, from its `session.pb` (none if it can't be read).
+fn sensor_streams(dir: &Path) -> std::collections::BTreeSet<String> {
+    let Ok(session) = crate::read::Session::open(dir) else {
+        return Default::default();
+    };
+    session
+        .info
+        .streams
+        .iter()
+        .filter(|s| s.kind == StreamKind::Sensor as i32)
+        .map(|s| format!("{}.{STREAM_EXTENSION}", s.name))
+        .collect()
+}
+
 fn audio_streams(dir: &Path) -> std::collections::BTreeMap<String, Audio> {
     let Ok(session) = crate::read::Session::open(dir) else {
         return Default::default();
@@ -84,6 +100,7 @@ fn audio_streams(dir: &Path) -> std::collections::BTreeMap<String, Audio> {
 /// Recompresses every stream of the session in `dir`, in name order; writes [`MARKER`] once all were handled.
 pub fn recompress_session(dir: &Path, level: i32) -> anyhow::Result<Vec<(String, Outcome)>> {
     let audio = audio_streams(dir);
+    let sensors = sensor_streams(dir);
     let mut names: Vec<String> = fs::read_dir(dir)
         .with_context(|| format!("reading {}", dir.display()))?
         .filter_map(|e| e.ok())
@@ -98,6 +115,7 @@ pub fn recompress_session(dir: &Path, level: i32) -> anyhow::Result<Vec<(String,
             let path = dir.join(&name);
             let outcome = match audio.get(&name) {
                 Some(&a) => recompress_audio_stream(&path, level, a),
+                None if sensors.contains(&name) => recompress_sensor_stream(&path, level),
                 None => recompress_stream(&path, level),
             };
             (name, outcome)
@@ -112,12 +130,27 @@ pub fn recompress_session(dir: &Path, level: i32) -> anyhow::Result<Vec<(String,
     Ok(results)
 }
 
+/// How a stream is rewritten.
+#[derive(Clone, Copy, Debug)]
+pub enum Encoding {
+    /// The same content as one zstd frame.
+    Plain,
+    /// Each chunk's PCM as FLAC.
+    Audio(Audio),
+    /// `SensorChunk`s in columns, or plain where columns can't give them back exactly.
+    Sensor,
+}
+
 pub fn recompress_stream(path: &Path, level: i32) -> Outcome {
-    recompress_stream_checked(path, level, None, |_| {})
+    recompress_stream_checked(path, level, Encoding::Plain, |_| {})
 }
 
 pub fn recompress_audio_stream(path: &Path, level: i32, audio: Audio) -> Outcome {
-    recompress_stream_checked(path, level, Some(audio), |_| {})
+    recompress_stream_checked(path, level, Encoding::Audio(audio), |_| {})
+}
+
+pub fn recompress_sensor_stream(path: &Path, level: i32) -> Outcome {
+    recompress_stream_checked(path, level, Encoding::Sensor, |_| {})
 }
 
 /// `corrupt_for_test` can damage the new file before verification, to check the original survives.
@@ -125,14 +158,14 @@ pub fn recompress_audio_stream(path: &Path, level: i32, audio: Audio) -> Outcome
 pub fn recompress_stream_checked(
     path: &Path,
     level: i32,
-    audio: Option<Audio>,
+    encoding: Encoding,
     corrupt_for_test: impl FnOnce(&Path),
 ) -> Outcome {
     let mut tmp_name = path.as_os_str().to_owned();
     tmp_name.push(TMP_SUFFIX);
     let tmp = Path::new(&tmp_name);
     let _ = fs::remove_file(tmp);
-    let outcome = recompress_via(path, tmp, level, audio, corrupt_for_test);
+    let outcome = recompress_via(path, tmp, level, encoding, corrupt_for_test);
     let _ = fs::remove_file(tmp);
     outcome
 }
@@ -141,7 +174,7 @@ fn recompress_via(
     path: &Path,
     tmp: &Path,
     level: i32,
-    audio: Option<Audio>,
+    encoding: Encoding,
     corrupt_for_test: impl FnOnce(&Path),
 ) -> Outcome {
     let original = match fs::metadata(path) {
@@ -152,13 +185,18 @@ fn recompress_via(
         },
         Err(e) => return kept(format!("reading the original failed: {e}")),
     };
+    // A plain zstd reader would take the columns for the content, so they're never recompressed again.
+    if crate::sensor_columns::is_columnar(&original) {
+        return kept("already in sensor columns");
+    }
     if let Err(e) = check_complete_frames(&original) {
         return kept(format!("original doesn't decode cleanly: {e}"));
     }
     // One decoding pass over the original checks it, recompresses it, and hashes it.
-    let written = match audio {
-        Some(a) => write_audio_recompressed(&original, tmp, level, a),
-        None => write_recompressed(&original, tmp, level),
+    let written = match encoding {
+        Encoding::Audio(a) => write_audio_recompressed(&original, tmp, level, a),
+        Encoding::Sensor => write_sensor_recompressed(&original, tmp, level),
+        Encoding::Plain => write_recompressed(&original, tmp, level),
     };
     let original_digest = match written {
         Ok(digest) => digest,
@@ -168,9 +206,10 @@ fn recompress_via(
         Err(e) => return kept(format!("writing the new file failed: {e}")),
     };
     corrupt_for_test(tmp);
-    let digest = match audio {
-        Some(_) => restored_digest(tmp),
-        None => decoded_digest(tmp),
+    let digest = match encoding {
+        Encoding::Audio(_) => restored_digest(tmp),
+        Encoding::Sensor => columns_digest(tmp),
+        Encoding::Plain => decoded_digest(tmp),
     };
     match digest {
         Ok(digest) if digest == original_digest => {}
@@ -263,6 +302,38 @@ fn write_audio_recompressed(
     }
     encoder.finish()?.sync_all()?;
     Ok(sha.finalize().into())
+}
+
+/// Like [`write_recompressed`] for a sensor stream, in columns where they give every chunk back byte for byte
+/// (checked again on the written file), else plain; returns the SHA-256 of the decoded content.
+fn write_sensor_recompressed(original: &[u8], tmp: &Path, level: i32) -> io::Result<[u8; 32]> {
+    let mut decoder = BufReader::new(zstd::stream::read::Decoder::new(original)?);
+    let mut sha = Sha256::new();
+    let mut bodies = Vec::new();
+    // A bad checksum, corrupt frame, or cut-off message in the original.
+    let invalid = |e: io::Error| io::Error::new(io::ErrorKind::InvalidData, e);
+    while let Some(message) = read_message(&mut decoder).map_err(invalid)? {
+        hash_message(&mut sha, &message);
+        bodies.push(message);
+    }
+    match crate::sensor_columns::encode_file(&bodies, level) {
+        Ok(bytes) => {
+            let mut file = File::create_new(tmp)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            Ok(sha.finalize().into())
+        }
+        Err(_) => write_recompressed(original, tmp, level),
+    }
+}
+
+/// SHA-256 of what a sensor stream file decodes to, in columns or plain.
+fn columns_digest(path: &Path) -> io::Result<[u8; 32]> {
+    let bytes = fs::read(path)?;
+    if !crate::sensor_columns::is_columnar(&bytes) {
+        return decoded_digest(path);
+    }
+    Ok(Sha256::digest(crate::sensor_columns::decode_file(&bytes)?).into())
 }
 
 /// SHA-256 of an audio stream's content with every FLAC chunk converted back to PCM.

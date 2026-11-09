@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -104,9 +104,24 @@ impl Session {
         name: &str,
     ) -> anyhow::Result<impl Iterator<Item = anyhow::Result<C>> + use<C>> {
         let path = self.stream_path(name);
-        let file =
+        let mut file =
             std::fs::File::open(&path).with_context(|| format!("reading {}", path.display()))?;
-        let mut decoder = Some(zstd::stream::read::Decoder::new(file)?);
+        let mut start = Vec::new();
+        (&mut file)
+            .take(crate::sensor_columns::header_len() as u64)
+            .read_to_end(&mut start)?;
+        let mut decoder: Option<Box<dyn std::io::Read>> =
+            if crate::sensor_columns::is_columnar(&start) {
+                // Columns decode as a whole: read the rest and restore the content in memory.
+                file.read_to_end(&mut start)?;
+                let content = crate::sensor_columns::decode_file(&start)
+                    .with_context(|| format!("{}: columns don't decode", path.display()))?;
+                Some(Box::new(std::io::Cursor::new(content)))
+            } else {
+                Some(Box::new(zstd::stream::read::Decoder::new(
+                    std::io::Cursor::new(start).chain(file),
+                )?))
+            };
         Ok(std::iter::from_fn(move || {
             let result = match read_message(decoder.as_mut()?) {
                 Ok(Some(bytes)) => C::decode(bytes.as_slice())
@@ -165,6 +180,25 @@ pub fn decode_stream_bytes<C: Message + Default>(bytes: &[u8]) -> StreamContents
         truncated: false,
         damage: Vec::new(),
     };
+    if crate::sensor_columns::is_columnar(bytes) {
+        let decoded = crate::sensor_columns::decode_file(bytes).and_then(|content| {
+            let mut reader = content.as_slice();
+            let mut chunks = Vec::new();
+            while let Some(body) = read_message(&mut reader)? {
+                chunks.push(C::decode(body.as_slice()).map_err(std::io::Error::other)?);
+            }
+            Ok(chunks)
+        });
+        match decoded {
+            Ok(chunks) => contents.chunks = chunks,
+            Err(e) => contents.damage.push(Damage {
+                offset: 0,
+                len: bytes.len(),
+                reason: format!("sensor columns don't decode: {e}"),
+            }),
+        }
+        return contents;
+    }
     let mut offset = 0;
     while offset < bytes.len() {
         let rest = &bytes[offset..];

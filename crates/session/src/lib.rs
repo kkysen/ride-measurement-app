@@ -5,6 +5,7 @@ mod delimited;
 pub mod marks;
 pub mod read;
 pub mod recompress;
+pub mod sensor_columns;
 pub mod track;
 pub mod transit;
 pub mod write;

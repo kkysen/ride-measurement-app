@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use ride_session::proto::StreamInfo;
 use ride_session::read::Session;
 use ride_session::recompress::{
-    LEVEL, MARKER, Outcome, recompress_session, recompress_stream, recompress_stream_checked,
+    Encoding, LEVEL, MARKER, Outcome, recompress_session, recompress_stream,
+    recompress_stream_checked,
 };
 use ride_session::write::{StreamWriter, write_session_info};
 use ride_session::{FORMAT_VERSION, SensorChunk, SessionInfo};
@@ -68,7 +69,7 @@ fn keeps_original_when_verification_fails() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_stream(dir.path(), "accel", 50);
     let original = fs::read(&path).unwrap();
-    let outcome = recompress_stream_checked(&path, LEVEL, None, |tmp| {
+    let outcome = recompress_stream_checked(&path, LEVEL, Encoding::Plain, |tmp| {
         let mut bytes = fs::read(tmp).unwrap();
         let mid = bytes.len() / 2;
         bytes[mid] ^= 0xff;
@@ -277,7 +278,7 @@ fn keeps_audio_whose_flac_is_damaged() {
         channels: 1,
         sample_rate_hz: 16_000,
     };
-    let outcome = recompress_stream_checked(&path, LEVEL, Some(audio), |tmp| {
+    let outcome = recompress_stream_checked(&path, LEVEL, Encoding::Audio(audio), |tmp| {
         // Rewrite the new file with one FLAC byte flipped, so it still decodes as zstd.
         let mut bytes = decoded(tmp);
         let n = bytes.len();

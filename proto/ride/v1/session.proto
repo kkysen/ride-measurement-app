@@ -7,6 +7,9 @@
 //   a `SensorChunk` for `STREAM_KIND_SENSOR` streams, a `RecordChunk` for `STREAM_KIND_RECORDS` streams,
 //   an `AudioChunk` for `STREAM_KIND_AUDIO` streams.
 //   Frames are self-contained, so a crash loses at most the frame being written.
+//   Post-ride recompression may instead write a sensor stream as a zstd skippable frame holding
+//   `ride.sensor-columns.v1`, then one zstd frame of columns that decode to the same chunks byte for byte
+//   (`crates/session/src/sensor_columns.rs`).
 //
 // Length-delimited means a varint byte length followed by the message, as in `writeDelimitedTo`.
 // All values are stored bit-exactly: decoding must return exactly what Android delivered.
