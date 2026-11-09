@@ -236,6 +236,14 @@ pub fn same_spot_lines(station: &Station) -> Vec<String> {
 /// How close (m) two listed stations are to be at one spot (see [`same_spot_lines`]).
 const SAME_SPOT_M: f64 = 1.0;
 
+/// The listed stations of `station`'s complex (within [`COMPLEX_M`]), itself among them.
+pub fn complex(station: &Station) -> impl Iterator<Item = &'static Station> {
+    let at = (station.lat, station.lon);
+    all()
+        .iter()
+        .filter(move |s| meters(at, (s.lat, s.lon)) <= COMPLEX_M)
+}
+
 /// Whether `line` stops at `station` or another part of its complex.
 pub fn serves(station: &Station, line: &str) -> bool {
     station.lines.iter().any(|l| l == line) || complex_lines(station).iter().any(|l| l == line)

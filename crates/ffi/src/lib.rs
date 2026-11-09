@@ -407,6 +407,11 @@ impl Fusion {
         self.lock().on_transit(t_ns, request_unix_ms, &body);
     }
 
+    /// The wall clock (`System.currentTimeMillis`) at elapsed realtime `t_ns`: says which lines run then.
+    pub fn on_clock(&self, t_ns: i64, unix_ms: i64) {
+        self.lock().on_clock(t_ns, unix_ms);
+    }
+
     /// The registered LTE cell's ID, if any, at the time it was recorded: names the station.
     pub fn on_cell(&self, t_ns: i64, cell_id: Option<i64>) {
         self.lock().on_cell(t_ns, cell_id);

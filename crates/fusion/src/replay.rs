@@ -435,6 +435,11 @@ pub fn replay_with_hook(
     fusion.set_max_speed(options.max_speed_mps);
     fusion.set_track_hold(!options.no_track_hold);
     fusion.set_live_smoothing(!options.no_live_smoothing);
+    // The time of day, as the phone gives it at the start: when lines run.
+    fusion.on_clock(
+        session.info.start_elapsed_realtime_ns,
+        session.info.start_unix_ms,
+    );
     // Downloaded orbits (`just orbits`), for constellations whose navigation messages the phone missed.
     for eph in ride_gnss::orbits::read_session_orbits(&session.dir)? {
         fusion.navigator_mut().add_ephemeris(eph);

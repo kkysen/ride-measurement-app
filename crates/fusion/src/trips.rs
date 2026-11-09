@@ -19,6 +19,9 @@ const NEAR_M: f64 = 250.0;
 pub const SLACK_S: i64 = 45;
 /// Trips not in a feed for this long (s) are dropped.
 const KEEP_S: i64 = 7_200;
+/// How far (s) from a time a trip's stop at a station counts as running there then (see
+/// [`Trips::lines_listed_at`]): a late-night line's headway is up to 20 minutes.
+pub const LISTED_S: i64 = 900;
 /// Another route's best trip within this (s) of the best's mean error leaves the route undecided.
 const AMBIGUOUS_S: f64 = 15.0;
 
@@ -252,6 +255,46 @@ impl Trips {
         trip.stops
             .values()
             .any(|&(a, _)| a < here && a > departed + SLACK_S)
+    }
+
+    /// Unix ns minus elapsed realtime ns, once polled.
+    pub fn offset_ns(&self) -> Option<i64> {
+        self.offset_ns
+    }
+
+    /// Whether the feeds list any trip of `line` (its feed was polled, and it runs).
+    pub fn lists_line(&self, line: &str) -> bool {
+        self.trips.values().any(|t| line_of_route(&t.route) == line)
+    }
+
+    /// The lines of the trips the feeds list at `station`'s own platform within [`LISTED_S`] of `t_ns`:
+    /// what's running there then, local or express, as the A running local on Central Park West on weekends
+    /// (Sun Nov 8, 2:40 pm), where the MTA lists only the B and C. None when the feeds weren't polled by then.
+    pub fn lines_listed_at(&self, station: &Station, t_ns: i64) -> Option<Vec<String>> {
+        let at = (t_ns + self.offset_ns?).div_euclid(1_000_000_000);
+        let (first, last) = self.polled_s?;
+        // The feeds list a trip's stops ahead only: polls from before `t_ns` saw any train there then.
+        if at < first || at > last + LISTED_S {
+            return None;
+        }
+        let own = own_stop_ids(station);
+        let mut lines: Vec<String> = self
+            .trips
+            .values()
+            .filter(|trip| {
+                own.iter()
+                    .filter_map(|id| trip.stops.get(*id))
+                    .any(|&(a, d)| a <= at + LISTED_S && d >= at - LISTED_S)
+            })
+            // The shuttles (`GS`, `FS`, `H`) as the MTA's station list names them.
+            .map(|trip| match trip.route.as_str() {
+                "GS" | "FS" | "H" => "S".to_string(),
+                route => line_of_route(route),
+            })
+            .collect();
+        lines.sort();
+        lines.dedup();
+        Some(lines)
     }
 
     /// Whether the trip stops at `station`'s platform (or one listed at its spot): the feeds list it there,

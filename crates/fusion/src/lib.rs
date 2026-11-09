@@ -8,6 +8,7 @@ pub mod gtfs_rt;
 pub mod live_speed;
 pub mod position;
 pub mod replay;
+pub mod service;
 pub mod speed_colors;
 pub mod stations;
 pub mod stops;

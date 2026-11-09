@@ -792,6 +792,8 @@ pub struct Fusion {
     altimeter: crate::vertical::Altimeter,
     /// Every trip the GTFS-realtime feeds have listed.
     trips: trips::Trips,
+    /// Unix ns minus elapsed realtime ns, from [`Self::on_clock`]: the time of day without feeds.
+    clock_offset_ns: Option<i64>,
     /// When the subway detector switched, and to what.
     subway_changes: Vec<(i64, bool)>,
     /// Whether the smoothed speeds are held to the track between stations (see [`crate::track::hold_to_track`]).
@@ -905,6 +907,7 @@ impl Fusion {
             car_since: None,
             altimeter: Default::default(),
             trips: trips::Trips::default(),
+            clock_offset_ns: None,
             subway_changes: Vec::new(),
             track_hold: true,
             no_live_smoothing: false,
@@ -984,6 +987,64 @@ impl Fusion {
                 Pending::Transit(stops.into_boxed_slice(), request_unix_ms),
             );
         }
+    }
+
+    /// The wall clock (unix ms) at elapsed realtime `t_ns`: says when lines run (see [`crate::service`])
+    /// before or without feeds.
+    pub fn on_clock(&mut self, t_ns: i64, unix_ms: i64) {
+        self.clock_offset_ns = Some(unix_ms * 1_000_000 - t_ns);
+    }
+
+    /// The lines running at `station` at `t`: those the feeds list at its platform then (the A, local on weekends,
+    /// on Central Park West, Sun Nov 8, 2:40 pm), and those of its lines that run then by the schedule
+    /// (no B on weekends) but that the feeds list elsewhere and not here; its lines as listed if that leaves none.
+    /// A line the feeds have no trip of at all is up to the schedule: its feed may not have been polled.
+    fn running_lines(&self, station: &Station, t: i64) -> Vec<String> {
+        let listed = self.trips.lines_listed_at(station, t);
+        let complex = stations::complex_lines(station);
+        let offset = self.trips.offset_ns().or(self.clock_offset_ns);
+        let scheduled = |l: &str| {
+            offset.is_none_or(|o| crate::service::runs(l, (t + o).div_euclid(1_000_000_000)))
+        };
+        let mut running: Vec<String> = station
+            .lines
+            .iter()
+            .filter(|l| scheduled(l))
+            .filter(|l| {
+                listed
+                    .as_ref()
+                    .is_none_or(|listed| listed.contains(l) || !self.trips.lists_line(l))
+            })
+            .cloned()
+            .chain(
+                // Not another platform's line: one place in the feeds for W 4 St's two levels.
+                listed
+                    .clone()
+                    .into_iter()
+                    .flatten()
+                    .filter(|l| station.lines.contains(l) || !complex.contains(l)),
+            )
+            .collect();
+        running = stations::in_order(running);
+        running.dedup();
+        if running.is_empty() {
+            station.lines.clone()
+        } else {
+            running
+        }
+    }
+
+    /// Whether `line` stops at `station` at `t`: by the MTA's list of its complex, or the feeds list it at the platform
+    /// then (the A at 103 St, Sun Nov 8, 2:40 pm).
+    /// Any platform of its complex: the late-night 2, local on the 1's platform at 59 St-Columbus Circle
+    /// (Fri Oct 23, 1:12 am), named at the A/B/C/D one.
+    fn stops_here(&self, station: &Station, line: &str, t: i64) -> bool {
+        stations::serves(station, line)
+            || stations::complex(station).any(|s| {
+                self.trips
+                    .lines_listed_at(s, t)
+                    .is_some_and(|l| l.iter().any(|l| l == line))
+            })
     }
 
     /// The train's route: its last few named stops in the subway since the rider last walked off a train
@@ -1293,18 +1354,22 @@ impl Fusion {
         let walked = self.walked(prev, at);
         // By complex: a stop named at another of its platforms (Queensboro Plaza's 7 one, from the N/W,
         // Tue Nov 3, 6:10 pm) is still a stop of the lines the train was on.
+        // Only lines running here then (see [`Self::running_lines`]), but another platform's of the complex.
+        let running = self.running_lines(station, at);
         let both: Vec<String> = lines
             .iter()
-            .filter(|l| stations::serves(station, l))
+            .filter(|l| {
+                running.contains(l) || !station.lines.contains(l) && self.stops_here(station, l, at)
+            })
             .cloned()
             .collect();
         let lines = if both.is_empty() || walked {
             // Started over here, but not as a line that passed a station on the way (see [`Self::passes`]).
-            let fresh = self.without_passed(&station.lines, prev, at);
-            if fresh.iter().all(|l| station.lines.contains(l)) {
+            let fresh = self.without_passed(&running, prev, at);
+            if !fresh.is_empty() && fresh.iter().all(|l| running.contains(l)) {
                 fresh
             } else {
-                station.lines.clone()
+                running
             }
         } else {
             both
@@ -1470,13 +1535,13 @@ impl Fusion {
         let route = self
             .route(t, boarded_after, &records)
             .filter(|_| aboard)
-            .filter(|r| station.as_ref().is_none_or(|s| stations::serves(s, r)));
+            .filter(|r| station.as_ref().is_none_or(|s| self.stops_here(s, r, t)));
         // The route if the feeds give it, else the lines the train has been on, else the station's:
         // between trains, all the lines of its complex, any of which the rider may take next.
         let riding_here = (!riding.is_empty() && aboard).then(|| {
             let at: Vec<String> = riding
                 .iter()
-                .filter(|l| station.as_ref().is_none_or(|s| stations::serves(s, l)))
+                .filter(|l| station.as_ref().is_none_or(|s| self.stops_here(s, l, t)))
                 .cloned()
                 .collect();
             if at.is_empty() { riding.clone() } else { at }
@@ -1490,12 +1555,12 @@ impl Fusion {
                 .unwrap_or_default(),
             None => station
                 .as_ref()
-                .map(|s| s.lines.clone())
+                .map(|s| self.running_lines(s, t))
                 .unwrap_or_default(),
         };
         // Shown when no route is: the lines the train has been on, else the station's.
         let shown_lines = riding_here
-            .or_else(|| station.as_ref().map(|s| s.lines.clone()))
+            .or_else(|| station.as_ref().map(|s| self.running_lines(s, t)))
             .unwrap_or_default();
         Status {
             mode,

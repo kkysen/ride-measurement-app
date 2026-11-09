@@ -102,7 +102,12 @@ object LiveSpeed {
         handler = Handler(t.looper)
         lateInputs = 0uL
         reminder = StayReminder(context.applicationContext)
-        safely { fusion = Fusion() }
+        safely {
+            fusion = Fusion().also {
+                // The time of day: which lines run then (the B not on weekends).
+                it.onClock(SystemClock.elapsedRealtimeNanos(), System.currentTimeMillis())
+            }
+        }
         handler?.post(publish)
         handler?.postDelayed(smooth, SMOOTH_MS)
     }
