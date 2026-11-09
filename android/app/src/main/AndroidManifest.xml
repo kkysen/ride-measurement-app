@@ -48,6 +48,10 @@
                 android:value="Continuous sensor logging for a ride the user started" />
         </service>
         <service
+            android:name=".MicProbeService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+        <service
             android:name=".WalletListener"
             android:exported="true"
             android:label="Ride Logger: Google Wallet taps"

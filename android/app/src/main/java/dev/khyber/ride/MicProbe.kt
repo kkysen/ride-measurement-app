@@ -1,12 +1,19 @@
 package dev.khyber.ride
 
 import android.annotation.SuppressLint
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
 import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.IBinder
 import android.util.Log
 import java.io.File
 import kotlin.math.log10
@@ -18,6 +25,8 @@ import kotlin.math.sqrt
  * says were active, each channel's level, and which channels were copies of another or silent.
  * Only run on request (`adb shell am start -n dev.khyber.ride/.MainActivity --ez probe_mics true`),
  * never while recording a ride, to choose what [AudioStreamRecorder] opens.
+ * It runs in [MicProbeService], a foreground service, since Android silences the microphone of an app
+ * that's left the screen: the phone can be locked or used for something else meanwhile.
  */
 @SuppressLint("MissingPermission") // Only run after `RECORD_AUDIO` is granted.
 object MicProbe {
@@ -42,7 +51,15 @@ object MicProbe {
         )
 
     fun run(context: Context) {
-        Thread({ Health.guard("mic probe") { probe(context) } }, "mic probe").start()
+        context.startForegroundService(Intent(context, MicProbeService::class.java))
+    }
+
+    /** Runs the probe, then stops [service]. */
+    fun start(service: Service) {
+        Thread({
+            Health.guard("mic probe") { probe(service) }
+            service.stopSelf()
+        }, "mic probe").start()
     }
 
     private fun probe(context: Context) {
@@ -122,5 +139,33 @@ object MicProbe {
         } finally {
             record.release()
         }
+    }
+}
+
+/** Keeps the microphone usable for [MicProbe] while the app isn't on screen. */
+class MicProbeService : Service() {
+    private var started = false
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Microphone check", NotificationManager.IMPORTANCE_LOW))
+        val notification = Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("Checking the microphones (about 7 min)")
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setOngoing(true)
+            .build()
+        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        if (!started) {
+            started = true
+            MicProbe.start(this)
+        }
+        return START_NOT_STICKY
+    }
+
+    private companion object {
+        const val CHANNEL_ID = "mic probe"
+        const val NOTIFICATION_ID = 3
     }
 }
