@@ -293,10 +293,11 @@ pub fn replay_with_hook(
                     };
                     records.push((fix.elapsed_realtime_ns, Event::Fix(Box::new(fix))));
                 }
-                // Android's own location, as the app passes it on.
+                // Android's own location, when the app recorded it, as it passes it on:
+                // a fused fix's own time can be seconds old (cached, up to 30 s), so it would arrive late.
                 Some(Payload::Location(l)) if l.provider == "fused" && !l.is_mock => {
                     records.push((
-                        l.elapsed_realtime_nanos,
+                        received,
                         Event::NetworkFix(Box::new((
                             l.latitude_degrees,
                             l.longitude_degrees,

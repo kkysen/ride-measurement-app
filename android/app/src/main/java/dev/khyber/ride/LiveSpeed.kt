@@ -160,15 +160,14 @@ object LiveSpeed {
         h.post { safely { fusion?.onWifiScan(tNs, ssids) } }
     }
 
-    /** Android's own (fused) location: Rust names the station from it underground. */
-    fun onNetworkFix(location: Location) {
+    /** Android's own (fused) location, at its recorded time [tNs]: Rust names the station from it underground. */
+    fun onNetworkFix(tNs: Long, location: Location) {
         val h = handler ?: return
-        val t = location.elapsedRealtimeNanos
         val lat = location.latitude
         val lon = location.longitude
         lastPosition = lat to lon
         val accuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else null
-        h.post { safely { fusion?.onNetworkFix(t, lat, lon, accuracy) } }
+        h.post { safely { fusion?.onNetworkFix(tNs, lat, lon, accuracy) } }
     }
 
     /** A Bluetooth advertisement at its own time: Rust finds the rider's subway car from the cars' beacons. */

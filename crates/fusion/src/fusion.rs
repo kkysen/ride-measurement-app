@@ -961,6 +961,7 @@ impl Fusion {
 
     /// Android's own location (the fused provider's, as recorded): underground, Google's database places the cell and
     /// Wi-Fi at station level (on `182135`, 110 St to 14 St station by station, mostly within 50 m).
+    /// At `t_ns`, when it was recorded: its own time can be seconds old (a cached fix), which would arrive late.
     pub fn on_network_fix(&mut self, t_ns: i64, lat: f64, lon: f64, accuracy_m: Option<f64>) {
         self.arrive(
             t_ns,

@@ -89,8 +89,9 @@ class GnssRecorder(
     }
 
     private val fusedListener = LocationListener { location ->
-        locations.add { this.location = location.toProto() }
-        LiveSpeed.onNetworkFix(location)
+        // At the time it was recorded, as replay feeds it: a fused fix can be seconds old (a cached one, up to 30 s).
+        val t = locations.add { this.location = location.toProto() } ?: return@LocationListener
+        LiveSpeed.onNetworkFix(t, location)
     }
 
     @SuppressLint("MissingPermission")
