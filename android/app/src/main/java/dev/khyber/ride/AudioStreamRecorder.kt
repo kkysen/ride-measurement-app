@@ -27,19 +27,27 @@ import uniffi.ride_ffi.StreamWriter
  * Lossless 16-bit PCM from every microphone at once (one interleaved channel each) at the input's highest
  * native rate, into the `audio` stream, two seconds per chunk, with `AudioRecord` boot-time timestamps
  * so it lines up with the sensors.
- * Uses the `UNPROCESSED` source when the phone supports it, so no gain control or noise suppression alters it.
+ * Uses the `DEFAULT` source on the default input: on the S25 (Galaxy SM-S947U1) it's the only way both microphones
+ * are recorded (`MicProbe`, 2026-11-09); `VOICE_RECOGNITION` and `VOICE_COMMUNICATION` give only the bottom one,
+ * asking for a particular microphone gives it twice, `UNPROCESSED` only the bottom one with a strange 2nd channel,
+ * and `MIC` and `CAMCORDER` clipped the back one on speech.
  * The microphones, what the input supports, and any format Android refused are all written into the session.
  */
 @SuppressLint("MissingPermission") // Only made after `RECORD_AUDIO` is checked.
 class AudioStreamRecorder(context: Context, dir: File) {
     private val audioManager = context.getSystemService(AudioManager::class.java)
-    private val unprocessed = audioManager
-        .getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED) == "true"
-    private val source = if (unprocessed) MediaRecorder.AudioSource.UNPROCESSED else MediaRecorder.AudioSource.VOICE_RECOGNITION
-    /** The phone's own microphone, asked for so a headset's doesn't take over when one is connected. */
-    private val builtInMic = audioManager
-        .getDevices(AudioManager.GET_DEVICES_INPUTS)
-        .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+    private val source = MediaRecorder.AudioSource.DEFAULT
+    private val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+    /** The phone's own microphone, for its rates and channels. */
+    private val builtInMic = inputs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+    /**
+     * Asked for only when a headset or other microphone is connected, so it doesn't take over:
+     * asking for the phone's own records one microphone, not both.
+     */
+    private val preferBuiltIn = inputs.any {
+        it.type != AudioDeviceInfo.TYPE_BUILTIN_MIC && it.type != AudioDeviceInfo.TYPE_TELEPHONY &&
+            it.type != AudioDeviceInfo.TYPE_REMOTE_SUBMIX && it.type != AudioDeviceInfo.TYPE_FM_TUNER
+    }
     private val microphones = Health.guard("microphones") { audioManager.microphones } ?: emptyList()
     private val refused = ArrayList<String>()
     private val record: AudioRecord = open()
@@ -66,7 +74,7 @@ class AudioStreamRecorder(context: Context, dir: File) {
                     .setSampleRateHz(sampleRateHz)
                     .setChannels(channels)
                     .setAudioSource(source)
-                    .setAudioSourceName(if (unprocessed) "UNPROCESSED" else "VOICE_RECOGNITION")
+                    .setAudioSourceName("DEFAULT")
                     .setInputDevice(builtInMic?.let { "${it.productName} ${it.address}".trim() } ?: "")
                     .addAllMicrophones(microphones.map(::microphoneInfo))
                     .addAllDeviceSampleRates(builtInMic?.sampleRates?.toList() ?: emptyList())
@@ -81,14 +89,14 @@ class AudioStreamRecorder(context: Context, dir: File) {
 
     /**
      * The highest native rate the input lists (48 kHz if it lists none: Android resamples any rate asked for,
-     * and more than native is no more data), with a channel per microphone, or as many as the input says it has
-     * if more. Fewer channels only if Android refuses, each refusal kept for the session.
+     * and more than native is no more data), with a channel per microphone (more are silent or copies on the S25),
+     * or as many as the input says it has if Android lists no microphones.
+     * Fewer channels only if Android refuses, each refusal kept for the session.
      */
     private fun open(): AudioRecord {
         val rates = builtInMic?.sampleRates?.filter { it > 0 }?.sortedDescending()?.takeIf { it.isNotEmpty() } ?: listOf(48_000)
         val builtIn = microphones.count { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
-        val most = maxOf(
-            builtIn,
+        val most = if (builtIn > 0) builtIn else maxOf(
             builtInMic?.channelCounts?.maxOrNull() ?: 0,
             builtInMic?.channelIndexMasks?.maxOfOrNull { Integer.bitCount(it) } ?: 0,
             1,
@@ -129,7 +137,7 @@ class AudioStreamRecorder(context: Context, dir: File) {
             r.release()
             return null
         }
-        builtInMic?.let { r.setPreferredDevice(it) }
+        if (preferBuiltIn) builtInMic?.let { r.setPreferredDevice(it) }
         return r
     }
 
@@ -265,22 +273,30 @@ private fun microphoneInfo(m: AndroidMicrophoneInfo): MicrophoneInfo {
 private class ChannelSameness(private val channels: Int, private val frames: Int) {
     private var seen = 0
     private val differs = BooleanArray(channels)
-    private var done = channels < 2
+    private val sound = BooleanArray(channels)
+    private var done = false
 
     fun add(buf: ByteArray, n: Int): String? {
         if (done) return null
         val frameBytes = 2 * channels
         var f = 0
         while (f + frameBytes <= n && seen < frames) {
-            for (c in 1 until channels) {
-                if (buf[f + 2 * c] != buf[f] || buf[f + 2 * c + 1] != buf[f + 1]) differs[c] = true
+            for (c in 0 until channels) {
+                if (buf[f + 2 * c] != 0.toByte() || buf[f + 2 * c + 1] != 0.toByte()) sound[c] = true
+                if (c > 0 && (buf[f + 2 * c] != buf[f] || buf[f + 2 * c + 1] != buf[f + 1])) differs[c] = true
             }
             f += frameBytes
             seen++
         }
         if (seen < frames) return null
         done = true
-        val copies = (1 until channels).filter { !differs[it] }
-        return if (copies.isEmpty()) null else "channels $copies were exact copies of channel 0 for the first ${frames} frames"
+        val silent = (0 until channels).filter { !sound[it] }
+        val copies = (1 until channels).filter { !differs[it] && it !in silent }
+        val problems = listOfNotNull(
+            copies.takeIf { it.isNotEmpty() }?.let { "channels $it were exact copies of channel 0" },
+            silent.takeIf { it.isNotEmpty() }?.let { "channels $it were silent" },
+        )
+        return if (problems.isEmpty()) null else problems.joinToString("; ") + " for the first $frames frames"
     }
 }
+
