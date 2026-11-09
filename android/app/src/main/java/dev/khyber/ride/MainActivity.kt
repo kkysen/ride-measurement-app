@@ -197,6 +197,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Units.load(this)
         Scanning.load(this)
+        if (intent.getBooleanExtra("probe_mics", false)) MicProbe.run(this)
         permissions.launch(
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
