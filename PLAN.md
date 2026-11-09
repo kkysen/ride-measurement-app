@@ -1268,6 +1268,22 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     on Tue Oct 27, 10:04 pm: after leaving 138 St (10:17 pm), then a true stop in the tunnel,
     and before West Farms Sq (10:36 pm).
     Check each against the lurch, the closing and the cell; the curve one may be the yaw rate (item 2).
+    Partly done (`crates/fusion/src/stops.rs` `CURVE_RAD_S`; scored by the untracked scratch
+    `crates/cli/examples/falsestops.rs`, `skip_still`, over the 37 rides with legs). The six, classified:
+    - A curve's pull read as braking: before Wall St (8:19:49 pm), turning 0.13 rad/s at about 7 m/s,
+      the lurch's 0.92 m/s^2. Fixed: a lurch turning 0.08 to 0.25 rad/s is a stop only with a closing heard
+      (live: no likely hold). 109 to 99 stops with no tap and no closing, 356 to 354 backed
+      (the 2 lost had only an "at station" tap: Tue Oct 20, 6:41 pm, at 7:26 pm; Tue Oct 20, 9:44 pm, at 9:55 pm);
+      tapped stops found 239 of 303 and 82 missed, both unchanged; live ratio 31 legs under 0.5, 93 within
+      0.7 to 1.3 (91), median 0.97 (0.95), 49 over 1.3 (48), over 205 legs (204).
+    - Slowing mid-leg, a lurch with no closing, no turn: before Canal (8:26:49 pm), after 138 St (10:16:58 pm),
+      after Borough Hall (8:16:18 pm, 34 s after a hold at 8:15:44 pm). Open: nothing found that tells them from
+      real stops with no closing heard (tapped ones at 1:52:30 pm, 11:41:09 pm look the same: departures missed,
+      the live speed on, the braking as short), nor from item 7's holds (Lorimer's has no start before the station).
+    - A closing heard at speed: Joralemon (1:41:51 pm, 39 mph, cell 29950588 in the tube), before West Farms Sq
+      (10:35:43 pm, 17 mph). Open: the door detector's false cycles.
+    Item 31 has another cause: no lurch found at all at 10:29 and 10:32 pm, and the subway flag drops at each
+    station there (10:26 to 10:45 pm), so no likely hold.
 31. Stops on the 5 above ground not counted, or at least no dwell time shown and not 0 mph
     (Tue Oct 27, 10:04 pm, at 10:29 and 10:32 pm).
 32. Transfer held wrongly: "false resumption of transfer" once the train moved south from Woodlawn
