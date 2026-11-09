@@ -45,7 +45,7 @@ fn main() -> anyhow::Result<()> {
             .and_then(|(_, st)| st.route.clone())
             .unwrap_or_default();
         println!(
-            "{name} PASS {} to {} {} ({}) min {:.0} mph, route before {}{}",
+            "{name} PASS {} to {} {} ({}) min {:.0} mph, route before {}{}{}",
             clock(p.first_ns),
             clock(p.last_ns),
             p.station.name,
@@ -56,6 +56,11 @@ fn main() -> anyhow::Result<()> {
                 " RULED OUT"
             } else {
                 ""
+            },
+            match p.skipped_by_a_trip {
+                Some(true) => ", a trip skips it",
+                Some(false) => ", NO TRIP SKIPS IT (not counted)",
+                None => ", no feeds",
             }
         );
         // The rider's taps then: a stop or the doors tapped while "passing" is a stop taken for a pass.
