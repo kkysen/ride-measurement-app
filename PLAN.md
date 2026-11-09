@@ -1419,6 +1419,17 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Service alerts (the "delay" text) aren't polled; add the subway alerts feed.
 41. Live speed inputs late: both of Sun Nov 8's rides reported "inputs arrived over 1500 ms late" from the start,
     356 in the first 21:45 of Sun Nov 8, 9:29 pm, and 344 on Sat Nov 7, 5:59 pm; find what's late (which sensor or the feeds), and why.
+    Found (2026-11-09, scratch `lateness` example: each record's own time against its `received`): two streams, a few at a time,
+    no sensor or audio stalls (the count climbs by 1 to 3 per report).
+    - Fused fixes: their own time is when Android computed them, sometimes cached (up to 30 s old);
+      120 to 186 a ride over 1.5 s. A false alarm in effect, they only name stations:
+      fixed in `c3f38c5`, live and replay feed them at their recorded time, as Wi-Fi scans and cells.
+    - Subway car beacons: really late, BLE's 2 s report delay (`BleRecorder.kt`) plus scanning,
+      median 1.7 s and up to 5.5 s behind (409 of 766 on Sun Nov 8, 9:29 pm, over 1.5 s).
+      They reach the speed (`on_car_accel`), so live applies them out of order and differs from a replay there.
+      Not fixed: needs a choice, either `SETTLE_NS` at 6 s (every settled output 4.5 s later live,
+      and `estimate` steps 4 times the pending inputs each 500 ms: measure it first),
+      or a shorter report delay (more wakeups; helps only if batching, not the scan's duty cycle, is most of it).
 42. Better compression (rider, 2026-11-09), all bit-exact lossless, benchmarked on real rides first:
     - Audio is 95% of a ride (Sun Nov 8, 2:40 pm: 312 of 328 MB). First stop storing copied and silent channels (item 25),
       then compare FLAC at its highest settings, WavPack (`-hhx6`), MPEG-4 ALS and OptimFROG on the 2-microphone audio;
