@@ -1490,7 +1490,7 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     On copies of Sun Nov 8, 2:40 pm and 9:29 pm (`data/work/columns-check/`): accel 8.74 to 4.11 MB and 6.03 to 2.88, gyro 8.17 to 3.50 and 5.63 to 2.13,
     mag 2.40 to 0.73 and 1.64 to 0.49, pressure 0.18 to 0.13, light 0.08 to 0.05, as benchmarked;
     `ride summary`, `ride csv` of each stream, and whole and live replays are identical to the originals'.
-    Left: not on the phone yet (needs a build and install); phone timing; already-recompressed rides get it only by running `ride recompress` again.
+    On the phone in 0.1.25 (installed 2026-11-09, 9:24 am, from `f63ff3f`). Left: phone timing; already-recompressed rides get it only by running `ride recompress` again.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
