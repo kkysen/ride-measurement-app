@@ -1376,6 +1376,12 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
 40. A held train is a delay, not a stop (Sun Nov 8, 9:29 pm): the A held from 9:35 pm to 9:46 pm,
     "delay on A at Nostrand, unsanitary condition on A train in front of us".
     A label for item 26; check the app showed it as one hold, and the dwell isn't counted as a normal stop's.
+    The feeds have it (checked 2026-11-09): the rider was on trip `127600_A..N20X002` (stopped at Hoyt-Schermerhorn 9:50:53 pm,
+    the rider's next stop 9:50:55 pm). It was shown "in transit to" Hoyt from 9:35:29 pm while still at Nostrand,
+    and its Hoyt arrival slid 10 s each poll from 9:40 pm on (9:40 to 9:51 pm) until it moved at 9:46 pm.
+    The A ahead (`124500_A..N55R`) sat at Hoyt from 9:34:44 to 9:45:45 pm: the train with the unsanitary condition.
+    So a hold is visible live: our trip's next arrival sliding with the clock, and the trip ahead stopped for minutes.
+    Service alerts (the "delay" text) aren't polled; add the subway alerts feed.
 41. Live speed inputs late: both of Sun Nov 8's rides reported "inputs arrived over 1500 ms late" from the start,
     356 in the first 21:45 of Sun Nov 8, 9:29 pm, and 344 on Sat Nov 7, 5:59 pm; find what's late (which sensor or the feeds), and why.
 
