@@ -220,6 +220,7 @@ class AudioStreamRecorder(context: Context, dir: File) {
                     channels,
                     readFirstFrame,
                     buf.copyOf(n),
+                    false,
                     if (stamped) listOf(ts.framePosition) else emptyList(),
                     if (stamped) listOf(ts.nanoTime) else emptyList(),
                 )

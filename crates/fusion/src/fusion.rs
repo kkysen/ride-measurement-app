@@ -323,27 +323,44 @@ pub struct AudioSamples {
 }
 
 impl AudioSamples {
-    /// From 16-bit little-endian PCM as recorded, `channels` interleaved (one per microphone):
+    /// From PCM as recorded (16-bit or float, little-endian), `channels` interleaved (one per microphone):
     /// each frame is the mean of its channels, live and replayed alike.
+    /// Float frames are scaled to 16-bit full scale, rounded, and clamped.
     pub fn from_pcm(
         first_frame: i64,
-        pcm_s16le: &[u8],
+        pcm: ride_session::Pcm<'_>,
         channels: usize,
         timestamps: Vec<(i64, i64)>,
     ) -> Self {
         let channels = channels.max(1);
-        let samples = pcm_s16le
-            .as_chunks::<2>()
-            .0
-            .chunks_exact(channels)
-            .map(|frame| {
-                let sum: i32 = frame
-                    .iter()
-                    .map(|&b| i32::from(i16::from_le_bytes(b)))
-                    .sum();
-                (sum / channels as i32) as i16
-            })
-            .collect();
+        let samples = match pcm {
+            ride_session::Pcm::S16(b) => b
+                .as_chunks::<2>()
+                .0
+                .chunks_exact(channels)
+                .map(|frame| {
+                    let sum: i32 = frame
+                        .iter()
+                        .map(|&b| i32::from(i16::from_le_bytes(b)))
+                        .sum();
+                    (sum / channels as i32) as i16
+                })
+                .collect(),
+            ride_session::Pcm::F32(b) => b
+                .as_chunks::<4>()
+                .0
+                .chunks_exact(channels)
+                .map(|frame| {
+                    let sum: f64 = frame
+                        .iter()
+                        .map(|&b| f64::from(f32::from_le_bytes(b)))
+                        .sum();
+                    let s = (sum / channels as f64 * 32_768.0).round();
+                    // NaN goes to 0.
+                    s.clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
+                })
+                .collect(),
+        };
         Self {
             first_frame,
             samples,
@@ -4680,5 +4697,37 @@ mod tests {
         let mut s = stop(100);
         s.0.braking_since_ns = 95 * S;
         assert!(!departure_fade(&s.0, &[cycle(60, 95)]));
+    }
+}
+
+#[cfg(test)]
+mod audio_samples_tests {
+    use super::AudioSamples;
+    use ride_session::Pcm;
+
+    #[test]
+    fn float_pcm_gives_the_16_bit_samples_it_holds() {
+        let ints: Vec<i16> = vec![0, 1, -1, 1000, -1000, i16::MAX, i16::MIN, 12_345];
+        let s16: Vec<u8> = ints.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let f32: Vec<u8> = ints
+            .iter()
+            .flat_map(|&s| (f32::from(s) / 32_768.0).to_le_bytes())
+            .collect();
+        let a = AudioSamples::from_pcm(0, Pcm::S16(&s16), 2, Vec::new()).samples;
+        let b = AudioSamples::from_pcm(0, Pcm::F32(&f32), 2, Vec::new()).samples;
+        assert_eq!(a.len(), 4);
+        // The 16-bit mean truncates toward zero, the float one rounds: within one step.
+        assert!(
+            a.iter().zip(&b).all(|(x, y)| (x - y).abs() <= 1),
+            "{a:?} {b:?}"
+        );
+        let over: Vec<u8> = [1.5f32, f32::NAN, -2.0, 0.5]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        assert_eq!(
+            AudioSamples::from_pcm(0, Pcm::F32(&over), 1, Vec::new()).samples,
+            vec![i16::MAX, 0, i16::MIN, 16_384]
+        );
     }
 }

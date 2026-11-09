@@ -361,11 +361,10 @@ fn audio_summary(
     let contents = session.read_audio(name)?;
     let rate = info.map_or(0, |i| i.sample_rate_hz);
     let channels = info.map_or(1, |i| usize::try_from(i.channels).unwrap_or(1).max(1));
-    let frame_bytes = 2 * channels;
     let frames: usize = contents
         .chunks
         .iter()
-        .map(|c| c.pcm_s16le.len() / frame_bytes)
+        .map(|c| c.pcm().frames(channels))
         .sum();
     println!(
         "{name}: {} chunks, {frames} frames, {channels} channels",
@@ -378,7 +377,7 @@ fn audio_summary(
         if c.first_frame != expected {
             discontinuities += 1;
         }
-        expected = c.first_frame + (c.pcm_s16le.len() / frame_bytes) as i64;
+        expected = c.first_frame + c.pcm().frames(channels) as i64;
     }
     let timestamps: Vec<_> = contents.chunks.iter().flat_map(|c| &c.timestamps).collect();
     if rate > 0 {
@@ -410,25 +409,45 @@ fn wav(session: &Session, stream: &str, output: &std::path::Path) -> anyhow::Res
         .and_then(|s| s.audio.clone())
         .with_context(|| format!("no audio stream {stream}"))?;
     let contents = session.read_audio(stream)?;
-    let data_len: usize = contents.chunks.iter().map(|c| c.pcm_s16le.len()).sum();
+    // 32-bit float WAV (format 3) for float chunks, 16-bit PCM otherwise; a stream is one or the other.
+    let float = contents
+        .chunks
+        .iter()
+        .any(|c| matches!(c.pcm(), ride_session::Pcm::F32(_)));
+    if contents.chunks.iter().any(|c| {
+        matches!(c.pcm(), ride_session::Pcm::F32(_)) != float && !c.pcm().bytes().is_empty()
+    }) {
+        anyhow::bail!("{stream} mixes 16-bit and float chunks");
+    }
+    let data_len: usize = contents.chunks.iter().map(|c| c.pcm().bytes().len()).sum();
     let channels = u16::try_from(info.channels)?;
     let rate = u32::try_from(info.sample_rate_hz)?;
+    let sample_bytes: u16 = if float { 4 } else { 2 };
     let data_len = u32::try_from(data_len).context("audio too long for one WAV file")?;
+    let frames = data_len / u32::from(channels.max(1) * sample_bytes);
+    // A float WAV's `fmt ` has a (zero) extension size, and a `fact` chunk with the frame count.
+    let (fmt_len, fact_len) = if float { (18u32, 12u32) } else { (16, 0) };
     let mut out = std::io::BufWriter::new(std::fs::File::create(output)?);
     out.write_all(b"RIFF")?;
-    out.write_all(&(36 + data_len).to_le_bytes())?;
+    out.write_all(&(4 + 8 + fmt_len + fact_len + 8 + data_len).to_le_bytes())?;
     out.write_all(b"WAVEfmt ")?;
-    out.write_all(&16u32.to_le_bytes())?;
-    out.write_all(&1u16.to_le_bytes())?; // PCM
+    out.write_all(&fmt_len.to_le_bytes())?;
+    out.write_all(&(if float { 3u16 } else { 1 }).to_le_bytes())?; // IEEE float or PCM
     out.write_all(&channels.to_le_bytes())?;
     out.write_all(&rate.to_le_bytes())?;
-    out.write_all(&(rate * u32::from(channels) * 2).to_le_bytes())?;
-    out.write_all(&(channels * 2).to_le_bytes())?;
-    out.write_all(&16u16.to_le_bytes())?;
+    out.write_all(&(rate * u32::from(channels) * u32::from(sample_bytes)).to_le_bytes())?;
+    out.write_all(&(channels * sample_bytes).to_le_bytes())?;
+    out.write_all(&(sample_bytes * 8).to_le_bytes())?;
+    if float {
+        out.write_all(&0u16.to_le_bytes())?;
+        out.write_all(b"fact")?;
+        out.write_all(&4u32.to_le_bytes())?;
+        out.write_all(&frames.to_le_bytes())?;
+    }
     out.write_all(b"data")?;
     out.write_all(&data_len.to_le_bytes())?;
     for c in &contents.chunks {
-        out.write_all(&c.pcm_s16le)?;
+        out.write_all(c.pcm().bytes())?;
     }
     out.flush()?;
     if !contents.is_clean() {
@@ -594,5 +613,56 @@ mod tests {
         assert_eq!(&bytes[36..40], b"data");
         assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 4000);
         assert_eq!(&bytes[44..], [pcm.clone(), pcm].concat());
+    }
+
+    #[test]
+    fn wav_writes_float_audio_as_float() {
+        use ride_session::proto::{AudioInfo, StreamInfo, StreamKind};
+        use ride_session::write::{StreamWriter, write_session_info};
+        use ride_session::{AudioChunk, FORMAT_VERSION, SessionInfo};
+
+        let dir = tempfile::tempdir().unwrap();
+        let info = SessionInfo {
+            format_version: FORMAT_VERSION,
+            streams: vec![StreamInfo {
+                name: "audio".into(),
+                kind: StreamKind::Audio.into(),
+                audio: Some(AudioInfo {
+                    sample_rate_hz: 48_000,
+                    channels: 2,
+                    encoding: 4,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        write_session_info(dir.path(), &info).unwrap();
+        let pcm: Vec<u8> = (0..1000)
+            .flat_map(|i| ((i as f32 * 0.01).sin() * 0.7).to_le_bytes())
+            .collect();
+        let mut w = StreamWriter::create(dir.path(), "audio").unwrap();
+        w.append(&AudioChunk {
+            pcm_f32le: pcm.clone(),
+            ..Default::default()
+        })
+        .unwrap();
+        let out = dir.path().join("out.wav");
+        super::wav(&Session::open(dir.path()).unwrap(), "audio", &out).unwrap();
+        let bytes = std::fs::read(out).unwrap();
+        let u16_at = |i: usize| u16::from_le_bytes(bytes[i..i + 2].try_into().unwrap());
+        let u32_at = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
+        assert_eq!(u32_at(4) as usize, bytes.len() - 8);
+        assert_eq!(u32_at(16), 18);
+        assert_eq!(u16_at(20), 3);
+        assert_eq!(u16_at(22), 2);
+        assert_eq!(u32_at(28), 48_000 * 8);
+        assert_eq!(u16_at(32), 8);
+        assert_eq!(u16_at(34), 32);
+        assert_eq!(&bytes[38..42], b"fact");
+        assert_eq!(u32_at(46), 500);
+        assert_eq!(&bytes[50..54], b"data");
+        assert_eq!(u32_at(54), 4000);
+        assert_eq!(&bytes[58..], pcm);
     }
 }

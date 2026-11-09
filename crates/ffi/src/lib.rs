@@ -328,7 +328,8 @@ impl Fusion {
         self.lock().on_wifi_scan(t_ns, ssids);
     }
 
-    /// One microphone read as recorded (16-bit little-endian PCM, `channels` interleaved, from stream frame
+    /// One microphone read as recorded (little-endian PCM, 32-bit float if `pcm_float` else 16-bit,
+    /// `channels` interleaved, from stream frame
     /// `first_frame`), at `t_ns`, when its last frame was recorded, with the recorder's timestamps
     /// (frame positions and elapsed realtime ns) from it: door cycles in the sound hold the speed at zero.
     #[allow(clippy::too_many_arguments)]
@@ -338,7 +339,8 @@ impl Fusion {
         sample_rate_hz: u32,
         channels: u32,
         first_frame: i64,
-        pcm_s16le: Vec<u8>,
+        pcm: Vec<u8>,
+        pcm_float: bool,
         timestamp_frames: Vec<i64>,
         timestamp_ns: Vec<i64>,
     ) {
@@ -347,7 +349,11 @@ impl Fusion {
             sample_rate_hz,
             ride_fusion::fusion::AudioSamples::from_pcm(
                 first_frame,
-                &pcm_s16le,
+                if pcm_float {
+                    ride_session::Pcm::F32(&pcm)
+                } else {
+                    ride_session::Pcm::S16(&pcm)
+                },
                 channels as usize,
                 timestamp_frames.into_iter().zip(timestamp_ns).collect(),
             ),

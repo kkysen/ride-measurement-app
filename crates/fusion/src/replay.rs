@@ -671,13 +671,11 @@ fn audio_events<'a>(
             return events;
         };
         let read_frames = audio_read_frames(rate);
-        for (i, read) in chunk
-            .pcm_s16le
-            .chunks(read_frames * 2 * channels)
-            .enumerate()
-        {
+        let pcm = chunk.pcm();
+        let frame_bytes = pcm.bytes_per_sample() * channels;
+        for (i, read) in pcm.bytes().chunks(read_frames * frame_bytes).enumerate() {
             let first = chunk.first_frame + (i * read_frames) as i64;
-            let last = first + (read.len() / (2 * channels)) as i64;
+            let last = first + (read.len() / frame_bytes) as i64;
             let arrived = t0 + ((last - f0) as f64 / f64::from(rate) * 1e9) as i64;
             if in_cuts(cuts, arrived) {
                 continue;
@@ -689,7 +687,10 @@ fn audio_events<'a>(
                     // The app takes one timestamp per read.
                     Box::new(AudioSamples::from_pcm(
                         first,
-                        read,
+                        match pcm {
+                            ride_session::Pcm::S16(_) => ride_session::Pcm::S16(read),
+                            ride_session::Pcm::F32(_) => ride_session::Pcm::F32(read),
+                        },
                         channels,
                         timestamps.get(i).copied().into_iter().collect(),
                     )),

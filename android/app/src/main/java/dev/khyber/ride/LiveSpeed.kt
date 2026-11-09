@@ -189,20 +189,21 @@ object LiveSpeed {
         h.post { safely { fusion?.onCell(tNs, cellId) } }
     }
 
-    /** One microphone read: Rust hears door cycles in it, which mean the train is standing. */
+    /** One microphone read (little-endian, 32-bit float if [pcmFloat] else 16-bit): Rust hears door cycles in it, which mean the train is standing. */
     fun onAudio(
         tNs: Long,
         sampleRateHz: Int,
         channels: Int,
         firstFrame: Long,
         pcm: ByteArray,
+        pcmFloat: Boolean,
         timestampFrames: List<Long>,
         timestampNs: List<Long>,
     ) {
         val h = handler ?: return
         h.post {
             safely {
-                fusion?.onAudio(tNs, sampleRateHz.toUInt(), channels.toUInt(), firstFrame, pcm, timestampFrames, timestampNs)
+                fusion?.onAudio(tNs, sampleRateHz.toUInt(), channels.toUInt(), firstFrame, pcm, pcmFloat, timestampFrames, timestampNs)
             }
         }
     }
