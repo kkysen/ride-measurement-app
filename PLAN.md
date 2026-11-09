@@ -1483,6 +1483,14 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
       (one table per stream per ride, so only post-ride; the live chunks stay as they are), verified as now before deleting the chunks.
       Saves about 12.5 MB/h (sensors 21.5 to 9 MB/h; all non-audio 25.5 to 13 MB/h), small next to audio (~330 MB/h).
       Not yet tried: predicting the rank from the two samples before; timing on the phone itself.
+    Sensor columns done (2026-11-09, `a31cb6a`): post-ride recompression writes every sensor stream as the rank table plus `zstd -19`
+    (`crates/session/src/sensor_columns.rs`, a skippable frame tagged `ride.sensor-columns.v1` then the columns),
+    replaced only once it decodes to the original chunks byte for byte; readers decode it transparently, live chunks and old files read as before.
+    A stream protobuf wouldn't re-encode identically, or with mixed sample shapes, stays plain `zstd` (none seen yet; `proximity` stays plain as it's not smaller).
+    On copies of Sun Nov 8, 2:40 pm and 9:29 pm (`data/work/columns-check/`): accel 8.74 to 4.11 MB and 6.03 to 2.88, gyro 8.17 to 3.50 and 5.63 to 2.13,
+    mag 2.40 to 0.73 and 1.64 to 0.49, pressure 0.18 to 0.13, light 0.08 to 0.05, as benchmarked;
+    `ride summary`, `ride csv` of each stream, and whole and live replays are identical to the originals'.
+    Left: not on the phone yet (needs a build and install); phone timing; already-recompressed rides get it only by running `ride recompress` again.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
