@@ -118,9 +118,10 @@ const LINE_RESET_WINDOWS: usize = 2;
 const PASS_CLEAR_S: f64 = 20.0;
 const PASS_MPS: f32 = 3.0;
 const PASS_NEAR_STOP_S: f64 = 120.0;
-/// How long (s) after [`PASS_CLEAR_S`] a pass waits to be decided: a lurch is scored some seconds after it,
-/// and a stop's lurch named Times Sq's S platform as a pass for 20 s on Tue Nov 3 (6:21:49 pm).
-const PASS_DECIDE_S: f64 = 15.0;
+/// How long (s) after [`PASS_CLEAR_S`] a pass waits to be decided, unless a lurch after it is scored first:
+/// a lurch is scored some seconds after it, and a stop's lurch named Times Sq's S platform as a pass for 20 s
+/// on Tue Nov 3 (6:21:49 pm).
+const PASS_DECIDE_S: f64 = 8.0;
 /// How far back (ns) the lines look for stations passed (see [`Fusion::without_passed`]), as the route looks
 /// for stops ([`ROUTE_STOPS_S`]).
 const PASS_LOOK_BACK_NS: i64 = (ROUTE_STOPS_S * 1e9) as i64;
@@ -1169,10 +1170,11 @@ impl Fusion {
             .take_while(|&&(first, ..)| first <= to)
             .filter_map(|&(first, last, station)| {
                 let (lo, hi) = (first - clear, last + clear);
-                if hi + s_ns(PASS_DECIDE_S) > now
-                    || !self.in_subway_at(first)
-                    || !self.in_subway_at(last)
-                {
+                // Lurches are scored in order, so one scored after the window means none is still to come in it:
+                // decided then, at the next station's (Times Sq, 6:21:49 pm on Tue Nov 3), not 15 s on.
+                let scored_after = self.lurches.last().is_some_and(|&at| at > hi);
+                let decided = hi + s_ns(PASS_DECIDE_S) <= now || (hi <= now && scored_after);
+                if !decided || !self.in_subway_at(first) || !self.in_subway_at(last) {
                     return None;
                 }
                 let any_in = |times: &[i64]| {
@@ -1204,7 +1206,13 @@ impl Fusion {
                     || stops
                         .iter()
                         .any(|&(stop, ..)| (hi + 1..=last + near).contains(&stop.t_ns));
-                if !felt_before || !felt_after {
+                let skipped_by_a_trip =
+                    self.stop_before(first, first - near)
+                        .and_then(|(stopped, before)| {
+                            self.trips
+                                .skipped_by_a_trip(before, stopped, station, first)
+                        });
+                if !felt_before || !(felt_after || skipped_by_a_trip == Some(true)) {
                     return None;
                 }
                 // A lurch not yet decided as a stop, where the radio names this complex: the train stopped here
@@ -1240,12 +1248,6 @@ impl Fusion {
                 if min_mps < PASS_MPS {
                     return None;
                 }
-                let skipped_by_a_trip =
-                    self.stop_before(first, first - near)
-                        .and_then(|(stopped, before)| {
-                            self.trips
-                                .skipped_by_a_trip(before, stopped, station, first)
-                        });
                 Some(Pass {
                     first_ns: first,
                     last_ns: last,
@@ -4236,9 +4238,59 @@ mod tests {
         );
         // The W and N stop at 49 St: the rider changed at 57 St-7 Av to the Q.
         assert_eq!(lines, ["Q"]);
-        // Not decided until the stop could have been felt.
-        let (passes, lines) = passing_49_st(|f| f.settled_ns = Some(380 * S));
+        // Not decided until the stop could have been felt: 20 s after the last naming, then a lurch scored
+        // after that or 8 s more.
+        let (passes, lines) = passing_49_st(|f| f.settled_ns = Some(365 * S));
         assert!(passes.is_empty());
+        assert_eq!(lines, ["N", "R", "W"]);
+        let at_times_sq = |f: &mut Fusion| f.lurches = vec![380 * S];
+        let (passes, _) = passing_49_st(|f| {
+            at_times_sq(f);
+            f.settled_ns = Some(381 * S);
+        });
+        assert_eq!(passes.len(), 1);
+        let (passes, _) = passing_49_st(|f| {
+            f.lurches.clear();
+            f.settled_ns = Some(375 * S);
+        });
+        assert!(passes.is_empty());
+    }
+
+    #[test]
+    fn a_pass_with_no_stop_felt_after_needs_a_trip_skipping_it() {
+        // No lurch at Times Sq yet; the feeds list a Q at 57 St-7 Av as the rider's train stopped there,
+        // next at Times Sq, not 49 St, so the pass is decided without it. A W there instead stops at 49 St.
+        let poll = |route: &'static str| {
+            move |f: &mut Fusion| {
+                f.lurches.clear();
+                let t0 = 1_793_747_000;
+                let stops = vec![
+                    trips::TripStop {
+                        trip_id: "t".into(),
+                        route: route.into(),
+                        stop_id: "R14".into(),
+                        arrival: t0 + 45,
+                        departure: t0 + 55,
+                    },
+                    trips::TripStop {
+                        trip_id: "t".into(),
+                        route: route.into(),
+                        stop_id: "R16".into(),
+                        arrival: t0 + 230,
+                        departure: t0 + 240,
+                    },
+                ];
+                // Elapsed 150 s is t0, polled at 150 s and 260 s.
+                f.trips.on_poll(150 * S, t0 * 1000, stops.clone());
+                f.trips.on_poll(260 * S, (t0 + 110) * 1000, stops);
+            }
+        };
+        let (passes, lines) = passing_49_st(poll("Q"));
+        assert_eq!(passes.len(), 1);
+        assert_eq!(passes[0].skipped_by_a_trip, Some(true));
+        assert_eq!(lines, ["Q"]);
+        let (passes, lines) = passing_49_st(poll("W"));
+        assert!(passes.is_empty(), "{passes:?}");
         assert_eq!(lines, ["N", "R", "W"]);
     }
 
