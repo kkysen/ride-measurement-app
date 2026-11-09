@@ -1463,6 +1463,26 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
       Try it, and `zstd --long` with a trained dictionary, and `xz`, on accel, gyro, mag and `radio` and `transit`.
     - The feeds (`transit`) repeat almost everything poll to poll: store each poll as a diff to the previous one.
     - Measure the phone's CPU and battery for each, since recompression runs there.
+    Non-audio measured (2026-11-09, scratch `crates/session/examples/compbench.rs`, log `data/work/compbench.log`)
+    on Sun Nov 8, 2:40 pm, Sun Nov 8, 9:29 pm and Sat Nov 7, 5:59 pm;
+    every candidate decoded back to the stored chunks byte for byte. Speeds are on the PC, single thread.
+    - The planned XOR and byte-shuffle values lose: worse than today (0.75x to 0.84x on accel).
+      Values sit on a calibration-shifted grid (about 10k distinct values per axis a ride, but almost none exactly `k` times the step),
+      so splitting bytes breaks what ties the low bytes to the high ones, and XOR of nearby floats isn't small.
+      Plain per-axis integer differences of the bits help (1.9x), but the winner is a value table:
+      per axis, the ride's sorted distinct values once (a few KB), then each sample as the difference of its rank in that table,
+      zigzag varint; timestamps delta of delta, zigzag varint (5% under plain deltas). Lossless by construction, no resolution guess.
+    - Rank table plus `zstd -19`: accel 9.6 to 4.5 MB/h (2.1x), gyro 8.9 to 3.6 (2.3x to 2.6x), mag 2.6 to 0.78 (3.3x),
+      pressure 1.4x, light 1.5x; encodes at 25 to 45 MB/s, 6 times faster than today's `zstd -19` on protobuf, decodes at ~850 MB/s.
+      `xz -6e` on top saves 4% to 7% more but decodes 4 times slower; `zstd -22` and `--long` change nothing (under 1%).
+    - `transit`: one `zstd` frame over the whole stream already uses earlier polls (37 to 52 MB to ~0.8 MB, about 1 MB/h).
+      Each poll as a `zstd` patch to the previous one from its URL is 10% to 13% worse,
+      and polls compressed alone with a dictionary trained on another ride are 5 to 6 times worse. Keep it; `xz -6e` saves 13% to 16% (0.13 MB/h).
+    - `radio`, `gnss`, `location`: `zstd -22 --long` under 1%, `xz -6e` 6% to 9%; not worth a format change without a columnar layout per record type.
+    - Recommendation: in post-ride recompression, write accel, gyro, mag, pressure and light as the rank table encoding plus `zstd -19`
+      (one table per stream per ride, so only post-ride; the live chunks stay as they are), verified as now before deleting the chunks.
+      Saves about 12.5 MB/h (sensors 21.5 to 9 MB/h; all non-audio 25.5 to 13 MB/h), small next to audio (~330 MB/h).
+      Not yet tried: predicting the rank from the two samples before; timing on the phone itself.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
