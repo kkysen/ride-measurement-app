@@ -16,6 +16,8 @@ import android.media.MediaRecorder
 import android.os.IBinder
 import android.util.Log
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.log10
 import kotlin.math.sqrt
 
@@ -27,6 +29,8 @@ import kotlin.math.sqrt
  * never while recording a ride, to choose what [AudioStreamRecorder] opens.
  * It runs in [MicProbeService], a foreground service, since Android silences the microphone of an app
  * that's left the screen: the phone can be locked or used for something else meanwhile.
+ * With `--ez probe_clips true` it tries only the likely sources and 2-channel layouts, for 3 s each, and also
+ * saves each try's samples (interleaved little-endian `float`, as read) into `mic-probe-clips/` to compare on the PC.
  */
 @SuppressLint("MissingPermission") // Only run after `RECORD_AUDIO` is granted.
 object MicProbe {
@@ -50,21 +54,26 @@ object MicProbe {
             "front_back" to { setChannelMask(AudioFormat.CHANNEL_IN_FRONT or AudioFormat.CHANNEL_IN_BACK) },
         )
 
-    fun run(context: Context) {
-        context.startForegroundService(Intent(context, MicProbeService::class.java))
+    fun run(context: Context, clips: Boolean) {
+        context.startForegroundService(Intent(context, MicProbeService::class.java).putExtra(CLIPS, clips))
     }
 
+    const val CLIPS = "probe_clips"
+
     /** Runs the probe, then stops [service]. */
-    fun start(service: Service) {
+    fun start(service: Service, clips: Boolean) {
         Thread({
-            Health.guard("mic probe") { probe(service) }
+            Health.guard("mic probe") { probe(service, clips) }
             service.stopSelf()
         }, "mic probe").start()
     }
 
-    private fun probe(context: Context) {
+    private fun probe(context: Context, clips: Boolean) {
         val am = context.getSystemService(AudioManager::class.java)
-        val out = File(context.getExternalFilesDir(null), "mic-probe.tsv")
+        val out = File(context.getExternalFilesDir(null), if (clips) "mic-probe-clips.tsv" else "mic-probe.tsv")
+        val clipDir = File(context.getExternalFilesDir(null), "mic-probe-clips").takeIf { clips }?.apply { mkdirs() }
+        val tried = if (clips) sources.filter { it.first != "VOICE_COMMUNICATION" } else sources
+        val tryLayouts = if (clips) layouts().filter { it.first == "index2" || it.first == "stereo" } else layouts()
         val inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
             .filter { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC || it.type == AudioDeviceInfo.TYPE_TELEPHONY }
         val devices = listOf<AudioDeviceInfo?>(null) + inputs.filter { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
@@ -75,10 +84,11 @@ object MicProbe {
             }
             for (m in am.microphones) w.println("# microphone ${m.id} '${m.description}' type ${m.type} address '${m.address}' position ${m.position.x},${m.position.y},${m.position.z} orientation ${m.orientation.x},${m.orientation.y},${m.orientation.z}")
             w.println("source\tdevice\tlayout\tencoding\tresult\tchannels\trouted\tactive_mics\tdbfs\tcopies\tsilent")
-            for ((sourceName, source) in sources) for (device in devices) for ((layoutName, layout) in layouts()) {
+            for ((sourceName, source) in tried) for (device in devices) for ((layoutName, layout) in tryLayouts) {
                 for ((encName, enc) in listOf("s16" to AudioFormat.ENCODING_PCM_16BIT, "float" to AudioFormat.ENCODING_PCM_FLOAT)) {
                     val deviceName = device?.address?.ifEmpty { device.productName.toString() } ?: "default"
-                    val row = Health.guard("mic probe row") { one(source, device, layout, enc) } ?: "error"
+                    val clip = clipDir?.let { File(it, "$sourceName-$deviceName-$layoutName-$encName.f32") }
+                    val row = Health.guard("mic probe row") { one(source, device, layout, enc, clip) } ?: "error"
                     w.println("$sourceName\t$deviceName\t$layoutName\t$encName\t$row")
                     w.flush()
                 }
@@ -87,7 +97,7 @@ object MicProbe {
         Log.i(TAG, "done: $out")
     }
 
-    private fun one(source: Int, device: AudioDeviceInfo?, layout: AudioFormat.Builder.() -> AudioFormat.Builder, enc: Int): String {
+    private fun one(source: Int, device: AudioDeviceInfo?, layout: AudioFormat.Builder.() -> AudioFormat.Builder, enc: Int, clip: File?): String {
         val format = try {
             AudioFormat.Builder().setEncoding(enc).setSampleRate(RATE).layout().build()
         } catch (e: Exception) {
@@ -104,7 +114,7 @@ object MicProbe {
             val ch = record.channelCount
             record.startRecording()
             // The first moment is often silent or ramping while the input starts, so it's read and dropped.
-            val frames = RATE / 2
+            val frames = if (clip != null) RATE * 3 else RATE / 2
             val data = Array(ch) { FloatArray(frames) }
             var routed = ""
             var active = ""
@@ -132,6 +142,11 @@ object MicProbe {
                 }
             }
             record.stop()
+            clip?.let { f ->
+                val bytes = ByteBuffer.allocate(frames * ch * 4).order(ByteOrder.LITTLE_ENDIAN)
+                for (i in 0 until frames) for (c in 0 until ch) bytes.putFloat(data[c][i])
+                f.writeBytes(bytes.array())
+            }
             val dbfs = data.map { x -> 20 * log10(sqrt(x.sumOf { (it * it).toDouble() } / x.size) + 1e-12) }
             val copies = (1 until ch).mapNotNull { c -> (0 until c).firstOrNull { data[it].contentEquals(data[c]) }?.let { "$c=$it" } }
             val silent = (0 until ch).filter { c -> data[c].all { it == 0f } }
@@ -152,14 +167,14 @@ class MicProbeService : Service() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Microphone check", NotificationManager.IMPORTANCE_LOW))
         val notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("Checking the microphones (about 7 min)")
+            .setContentTitle("Checking the microphones")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .build()
         startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         if (!started) {
             started = true
-            MicProbe.start(this)
+            MicProbe.start(this, intent?.getBooleanExtra(MicProbe.CLIPS, false) == true)
         }
         return START_NOT_STICKY
     }
