@@ -1441,6 +1441,8 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     The A ahead (`124500_A..N55R`) sat at Hoyt from 9:34:44 to 9:45:45 pm: the train with the unsanitary condition.
     So a hold is visible live: our trip's next arrival sliding with the clock, and the trip ahead stopped for minutes.
     Service alerts (the "delay" text) aren't polled; add the subway alerts feed.
+    Recording done (`8606bcf`, in 0.1.25): the subway alerts feed is recorded every 60 s while any subway feed is polled;
+    replay skips it. Left: check it on the next ride's recording, then show alerts for the rider's line live.
 41. Live speed inputs late: both of Sun Nov 8's rides reported "inputs arrived over 1500 ms late" from the start,
     356 in the first 21:45 of Sun Nov 8, 9:29 pm, and 344 on Sat Nov 7, 5:59 pm; find what's late (which sensor or the feeds), and why.
     Found (2026-11-09, scratch `lateness` example: each record's own time against its `received`): two streams, a few at a time,
