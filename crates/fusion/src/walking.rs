@@ -21,6 +21,10 @@ pub const IN_A_ROW: u32 = 6;
 /// Running: a faster rhythm (Hz) and harder impacts (|a| std, m/s^2) than walking.
 const RUN_HZ: (f64, f64) = (2.6, 3.8);
 const RUN_MIN_STD_MPS2: f64 = 3.0;
+/// The rider's fastest paces on foot (m/s), the one bound for every on-foot limit:
+/// they walk at up to about 5 mph and run at 10 to 15 mph.
+pub const WALK_MAX_MPS: f64 = 2.3;
+pub const RUN_MAX_MPS: f64 = 6.7;
 
 /// What the last window's rhythm was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -28,15 +28,13 @@ use ride_session::proto::{GnssMeasurementsEvent, GnssNavigationMessage};
 use crate::car_beacons::{self, CarReading, CarTracker};
 use crate::doors::ChimeCars;
 use crate::doors::{DoorCycle, DoorDetector};
-use crate::live_speed::{
-    Estimate, LiveSpeedEstimator, RUNNING_MPS, SUBWAY_MAX_SPEED_MPS, WALKING_MPS,
-};
+use crate::live_speed::{Estimate, LiveSpeedEstimator, SUBWAY_MAX_SPEED_MPS};
 use crate::position::{PositionEstimate, PositionInput, smooth};
 use crate::stations::{self, CarType, Station};
 use crate::stops::{self as train_stops, StopDetector};
 use crate::subway::SubwayDetector;
 use crate::trips;
-use crate::walking::{Gait, WINDOW_S as WALK_WINDOW_S, WalkingDetector};
+use crate::walking::{Gait, RUN_MAX_MPS, WALK_MAX_MPS, WINDOW_S as WALK_WINDOW_S, WalkingDetector};
 
 /// Whether our own GNSS position and velocity solutions update the position filter.
 /// Not yet: on the first rides (2026-10-20) they made it much worse even when cross-checked,
@@ -266,13 +264,11 @@ const GAP_PATH_RATIO: f64 = 2.0;
 /// Walking around (a store, a platform) between the fixes, which the straight distance doesn't see,
 /// for the time steps were detected (each detection covers the step window before it); and running.
 const GAP_WANDER_MPS: f64 = 1.5;
-const GAP_RUN_MPS: f64 = 4.5;
 const GAP_STEP_WINDOW_NS: i64 = 4_000_000_000;
 /// Out of a vehicle in a gap (out of the subway throughout, and the fixes no farther apart than a walk covers),
-/// each speed is held to what the rider's feet say at the time: a run, a walk (1.4 m/s and two sigma),
+/// each speed is held to what the rider's feet say at the time: a run or a walk at most (see [`RUN_MAX_MPS`]),
 /// or, with no steps, standing (shuffling in a line). At the McDonald's in Flushing (`20261020-154951`,
 /// 4:25 pm, 257 s) the bound above still left 10 mph.
-const GAP_HOLD_WALK_MPS: f64 = 2.6;
 const GAP_HOLD_STAND_MPS: f64 = 0.5;
 
 /// Inputs settle into the forward pass, in time order, once input this much newer has arrived: Android delivers
@@ -2741,11 +2737,11 @@ impl Fusion {
         e
     }
 
-    /// The rider's pace (m/s), if the last step window had steps: running, or else walking.
+    /// The rider's fastest pace (m/s), if the last step window had steps: running, or else walking.
     fn pace_now(&self) -> Option<f64> {
         let steps = self.step_windows.last().is_some_and(|&(_, steps)| steps);
         let running = matches!(self.walking.last_gait(), Some((_, Some(Gait::Running))));
-        steps.then_some(if running { RUNNING_MPS } else { WALKING_MPS })
+        steps.then_some(if running { RUN_MAX_MPS } else { WALK_MAX_MPS })
     }
 
     /// Whether the last step window, after `t_ns`, had steps.
@@ -3308,7 +3304,7 @@ fn accel_from_speeds(out: &mut [SmoothedSpeed]) {
 
 /// Scales down the smoothed speeds across each gap between good fixes to the distance the fixes allow
 /// (see [`GAP_FIX_M`]). Only a bound: a path longer than the straight line is fine up to it.
-/// Out of a vehicle, each speed in the gap is also held to the rider's feet (see [`GAP_HOLD_WALK_MPS`]).
+/// Out of a vehicle, each speed in the gap is also held to the rider's feet (see [`WALK_MAX_MPS`]).
 /// `steps`: when steps were detected, and whether running; `subway`: when the subway detector switched, and to what.
 fn bound_gaps(
     out: &mut [SmoothedSpeed],
@@ -3352,7 +3348,7 @@ fn bound_gaps(
             + a.accuracy.unwrap_or(0.0)
             + b.accuracy.unwrap_or(0.0)
             + GAP_WANDER_MPS * walk_s
-            + GAP_RUN_MPS * run_s;
+            + RUN_MAX_MPS * run_s;
         let from = out.partition_point(|s| s.elapsed_realtime_ns <= ta);
         let to = out.partition_point(|s| s.elapsed_realtime_ns < tb);
         if to <= from {
@@ -3364,8 +3360,8 @@ fn bound_gaps(
         if on_foot {
             for s in &mut out[from..to] {
                 let hold = match feet_at(s.elapsed_realtime_ns) {
-                    Some(true) => GAP_RUN_MPS,
-                    Some(false) => GAP_HOLD_WALK_MPS,
+                    Some(true) => RUN_MAX_MPS,
+                    Some(false) => WALK_MAX_MPS,
                     None => GAP_HOLD_STAND_MPS,
                 };
                 if s.speed_mps > hold {
@@ -3975,7 +3971,8 @@ mod tests {
         // Steps since the stop: the walking pace, not what the IMU integrated.
         f.step_windows.push((156 * S, true));
         let e = f.estimate(157 * S);
-        assert!(e.speed_mps <= WALKING_MPS, "{}", e.speed_mps);
+        // At most the rider's fastest walk, about 5 mph, which the runaway IMU reaches.
+        assert_eq!(e.speed_mps, WALK_MAX_MPS);
         // Standing again, it holds again.
         f.step_windows.push((160 * S, false));
         assert_eq!(f.estimate(161 * S).speed_mps, 0.0);

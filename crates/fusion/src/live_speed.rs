@@ -146,11 +146,12 @@ const ACCEL_TAU_S: f64 = 1.0;
 const STOP_SIGMA_MPS: f64 = 0.05;
 /// A door cycle's closing: the train is standing, but the time is only good to a step's sharpest point.
 const DOOR_STOP_SIGMA_MPS: f64 = 0.2;
-/// Walking speed and its spread (m/s): people walk at 1 to 2 m/s, slower in crowds and on stairs.
-pub(crate) const WALKING_MPS: f64 = 1.4;
+/// Typical walking speed and its spread (m/s), a measurement, not a bound (see [`crate::walking::WALK_MAX_MPS`]):
+/// people walk at 1 to 2 m/s, slower in crowds and on stairs.
+const WALKING_MPS: f64 = 1.4;
 const WALKING_SIGMA_MPS: f64 = 0.6;
 /// Running: 2 to 4 m/s for most people, jogging for a train included.
-pub(crate) const RUNNING_MPS: f64 = 3.0;
+const RUNNING_MPS: f64 = 3.0;
 const RUNNING_SIGMA_MPS: f64 = 1.0;
 /// How often the speed is kept for a door cycle's closing to be compared with (s), and for how long.
 const HISTORY_EVERY_S: f64 = 0.1;
