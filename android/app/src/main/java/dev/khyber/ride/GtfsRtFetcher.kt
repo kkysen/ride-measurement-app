@@ -14,6 +14,8 @@ import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.UnknownHostException
+import uniffi.ride_ffi.gtfsRtAlertsPollMs
+import uniffi.ride_ffi.gtfsRtAlertsUrl
 import uniffi.ride_ffi.gtfsRtFeeds
 import uniffi.ride_ffi.gtfsRtPollMs
 
@@ -26,11 +28,13 @@ import uniffi.ride_ffi.gtfsRtPollMs
  * Underground the network comes and goes in stations, often for seconds: a poll that failed is retried
  * the moment Android says the network is back (validated), not on the next 30 s tick,
  * with short timeouts and the nearest lines' feeds first so a brief window gets the rider's own line.
+ * The service alerts are polled after them, less often, while any feed is: stored the same way, not passed on.
  */
 class GtfsRtFetcher(context: Context, private val records: RecordStreamRecorder) {
     @Volatile
     private var running = true
     private val wake = Object()
+    private var alertsPolledMs = 0L
     private var woken = false
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val callback = object : ConnectivityManager.NetworkCallback() {
@@ -63,11 +67,15 @@ class GtfsRtFetcher(context: Context, private val records: RecordStreamRecorder)
             val position = LiveSpeed.lastPosition
             val urls = Health.guard("gtfs-rt plan") { gtfsRtFeeds(position?.first, position?.second) }
             var allPolled = true
-            for (url in urls.orEmpty()) {
+            val alertsMs = Health.guard("gtfs-rt alerts poll") { gtfsRtAlertsPollMs() } ?: FALLBACK_ALERTS_POLL_MS
+            val alertsDue = !urls.isNullOrEmpty() && System.currentTimeMillis() - alertsPolledMs >= alertsMs
+            val alerts = if (alertsDue) Health.guard("gtfs-rt alerts url") { gtfsRtAlertsUrl() } else null
+            for (url in urls.orEmpty() + listOfNotNull(alerts)) {
                 if (!running) return
                 val ok = Health.guard("gtfs-rt download") {
                     try {
-                        poll(url)
+                        poll(url, live = url != alerts)
+                        if (url == alerts) alertsPolledMs = System.currentTimeMillis()
                         true
                     } catch (e: InterruptedIOException) {
                         // Stopping the recording interrupts a request in flight; a timeout means the window closed.
@@ -101,7 +109,7 @@ class GtfsRtFetcher(context: Context, private val records: RecordStreamRecorder)
         }
     }
 
-    private fun poll(url: String) {
+    private fun poll(url: String, live: Boolean) {
         val requestMs = System.currentTimeMillis()
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.connectTimeout = TIMEOUT_MS
@@ -117,7 +125,7 @@ class GtfsRtFetcher(context: Context, private val records: RecordStreamRecorder)
                 .build()
             val receivedNs = records.add { gtfsRealtime = feed }
             // Rust matches the train's stops to the trips in it, at the time recorded, as a replay does.
-            if (receivedNs != null && status == 200 && body != null) LiveSpeed.onTransit(receivedNs, requestMs, body)
+            if (live && receivedNs != null && status == 200 && body != null) LiveSpeed.onTransit(receivedNs, requestMs, body)
         } finally {
             connection.disconnect()
         }
@@ -128,5 +136,6 @@ class GtfsRtFetcher(context: Context, private val records: RecordStreamRecorder)
         const val TIMEOUT_MS = 5_000
         /** Only if Rust can't say. */
         const val FALLBACK_POLL_MS = 30_000L
+        const val FALLBACK_ALERTS_POLL_MS = 60_000L
     }
 }

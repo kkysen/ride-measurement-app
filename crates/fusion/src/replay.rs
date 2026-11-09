@@ -329,11 +329,15 @@ pub fn replay_with_hook(
                         ));
                     }
                 }
-                // The MTA's feeds, when each response arrived, as the app passes them on.
-                Some(Payload::GtfsRealtime(f)) if f.http_status == 200 => records.push((
-                    received,
-                    Event::Transit(Box::new((f.body, f.request_unix_ms))),
-                )),
+                // The MTA's feeds, when each response arrived, as the app passes them on (not the alerts).
+                Some(Payload::GtfsRealtime(f))
+                    if f.http_status == 200 && f.url != crate::gtfs_rt::ALERTS_URL =>
+                {
+                    records.push((
+                        received,
+                        Event::Transit(Box::new((f.body, f.request_unix_ms))),
+                    ))
+                }
                 // The registered LTE cell, as the app passes it on.
                 Some(Payload::CellInfo(c)) => records.push((
                     received,

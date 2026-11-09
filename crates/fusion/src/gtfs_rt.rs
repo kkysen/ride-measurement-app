@@ -15,6 +15,13 @@ const BASE: &str = "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct-
 pub const FEEDS: [&str; 8] = ["", "-ace", "-bdfm", "-g", "-jz", "-nqrw", "-l", "-si"];
 /// How often to poll while recording (ms); the feeds update about every 30 s.
 pub const POLL_MS: i64 = 30_000;
+/// The subway's service alerts (delays, reroutes, planned work), recorded alongside the feeds near the rider
+/// for why a train was held or ran differently. About 450 KB a poll, 73 KB gzipped as fetched (2026-11-09),
+/// so polled less often than the trains' feeds.
+pub const ALERTS_URL: &str =
+    "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts";
+/// How often to poll [`ALERTS_URL`] while any subway feed is polled (ms).
+pub const ALERTS_POLL_MS: i64 = 60_000;
 /// Lines with a station this close (m) are recorded: a few stations either way, and a transfer's other lines.
 pub const NEAR_M: f64 = 1_500.0;
 

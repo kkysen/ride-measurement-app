@@ -719,6 +719,17 @@ pub fn gtfs_rt_poll_ms() -> i64 {
     ride_fusion::gtfs_rt::POLL_MS
 }
 
+/// The subway's service alerts feed, polled every [`gtfs_rt_alerts_poll_ms`] while [`gtfs_rt_feeds`] lists any.
+#[uniffi::export]
+pub fn gtfs_rt_alerts_url() -> String {
+    ride_fusion::gtfs_rt::ALERTS_URL.to_string()
+}
+
+#[uniffi::export]
+pub fn gtfs_rt_alerts_poll_ms() -> i64 {
+    ride_fusion::gtfs_rt::ALERTS_POLL_MS
+}
+
 #[uniffi::export]
 pub fn orbit_refresh_ms() -> i64 {
     ride_gnss::orbits::LIVE_REFRESH_MS
