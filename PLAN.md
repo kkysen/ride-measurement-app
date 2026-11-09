@@ -1165,6 +1165,23 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Left, likely wrong: 79 St at 3:13 am (Thu Oct 22, 12:29 am), when every train is local there;
     the live speed underground isn't evidence (it ran to the 55 mph cap through the Q's pass);
     the change is shown only 35 s after the station's last naming.
+    Done (2026-11-08, `cb3d2db`, `03f018d`), not on the phone: 79 St at 3:13 am on Thu Oct 22 was a real pass.
+    That ride has no feeds, but the MTA's schedule has an overnight 3, express there
+    (Times Sq 3:08:30 am, 72 St 3:13 am, 96 St 3:16 am); the train left Times Sq at 3:08:18 am and 72 St at 3:12:10 am,
+    stopped at 96 St at 3:15:03 am, with nothing of a stop at 79 St or 86 St; the next 1 left Times Sq at 3:12:30 am.
+    Only the chime at 72 St, heard as an NTT car's (the 2's), says otherwise.
+    A pass now counts against the lines stopping there only if no trip the feeds listed rules it out:
+    one at the stop before's station, from then until the pass, heading toward it, that doesn't stop there
+    (`Pass::skipped_by_a_trip`); without the feeds polled from the stop on, it counts as before.
+    It's decided once a lurch after its window is scored, else 8 s after (was 15 s);
+    the stop felt after isn't needed when such a trip skips it (an express can run over 2 min to its next stop).
+    Replayed (`skip_still`): the Q on Tue Nov 3 from 6:21:53 pm (was 6:22:03 pm), before the doors opened.
+    Over the 37 rides with legs, 42 passes (was 33): 27 with a trip skipping them, 14 with no feeds,
+    and Franklin St (Mon Oct 26, 11:36 am) not counted, on the 3 after a false stop at Houston St.
+    The 9 new ones are express 2/3 runs past the 1's stations, 49 St on Fri Oct 30, 4:04 pm,
+    and 49 St's BMT platform named from the 2 at 50 St; no stop was tapped during any.
+    Left: passes of another line's platform at a complex (59 St's A/C/B/D one from the 2) rule out lines the rider isn't on;
+    the 20 s after the last naming stays, for a cell naming the next station while the train is still stopping.
 23. Done, not on the phone (`4affdf5`, `a27cacf`, `e1d4f91`): graph, map and replay (Mon Oct 26, 8:08 pm).
     The graph's time axis shows round 12-hour New York times, as many as fit (`clock_ticks`).
     The live map pins each tap where the rider was (`positions_at`), underground once its leg is drawn.
