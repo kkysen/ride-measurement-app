@@ -1238,7 +1238,10 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     best at lags of 1 to 41 samples, under the 0.4 ms the 12 cm between them takes).
     Float by index carries more than 16 bits; float by stereo mask doesn't. So: default input, index mask 2, float.
     Left: which of `DEFAULT`, `MIC`, `CAMCORDER` (the rider listens to the 3 clips), and which channel is which.
-    Committed, not installed (`54c1e3c`): the probe's notification has a Stop button, and `probe_clips` is only those 6 tries (about 25 s).
+    Fourth run (0.1.23, rider talking, `data/work/mic-probe/clips-4/`): all three give 2 microphones,
+    the second channel consistently 10 to 13 samples later (0.2 to 0.3 ms) and 5 to 9 dB louder.
+    In float the second channel reached full scale (1.0) with `MIC` and `CAMCORDER`, not with `DEFAULT` (peak 0.61).
+    Installed in 0.1.23 (`54c1e3c`): the probe's notification has a Stop button, and `probe_clips` is only those 6 tries (about 25 s).
     Then benchmark lossless codecs on it (FLAC, WavPack, MPEG-4 ALS, OptimFROG),
     and try lossless on OneDrive with Opus on the phone, dropped on the phone only after the upload is verified.
     Opus, measured on Thu Nov 5, 10:06 pm (16 kHz mono, 1:03:16): FLAC 80 MB, Opus 64 kbps 32 MB, 32 kbps 15 MB.
