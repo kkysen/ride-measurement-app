@@ -1406,6 +1406,8 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     "since it's running local this weekend, not B/C; also B never runs weekends".
     Rule out lines not running then (the B on weekends and late nights) and use the feeds' or the schedule's local/express runs.
 38. Line names in order (Sun Nov 8, 2:40 pm, at 2:54 pm): "B/C", not "C/B"; sort as the MTA does (letters, numbers in order).
+    Done (2026-11-09, `87e1b3c`): numbers ascending, then letters alphabetically, then the S and the SIR,
+    last as in the MTA's `route_sort_order` (which otherwise groups letters by trunk: A, C, E, B, D).
 39. False stops up again (Sun Nov 8, 2:40 pm, at 3:27 pm): "seems to be detecting way more false stops now", on 0.1.18.
     Score this ride's stops against its taps with `falsestops`, against 0.1.17's rules, before blaming items 22 or 27.
     Checked (2026-11-09): no regression found. Items 22's pass rules (`cb3d2db`, `03f018d`) and item 30's curve rule
