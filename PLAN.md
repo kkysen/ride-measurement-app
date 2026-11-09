@@ -1203,6 +1203,15 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Left: the N, Q, R and W fleets; a better chime feature than the pitch votes.
 25. Audio. Recording now takes every microphone at its native rate (`4ec4350`, `6000ec9`), untested on the phone:
     check a ride has 48 kHz, 3 channels, no sameness or missing-channel `Health` reports, and the microphone info.
+    Checked (2026-11-09) on 0.1.18's two rides (Sun Nov 8, 2:40 pm; Sun Nov 8, 9:29 pm): 48 kHz, 4 channels by index,
+    measured 48000.00 Hz, no discontinuities, but only one microphone's sound.
+    Channel 1 is an exact copy of channel 0 in 226 of 228 10 s windows (Sun Nov 8, 9:29 pm), channels 2 and 3 are all zeros;
+    channel 0 is -25 dBFS median, little clipping, real content up to 16 kHz.
+    The source fell back to `VOICE_RECOGNITION` (no `UNPROCESSED` on this phone), which is likely mono;
+    the session lists the microphones `bottom` and `back`.
+    The `Health` check reported only the copy, in the first 10 s: also report silent channels, and check over the whole ride.
+    Next, untested: try `CAMCORDER` or `MIC` with `CHANNEL_IN_STEREO` (bottom and back), or index masks on those sources,
+    then drop channels that are copies or silent rather than storing them (FLAC hides it, but it's not more data).
     Then benchmark lossless codecs on it (FLAC, WavPack, MPEG-4 ALS, OptimFROG),
     and try lossless on OneDrive with Opus on the phone, dropped on the phone only after the upload is verified.
     Opus, measured on Thu Nov 5, 10:06 pm (16 kHz mono, 1:03:16): FLAC 80 MB, Opus 64 kbps 32 MB, 32 kbps 15 MB.
@@ -1358,6 +1367,17 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Why (checked 2026-11-08): the app shows the car beacon's ID as "car" (`Status::car`, `MainActivity.kt`),
     not the car's number: at 6:14 pm it was `9a72` (39538), and it went between that and `9776` over the ride.
     Left: show the car's number, from the rider's tags tying beacons to cars, or not call the ID a car.
+37. Lines from service patterns, from notes (Sun Nov 8, 2:40 pm, at 2:52 pm): it was the A,
+    "since it's running local this weekend, not B/C; also B never runs weekends".
+    Rule out lines not running then (the B on weekends and late nights) and use the feeds' or the schedule's local/express runs.
+38. Line names in order (Sun Nov 8, 2:40 pm, at 2:54 pm): "B/C", not "C/B"; sort as the MTA does (letters, numbers in order).
+39. False stops up again (Sun Nov 8, 2:40 pm, at 3:27 pm): "seems to be detecting way more false stops now", on 0.1.18.
+    Score this ride's stops against its taps with `falsestops`, against 0.1.17's rules, before blaming items 22 or 27.
+40. A held train is a delay, not a stop (Sun Nov 8, 9:29 pm): the A held from 9:35 pm to 9:46 pm,
+    "delay on A at Nostrand, unsanitary condition on A train in front of us".
+    A label for item 26; check the app showed it as one hold, and the dwell isn't counted as a normal stop's.
+41. Live speed inputs late: both of Sun Nov 8's rides reported "inputs arrived over 1500 ms late" from the start,
+    356 in the first 21:45 of Sun Nov 8, 9:29 pm, and 344 on Sat Nov 7, 5:59 pm; find what's late (which sensor or the feeds), and why.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
