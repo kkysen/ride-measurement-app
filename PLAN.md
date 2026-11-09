@@ -1405,6 +1405,14 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
 37. Lines from service patterns, from notes (Sun Nov 8, 2:40 pm, at 2:52 pm): it was the A,
     "since it's running local this weekend, not B/C; also B never runs weekends".
     Rule out lines not running then (the B on weekends and late nights) and use the feeds' or the schedule's local/express runs.
+    Done (2026-11-09, `77ac818`): a station's lines are those the feeds list at its platform then,
+    plus its listed lines that run by the schedule (`data/service_hours.csv`, from the static GTFS) and the feeds don't list elsewhere instead;
+    a route the feeds list at the complex is no longer dropped at a station the MTA doesn't list it for.
+    Replayed (`skip_still`): route A from 110 St on, at every station (before: only between stations, "B/C" at them);
+    lines "A/C/D" there, as the feeds listed a D too.
+    Over all 62 sessions, statuses with a route 619 to 649; line changes checked are part-time lines ruled out
+    (no 3 in Brooklyn or B/C late at night, no W/Z on weekends) or the late-night 2 local on the 1.
+    Left: without feeds, the schedule only rules lines out; it doesn't add a line running local off its pattern (the A here).
 38. Line names in order (Sun Nov 8, 2:40 pm, at 2:54 pm): "B/C", not "C/B"; sort as the MTA does (letters, numbers in order).
     Done (2026-11-09, `87e1b3c`): numbers ascending, then letters alphabetically, then the S and the SIR,
     last as in the MTA's `route_sort_order` (which otherwise groups letters by trunk: A, C, E, B, D).
