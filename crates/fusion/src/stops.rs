@@ -52,6 +52,17 @@ const STRONG_S: f64 = 3.0;
 const HELD_MPS2: f64 = 0.25;
 const SURGE_EVERY_S: f64 = 20.0;
 
+/// A lurch is on a curve when, over the [`SUSTAINED_S`] of braking before it, the phone turned about the vertical
+/// by more than `CURVE_RAD_S.0` on average (but at most `CURVE_RAD_S.1`: faster is the rider turning), the same way
+/// by at least [`CURVE_HELD_RAD_S`] over the [`BRAKING_BEFORE_S`] before it. The car's pull toward the curve's
+/// inside (turn rate times speed) then reads as braking, and the curve's end as its collapse: right before Wall St
+/// on the 2 (`20261026-200816`, 8:19:49 pm), 0.13 rad/s at about 7 m/s made the lurch's 0.92 m/s^2, and the train
+/// went on. Over the 37 rides with legs, the three lurches on a curve the rider tapped as stops all had a closing
+/// heard (curved platforms, or the phone turned in hand), so a lurch on a curve is a stop only with a closing
+/// heard (see `crate::fusion`): 12 stops dropped, none tapped "train stopped", 2 with an "at station" tap.
+pub const CURVE_RAD_S: (f64, f64) = (0.08, 0.25);
+pub const CURVE_HELD_RAD_S: f64 = 0.03;
+
 /// How much history is kept (s): the 20 s of braking before a lurch, and the [`SEP_S`] after it.
 const KEEP_S: f64 = 2.0 * SEP_S + BRAKED_S + 10.0;
 
@@ -63,6 +74,10 @@ pub struct Stop {
     pub score: f64,
     /// When the braking began: the 1 s mean along its direction last under [`ONSET_MPS2`] (see [`BRAKED_S`]).
     pub braking_since_ns: i64,
+    /// The mean turn rate about the vertical (rad/s) over the [`SUSTAINED_S`] of braking before the lurch,
+    /// and over the [`BRAKING_BEFORE_S`] before it (see [`Stop::on_curve`]).
+    pub turn_rad_s: f64,
+    pub turn_held_rad_s: f64,
 }
 
 /// What the detector found as of the latest sample.
@@ -91,13 +106,15 @@ pub struct StopDetector {
     /// Smoothed horizontal acceleration, its time, and the running sum for 1 s means.
     t: VecDeque<i64>,
     h: VecDeque<[f64; 2]>,
+    /// The rotation rate about world vertical (rad/s), with `h`.
+    yaw: VecDeque<f64>,
     /// Index (in samples since the start) of `h[0]`.
     base: usize,
     next_end: usize,
     last_end_ns: Option<i64>,
     /// Lurches waiting for their score, and scored ones waiting [`SEP_S`] to see if a better one comes.
     unscored: VecDeque<usize>,
-    scored: VecDeque<(i64, f64, i64)>,
+    scored: VecDeque<(i64, f64, i64, (f64, f64))>,
     last_stop: Option<Stop>,
     next_surge: usize,
     last_surge_ns: Option<i64>,
@@ -105,6 +122,14 @@ pub struct StopDetector {
 }
 
 impl Stop {
+    /// Whether the "braking" was the pull of a curve (see [`CURVE_RAD_S`]).
+    pub fn on_curve(&self) -> bool {
+        let t = self.turn_rad_s.abs();
+        t > CURVE_RAD_S.0
+            && t <= CURVE_RAD_S.1
+            && self.turn_held_rad_s * self.turn_rad_s.signum() >= CURVE_HELD_RAD_S
+    }
+
     /// When the train surely stands: once the braking has collapsed.
     pub fn standing_ns(&self) -> i64 {
         self.t_ns + (COLLAPSE_WITHIN_S * 1e9) as i64
@@ -148,6 +173,7 @@ impl StopDetector {
             raw: VecDeque::new(),
             t: VecDeque::new(),
             h: VecDeque::new(),
+            yaw: VecDeque::new(),
             base: 0,
             next_end: 0,
             last_end_ns: None,
@@ -293,6 +319,8 @@ impl StopDetector {
             .fold([0.0; 2], |s, v| [s[0] + v[0] / n, s[1] + v[1] / n]);
         self.t.push_back(t_ns - (SMOOTH_N as i64 / 2) * BIN_NS);
         self.h.push_back(mean);
+        self.yaw
+            .push_back(r[2][0] * w[0] + r[2][1] * w[1] + r[2][2] * w[2]);
         let mut events = self.find_lurches();
         events.extend(self.find_surges());
         self.trim();
@@ -381,11 +409,17 @@ impl StopDetector {
             self.unscored.pop_front();
             if let Some(score) = self.score(i) {
                 let since = self.braking_since(i);
-                self.scored.push_back((self.time(i), score, since));
+                let turn = (
+                    self.turn(i.saturating_sub(Self::samples(SUSTAINED_S)), i),
+                    self.turn(i.saturating_sub(Self::samples(BRAKING_BEFORE_S)), i),
+                );
+                self.scored.push_back((self.time(i), score, since, turn));
                 events.push(Event::Likely(Stop {
                     t_ns: self.time(i),
                     score,
                     braking_since_ns: since,
+                    turn_rad_s: turn.0,
+                    turn_held_rad_s: turn.1,
                 }));
             }
         }
@@ -395,7 +429,7 @@ impl StopDetector {
         };
         let sep = (SEP_S * 1e9) as i64;
         let wait = sep + ((AFTER_S.1 + 2.0 + SUSTAINED_S) * 1e9) as i64;
-        while let Some(&(t, score, since)) = self.scored.front() {
+        while let Some(&(t, score, since, turn)) = self.scored.front() {
             if now - t < wait {
                 break;
             }
@@ -403,7 +437,7 @@ impl StopDetector {
             let beaten_later = self
                 .scored
                 .iter()
-                .any(|&(u, s, _)| u - t <= sep && s > score);
+                .any(|&(u, s, ..)| u - t <= sep && s > score);
             let beaten_before = self
                 .last_stop
                 .is_some_and(|s| t - s.t_ns <= sep && s.score >= score);
@@ -414,6 +448,8 @@ impl StopDetector {
                 t_ns: t,
                 score,
                 braking_since_ns: since,
+                turn_rad_s: turn.0,
+                turn_held_rad_s: turn.1,
             };
             self.last_stop = Some(stop);
             events.push(Event::Stopped(stop));
@@ -436,6 +472,15 @@ impl StopDetector {
             k -= 1;
         }
         self.time(k)
+    }
+
+    /// The mean turn rate about the vertical over samples `a..b` (clamped to what's kept).
+    fn turn(&self, a: usize, b: usize) -> f64 {
+        let a = a.max(self.base);
+        if b <= a {
+            return 0.0;
+        }
+        (a..b).map(|k| self.yaw[k - self.base]).sum::<f64>() / (b - a) as f64
     }
 
     fn score(&self, i: usize) -> Option<f64> {
@@ -541,6 +586,7 @@ impl StopDetector {
         while self.h.len() > keep && self.base < oldest_needed {
             self.h.pop_front();
             self.t.pop_front();
+            self.yaw.pop_front();
             self.base += 1;
         }
     }
@@ -639,6 +685,45 @@ mod tests {
         assert!(
             stops(&events).iter().all(|&s| (s - 85.0).abs() > 2.0),
             "{events:?}"
+        );
+    }
+
+    #[test]
+    fn a_curves_pull_is_on_a_curve() {
+        // Coasting through a curve from 70 to 85 s, turning 0.12 rad/s: its pull toward the inside (along the
+        // phone's y, 0.9 m/s^2) ends at once, like a stopping lurch.
+        let mut d = StopDetector::new();
+        let mut events = Vec::new();
+        for k in 0..20_000 {
+            let t_ns = k * 10_000_000;
+            let t = k as f64 / 100.0;
+            let curve = (70.0..85.0).contains(&t);
+            let w = if curve { 0.12 } else { 0.0 };
+            let a = if curve { 0.9 } else { 0.0 };
+            events.extend(d.on_gyro(t_ns, [0.0, 0.0, w]));
+            events.extend(d.on_accel(t_ns, [0.0, a, GRAVITY_MPS2]));
+        }
+        let found: Vec<Stop> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Likely(s) => Some(*s),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            found
+                .iter()
+                .any(|s| (s.t_ns as f64 * 1e-9 - 85.0).abs() < 1.0 && s.on_curve()),
+            "{found:?}"
+        );
+        // Braking straight is no curve.
+        let straight = ride(200.0, profile);
+        assert!(
+            straight.iter().all(|e| match e {
+                Event::Likely(s) | Event::Stopped(s) => !s.on_curve(),
+                _ => true,
+            }),
+            "{straight:?}"
         );
     }
 }

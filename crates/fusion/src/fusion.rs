@@ -1274,7 +1274,9 @@ impl Fusion {
             .train_stops
             .iter()
             .rev()
-            .find(|(stop, _, in_subway)| *in_subway && !self.departure_fade(stop))
+            .find(|(stop, _, in_subway)| {
+                *in_subway && !self.departure_fade(stop) && !self.unclosed_curve(stop)
+            })
             .map(|(stop, ..)| stop);
         // A likely stop shows first; once decided, the decided one (the same lurch, or a stronger one after it).
         let stop = match (decided, self.likely_stop_now(t)) {
@@ -1290,7 +1292,10 @@ impl Fusion {
             stops
                 .iter()
                 .filter(|(s, _, in_subway)| {
-                    *in_subway && s.t_ns < stop.t_ns && !self.departure_fade(s)
+                    *in_subway
+                        && s.t_ns < stop.t_ns
+                        && !self.departure_fade(s)
+                        && !self.unclosed_curve(s)
                 })
                 .map(|(s, ..)| s.t_ns)
                 .max()
@@ -2334,7 +2339,12 @@ impl Fusion {
     /// A likely stop found live (see [`train_stops::Event::Likely`]): it holds the live speed at 0 in the subway,
     /// unless it's a departure's pull fading or ending.
     fn on_likely_stop(&mut self, stop: train_stops::Stop) {
-        if self.context.in_subway && !self.departure_fade(&stop) && !self.just_departed(stop.t_ns) {
+        // On a curve, no closing can be heard yet: not a stop until one is (see [`train_stops::CURVE_RAD_S`]).
+        if self.context.in_subway
+            && !self.departure_fade(&stop)
+            && !self.just_departed(stop.t_ns)
+            && !stop.on_curve()
+        {
             self.likely_stop = Some(stop);
             self.anchor_at_stop(&stop);
         }
@@ -2351,6 +2361,19 @@ impl Fusion {
     /// Whether a found stop is the departure's pull fading (see [`FADE_AFTER_CLOSE_S`]).
     fn departure_fade(&self, stop: &train_stops::Stop) -> bool {
         departure_fade(stop, &self.door_cycles)
+    }
+
+    /// Whether a found stop is a curve's pull with no closing heard since (see [`train_stops::CURVE_RAD_S`]),
+    /// as [`stop_records`] drops it.
+    fn unclosed_curve(&self, stop: &train_stops::Stop) -> bool {
+        let s_ns = |s: f64| (s * 1e9) as i64;
+        let from = stop.t_ns + s_ns(DOORS_AFTER_STOP_S.0);
+        let i = self.door_cycles.partition_point(|c| c.close_ns <= from);
+        stop.on_curve()
+            && self
+                .door_cycles
+                .get(i)
+                .is_none_or(|c| c.close_ns >= stop.t_ns + s_ns(RECORD_MAX_DWELL_S))
     }
 
     /// The train's first departure after the stop whose lurch was at `stopped_ns`, as [`stop_records`] finds it:
@@ -3648,6 +3671,10 @@ fn stop_records(
         } else {
             (None, ridden_departure)
         };
+        // A curve's pull read as braking: a stop only if the doors were heard (see [`train_stops::CURVE_RAD_S`]).
+        if stop.on_curve() && cycle.is_none() && !on_platform {
+            continue;
+        }
         let doors_open = cycle.and_then(|c| {
             let heard = (c.open_ns - stop.t_ns) as f64 * 1e-9;
             (heard >= DOORS_AFTER_STOP_S.0 && heard <= DOORS_AFTER_STOP_S.1)
@@ -3721,6 +3748,8 @@ fn missed_stop(
             t_ns: stop_ns,
             score: MISSED_STOP_SCORE,
             braking_since_ns: stop_ns,
+            turn_rad_s: 0.0,
+            turn_held_rad_s: 0.0,
         },
     )
 }
@@ -3888,6 +3917,8 @@ mod tests {
             t_ns: t0 + 12_000_000_000,
             score: 1.0,
             braking_since_ns: t0,
+            turn_rad_s: 0.0,
+            turn_held_rad_s: 0.0,
         };
         f.train_stops.push((stop, Some(s96), true));
         assert_eq!(f.status().route, None);
@@ -3912,6 +3943,8 @@ mod tests {
             t_ns: t_s * S,
             score: 1.0,
             braking_since_ns: (t_s - 4) * S,
+            turn_rad_s: 0.0,
+            turn_held_rad_s: 0.0,
         };
         // Motoring cut off 12 s after leaving, no closing heard: not a stop, so the live speed isn't held.
         f.on_likely_stop(lurch(112));
@@ -3933,6 +3966,8 @@ mod tests {
             t_ns: 150 * S,
             score: 1.0,
             braking_since_ns: 146 * S,
+            turn_rad_s: 0.0,
+            turn_held_rad_s: 0.0,
         };
         f.on_likely_stop(lurch);
         let held = f.estimate(152 * S);
@@ -3951,6 +3986,8 @@ mod tests {
             t_ns: t_s * S,
             score: 1.0,
             braking_since_ns: (t_s - 15) * S,
+            turn_rad_s: 0.0,
+            turn_held_rad_s: 0.0,
         };
         (stop, None, true)
     }
@@ -4067,6 +4104,33 @@ mod tests {
         assert!(!r[0].on_platform && !r[0].rider_left());
         assert_eq!(r[0].dwell_s(), Some(104.0));
         assert_eq!(r[0].doors_open_s(), Some(85.0));
+    }
+
+    #[test]
+    fn a_curves_pull_is_a_stop_only_with_a_closing() {
+        // Right before Wall St on the 2 (`20261026-200816`, 8:19:49 pm): the curve's end read as a lurch, 39 s
+        // before the stop at the platform. Dropped with no closing heard; kept with one (a curved platform).
+        let curve = |t_s: i64| {
+            let (mut s, station, in_subway) = stop(t_s);
+            s.turn_rad_s = -0.13;
+            s.turn_held_rad_s = -0.09;
+            (s, station, in_subway)
+        };
+        let r = stop_records(
+            &[curve(100), stop(139)],
+            &[cycle(142, 165)],
+            &[175 * S],
+            &windows(0, 300, 0..0),
+        );
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].stopped_ns, 139 * S);
+        let r = stop_records(
+            &[curve(100)],
+            &[cycle(103, 125)],
+            &[135 * S],
+            &windows(0, 300, 0..0),
+        );
+        assert_eq!(r.len(), 1);
     }
 
     #[test]
