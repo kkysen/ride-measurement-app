@@ -50,6 +50,10 @@ pub struct Replay {
     pub vertical: Vec<crate::vertical::Move>,
     /// The live estimate the app would have shown (see [`Fusion::estimate`]), every [`Options::live_every_ns`].
     pub live: Vec<(i64, crate::live_speed::Estimate)>,
+    /// The stations passed without stopping (see [`Fusion::passes`]), as of the ride's end.
+    pub passes: Vec<crate::fusion::Pass>,
+    /// Each station the radio named: first and last named, and the station.
+    pub named: Vec<(i64, i64, &'static crate::stations::Station)>,
 }
 
 pub const STATUS_EVERY_NS: i64 = 10_000_000_000;
@@ -515,6 +519,8 @@ pub fn replay_with_hook(
         step_windows: fusion.step_windows().to_vec(),
         subway_changes: fusion.subway_changes().to_vec(),
         timeline: fusion.timeline(),
+        passes: fusion.passes(i64::MIN, i64::MAX),
+        named: fusion.station_history().to_vec(),
         vertical: fusion.vertical_moves(),
         statuses,
         status_cost_ns,

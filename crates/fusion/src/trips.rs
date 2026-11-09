@@ -164,7 +164,7 @@ impl Trips {
     /// the A, running local on weekends, at 50 St, which the MTA lists for the C and E (Sat Oct 31, 5:13 pm).
     /// `now_ns` stands in for the departure of a stop the train hasn't left.
     pub fn route(&self, stops: &[RiderStop], now_ns: i64) -> Option<String> {
-        self.best_trip(stops, now_ns).map(|(route, ..)| route)
+        self.best_trip(stops, &[], now_ns).map(|(route, ..)| route)
     }
 
     /// [`Self::route`], else the route of the best trip for the stops up to an older one, if it matched each of
@@ -175,7 +175,19 @@ impl Trips {
     /// Only the best trip of older stops is kept, never one found from the newer stops' times alone:
     /// an N a station ahead lists 5 Av, 57 St, 49 St and Times Sq within seconds of the rider's stops then.
     pub fn held_route(&self, stops: &[RiderStop], now_ns: i64) -> Option<String> {
-        if let Some((route, ..)) = self.best_trip(stops, now_ns) {
+        self.held_route_passing(stops, &[], now_ns)
+    }
+
+    /// [`Self::held_route`] with no trip that stops at a station the train passed without stopping
+    /// (see [`Self::stops_at`]): on Tue Nov 3 the rider's train passed 49 St after 57 St-7 Av, so it wasn't the W
+    /// the feeds still had it on, but the Q, express there.
+    pub fn held_route_passing(
+        &self,
+        stops: &[RiderStop],
+        passed: &[&Station],
+        now_ns: i64,
+    ) -> Option<String> {
+        if let Some((route, ..)) = self.best_trip(stops, passed, now_ns) {
             return Some(route);
         }
         let offset = self.offset_ns?;
@@ -183,7 +195,7 @@ impl Trips {
         (1..stops.len()).rev().find_map(|k| {
             // Kept only when it matched each of those stops: a W the other way, at Queensboro Plaza as the
             // rider's train got there, matches it but not Broadway before.
-            let (route, trip, matched) = self.best_trip(&stops[..k], now_ns)?;
+            let (route, trip, matched) = self.best_trip(&stops[..k], passed, now_ns)?;
             if matched < k {
                 return None;
             }
@@ -225,8 +237,23 @@ impl Trips {
             .any(|&(a, _)| a < here && a > departed + SLACK_S)
     }
 
-    /// The route of [`Self::route`], its best trip, and how many of the stops that trip matches.
-    fn best_trip(&self, stops: &[RiderStop], now_ns: i64) -> Option<(String, &Trip, usize)> {
+    /// Whether the trip stops at `station`'s platform (or one listed at its spot): the feeds list it there,
+    /// or its route does in the MTA's list. By route, not line: an express variant (`6X`) passes the 6's locals.
+    fn stops_at(trip: &Trip, station: &Station) -> bool {
+        crate::stations::same_spot_lines(station).contains(&trip.route)
+            || own_stop_ids(station)
+                .iter()
+                .any(|id| trip.stops.contains_key(*id))
+    }
+
+    /// The route of [`Self::route`], its best trip, and how many of the stops that trip matches;
+    /// no trip stopping at a `passed` station counts.
+    fn best_trip(
+        &self,
+        stops: &[RiderStop],
+        passed: &[&Station],
+        now_ns: i64,
+    ) -> Option<(String, &Trip, usize)> {
         let offset = self.offset_ns?;
         let unix_s = |ns: i64| (ns + offset).div_euclid(1_000_000_000);
         // The feeds often no longer list a stop passed before the first poll, so a line that doesn't stop at one
@@ -272,7 +299,10 @@ impl Trips {
                     .map(|&(a, _)| (a - stopped).abs())
                     .min()
             };
-            if !serves_all(trip, &line) || error(last).is_none() {
+            if !serves_all(trip, &line)
+                || error(last).is_none()
+                || passed.iter().any(|p| Self::stops_at(trip, p))
+            {
                 continue;
             }
             let errors: Vec<i64> = stops.iter().filter_map(error).collect();
@@ -383,6 +413,64 @@ mod tests {
         seven.on_poll(offset, t0 * 1000, vec![stop("7", "7", "718", t0 + 270)]);
         assert_eq!(seven.route(&stops, at(330)), None);
         assert_eq!(seven.route(&stops[1..], at(330)).as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn a_station_passed_rules_out_the_trips_stopping_there() {
+        // Tue Nov 3, 6:19 pm: from 57 St-7 Av the W and the Q both list Times Sq near the rider's stop there,
+        // the W nearer, but the rider's train passed 49 St, where the W stops and the Q, express, doesn't.
+        let t0 = 1_793_747_140;
+        let offset = 1_000_000_000_000i64;
+        let named = |name: &str, line: &str| {
+            crate::stations::all()
+                .iter()
+                .find(|s| s.name == name && s.lines.iter().any(|l| l == line))
+                .unwrap()
+        };
+        let mut trips = Trips::default();
+        trips.on_poll(
+            offset,
+            t0 * 1000,
+            vec![
+                stop("w", "W", "R14", t0 - 5),
+                stop("w", "W", "R15", t0 + 70),
+                stop("w", "W", "R16", t0 + 150),
+                stop("q", "Q", "R14", t0 + 10),
+                stop("q", "Q", "R16", t0 + 180),
+            ],
+        );
+        let at = |s: i64| offset + s * 1_000_000_000;
+        let stops = [
+            RiderStop {
+                stopped_ns: at(0),
+                departed_ns: Some(at(15)),
+                station: named("57 St-7 Av", "Q"),
+            },
+            RiderStop {
+                stopped_ns: at(150),
+                departed_ns: None,
+                station: named("Times Sq-42 St", "Q"),
+            },
+        ];
+        let passed = [named("49 St", "W")];
+        assert_eq!(trips.held_route(&stops, at(170)).as_deref(), Some("W"));
+        assert_eq!(
+            trips
+                .held_route_passing(&stops, &passed, at(170))
+                .as_deref(),
+            Some("Q")
+        );
+        // The W stops there by the MTA's list even when the feeds no longer list it there; an express variant
+        // of a local doesn't, unless the feeds list it at that platform.
+        let trip = |route: &str, ids: &[&str]| Trip {
+            route: route.into(),
+            last_seen: t0,
+            stops: ids.iter().map(|id| (id.to_string(), (t0, t0))).collect(),
+        };
+        assert!(Trips::stops_at(&trip("W", &[]), passed[0]));
+        assert!(!Trips::stops_at(&trip("Q", &["R14", "R16"]), passed[0]));
+        assert!(!Trips::stops_at(&trip("WX", &[]), passed[0]));
+        assert!(Trips::stops_at(&trip("Q", &["R15"]), passed[0]));
     }
 
     #[test]

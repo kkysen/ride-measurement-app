@@ -62,8 +62,10 @@ pub struct SensorCount {
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct RideStatus {
     pub mode: String,
-    /// The station the registered cell names, if it's one the rider has tagged; with the lines tagged there.
+    /// The station the registered cell names, if it's one the rider has tagged.
     pub station: Option<String>,
+    /// The lines shown with no route: aboard, those the train has been on (its stops and the stations it
+    /// passed narrow them), else the station's.
     pub lines: Vec<String>,
     /// Stopped there: a door cycle was just heard.
     pub at_station: bool,
@@ -454,11 +456,7 @@ impl Fusion {
     pub fn status(&self) -> RideStatus {
         use ride_fusion::fusion::Mode;
         let s = self.lock().status();
-        let lines = s
-            .station
-            .as_ref()
-            .map(|st| st.lines.clone())
-            .unwrap_or_default();
+        let lines = s.lines.clone();
         RideStatus {
             mode: match s.mode {
                 Mode::Unknown => "unknown",

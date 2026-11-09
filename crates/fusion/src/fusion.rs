@@ -111,6 +111,19 @@ const TRANSFER_CAR_S: f64 = 180.0;
 const BOARDING_STOP_S: f64 = 30.0;
 /// Step windows ([`WALK_WINDOW_S`] each) between stops that start the rider's line over (see [`Fusion::riding_lines`]).
 const LINE_RESET_WINDOWS: usize = 2;
+/// A station passed without stopping (see [`Fusion::passes`]): no lurch, stop, departure or door cycle within
+/// this (s) of the radio naming it, the live speed at least [`PASS_MPS`] all the while it was named,
+/// and no stop or lurch of its complex within [`PASS_NEAR_STOP_S`] before or after, but a stop felt within it
+/// before (decided) and after (a lurch at least) at others.
+const PASS_CLEAR_S: f64 = 20.0;
+const PASS_MPS: f32 = 3.0;
+const PASS_NEAR_STOP_S: f64 = 120.0;
+/// How long (s) after [`PASS_CLEAR_S`] a pass waits to be decided: a lurch is scored some seconds after it,
+/// and a stop's lurch named Times Sq's S platform as a pass for 20 s on Tue Nov 3 (6:21:49 pm).
+const PASS_DECIDE_S: f64 = 15.0;
+/// How far back (ns) the lines look for stations passed (see [`Fusion::without_passed`]), as the route looks
+/// for stops ([`ROUTE_STOPS_S`]).
+const PASS_LOOK_BACK_NS: i64 = (ROUTE_STOPS_S * 1e9) as i64;
 /// A GNSS speed over this after a likely stop means the train is moving after all.
 const LIKELY_STOP_GNSS_MPS: f64 = 1.0;
 /// How much a station the radio names on a leg counts as a known place (see [`Fusion::anchor_by_radio`]).
@@ -531,6 +544,9 @@ pub enum Mode {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Status {
     pub mode: Mode,
+    /// The lines to show when there's no [`Self::route`]: aboard, those the train has been on that serve the
+    /// station (narrowed by its stops and the stations it passed, see [`Fusion::passes`]), else the station's.
+    pub lines: Vec<String>,
     /// The station the registered cell names, in the subway; at it, if a door cycle there was just heard.
     pub station: Option<Station>,
     pub at_station: bool,
@@ -717,6 +733,9 @@ pub struct Fusion {
     departures: Vec<i64>,
     /// Weaker starts ([`train_stops::Event::Started`]), only for ending a likely stop.
     starts: Vec<i64>,
+    /// Every lurch the stop detector scored ([`train_stops::Event::Likely`]), kept or not, in time order:
+    /// for telling a station passed from one stopped at (see [`Fusion::passes`]).
+    lurches: Vec<i64>,
     /// The departure the speed's leg cap counts from (see [`LiveSpeedEstimator::start_leg`]), if on one,
     /// the station it left, and the last station the radio named on the way (see [`Fusion::anchor_by_radio`]).
     leg_since_ns: Option<i64>,
@@ -838,6 +857,7 @@ impl Fusion {
             train_stops: Vec::new(),
             departures: Vec::new(),
             starts: Vec::new(),
+            lurches: Vec::new(),
             leg_since_ns: None,
             leg_from: None,
             leg_radio: None,
@@ -992,7 +1012,13 @@ impl Fusion {
         if ago(recent.last()?.stopped_ns) > ROUTE_STOP_S {
             return None;
         }
-        self.trips.held_route(recent, t)
+        // Stations passed since the first of those stops rule out the trips that stop there.
+        let passed: Vec<&Station> = self
+            .passes(recent.first()?.stopped_ns, t)
+            .iter()
+            .map(|p| p.station)
+            .collect();
+        self.trips.held_route_passing(recent, &passed, t)
     }
 
     /// The lines the rider's train can be, from the stations it stopped at: each stop narrows them to the lines
@@ -1030,10 +1056,180 @@ impl Fusion {
         }
         // Walking since the last stop: the next may be another line's.
         if self.walked(prev, t) {
-            Vec::new()
+            // Unless a station passed since says which: the lines of the stop before it that passing leaves.
+            self.changed_by_passes(prev, t).unwrap_or_default()
         } else {
-            lines
+            self.without_passed(&lines, prev, t)
         }
+    }
+
+    /// `lines` without those stopping at a station passed after `from`, up to `to` (see [`Self::passes`]):
+    /// the W rules itself out by passing 49 St (Tue Nov 3, 6:20 pm). If that leaves none, the rider changed
+    /// trains across the platform at the last stop before the pass (57 St-7 Av, from the W to the Q), so the lines
+    /// are that stop's platform's but those passing rules out; and if none of those is left either, `lines` as is.
+    /// With no lines known (walked since the stop before), the pass alone narrows that stop's.
+    fn without_passed(&self, lines: &[String], from: i64, to: i64) -> Vec<String> {
+        if lines.is_empty() {
+            return self.changed_by_passes(from, to).unwrap_or_default();
+        }
+        // Not the whole ride's namings at each status: a pass comes within minutes of the stops around it.
+        let from = from.max(to.saturating_sub(PASS_LOOK_BACK_NS));
+        let passes = self.passes(from, to);
+        if passes.is_empty() {
+            return lines.to_vec();
+        }
+        let passed: Vec<String> = passes
+            .iter()
+            .flat_map(|p| stations::same_spot_lines(p.station))
+            .collect();
+        let left = |lines: &[String]| -> Vec<String> {
+            lines
+                .iter()
+                .filter(|l| !passed.contains(l))
+                .cloned()
+                .collect()
+        };
+        let kept = left(lines);
+        if !kept.is_empty() {
+            return kept;
+        }
+        self.changed_by_passes(from, to)
+            .unwrap_or_else(|| lines.to_vec())
+    }
+
+    /// The lines of the train's last stop before the first station passed after `from` (up to `to`),
+    /// but those stopping at a station passed: what the rider changed to there; none if nothing's left.
+    fn changed_by_passes(&self, from: i64, to: i64) -> Option<Vec<String>> {
+        let from = from.max(to.saturating_sub(PASS_LOOK_BACK_NS));
+        let passes = self.passes(from, to);
+        let first = passes.first()?;
+        let passed: Vec<String> = passes
+            .iter()
+            .flat_map(|p| stations::same_spot_lines(p.station))
+            .collect();
+        let changed: Vec<String> =
+            stations::same_spot_lines(self.stop_station_before(first.first_ns, from)?)
+                .into_iter()
+                .filter(|l| !passed.contains(l))
+                .collect();
+        (!changed.is_empty()).then_some(changed)
+    }
+
+    /// The station of the train's last stop in the subway at or after `from` and before `t`: as named when it was
+    /// found, else as the radio named it once standing there ([`MOVED_ON_AFTER_S`] in; the cell often names
+    /// it only some seconds into the dwell).
+    fn stop_station_before(&self, t: i64, from: i64) -> Option<&'static Station> {
+        let lag = (RECORDS_SETTLE_S * 1e9) as i64;
+        recent(&self.train_stops, |x| x.0.t_ns, from, lag)
+            .iter()
+            .filter(|(stop, _, in_subway)| *in_subway && stop.t_ns >= from && stop.t_ns < t)
+            .max_by_key(|(stop, ..)| stop.t_ns)
+            .and_then(|&(stop, station, _)| {
+                station.or_else(|| self.station_at(stop.t_ns + (MOVED_ON_AFTER_S * 1e9) as i64))
+            })
+    }
+
+    /// Whether the subway detector said subway at `t`.
+    fn in_subway_at(&self, t: i64) -> bool {
+        let i = self.subway_changes.partition_point(|&(at, _)| at <= t);
+        i > 0 && self.subway_changes[i - 1].1
+    }
+
+    /// The stations the train passed without stopping, named first after `from` and up to `to`, as decided by
+    /// the input so far: in the subway, the radio named the station (a cell or Android's location), the live speed
+    /// stayed at least [`PASS_MPS`] while it did, nothing of a stop came within [`PASS_CLEAR_S`] of it
+    /// (no lurch, kept or not, no stop, departure or door cycle), and the stops before and after, within
+    /// [`PASS_NEAR_STOP_S`], were at other complexes. A missed stop would need the lurch, the door cycle and the
+    /// slowing all missed; a station named early (Broadway at 30 Av, Tue Nov 3) that the train then stops at
+    /// is named through the stop, so it isn't a pass. Only the stations named in the span are looked at.
+    pub fn passes(&self, from: i64, to: i64) -> Vec<Pass> {
+        let now = self.settled_ns.unwrap_or(i64::MIN);
+        let s_ns = |s: f64| (s * 1e9) as i64;
+        let clear = s_ns(PASS_CLEAR_S);
+        let i = self
+            .station_history
+            .partition_point(|&(first, ..)| first <= from);
+        self.station_history[i..]
+            .iter()
+            .take_while(|&&(first, ..)| first <= to)
+            .filter_map(|&(first, last, station)| {
+                let (lo, hi) = (first - clear, last + clear);
+                if hi + s_ns(PASS_DECIDE_S) > now
+                    || !self.in_subway_at(first)
+                    || !self.in_subway_at(last)
+                {
+                    return None;
+                }
+                let any_in = |times: &[i64]| {
+                    let k = times.partition_point(|&at| at < lo);
+                    times.get(k).is_some_and(|&at| at <= hi)
+                };
+                if any_in(&self.lurches) || any_in(&self.departures) {
+                    return None;
+                }
+                let lag = s_ns(RECORDS_SETTLE_S);
+                let near = s_ns(PASS_NEAR_STOP_S);
+                let stops = recent(&self.train_stops, |x| x.0.t_ns, first - near, lag);
+                let stop_near = stops.iter().any(|&(stop, named, _)| {
+                    let at = stop.t_ns;
+                    (lo..=hi).contains(&at)
+                        || ((first - near..=last + near).contains(&at)
+                            && named
+                                .or_else(|| self.station_at(at + s_ns(MOVED_ON_AFTER_S)))
+                                .is_some_and(|n| stations::same_complex(n, station)))
+                });
+                // The stops felt just before and after, at other stations: the detectors were working then.
+                // Without them a run of local stops all missed reads as passes (the 1 from 137 St to 96 St,
+                // Sat Oct 31, 10:13 to 10:20 pm: no stop felt at 125 St, 116 St, 110 St or 103 St).
+                let felt_before = stops
+                    .iter()
+                    .any(|&(stop, ..)| (first - near..lo).contains(&stop.t_ns));
+                let k = self.lurches.partition_point(|&at| at <= hi);
+                let felt_after = self.lurches.get(k).is_some_and(|&at| at <= last + near)
+                    || stops
+                        .iter()
+                        .any(|&(stop, ..)| (hi + 1..=last + near).contains(&stop.t_ns));
+                if !felt_before || !felt_after {
+                    return None;
+                }
+                // A lurch not yet decided as a stop, where the radio names this complex: the train stopped here
+                // after the station was named, as at Times Sq on Tue Nov 3 (named 6:21:22 pm, stopped 6:21:49 pm).
+                let k = self.lurches.partition_point(|&at| at < first - near);
+                let lurch_here = self.lurches[k..]
+                    .iter()
+                    .take_while(|&&at| at <= last + near)
+                    .any(|&at| {
+                        [at, (at + s_ns(MOVED_ON_AFTER_S)).min(now)]
+                            .into_iter()
+                            .filter_map(|t| self.station_at(t))
+                            .any(|n| stations::same_complex(n, station))
+                    });
+                if stop_near || lurch_here {
+                    return None;
+                }
+                // Door cycles last at most a minute, and are in order of closing.
+                let k = self.door_cycles.partition_point(|c| c.close_ns < lo);
+                if self.door_cycles[k..]
+                    .iter()
+                    .take_while(|c| c.close_ns <= hi + s_ns(60.0))
+                    .any(|c| c.open_ns <= hi)
+                {
+                    return None;
+                }
+                let a = self.live_speeds.partition_point(|&(at, _)| at < first);
+                let b = self.live_speeds.partition_point(|&(at, _)| at <= last);
+                let min_mps = self.live_speeds[a..b]
+                    .iter()
+                    .map(|&(_, v)| v)
+                    .reduce(f32::min)?;
+                (min_mps >= PASS_MPS).then_some(Pass {
+                    first_ns: first,
+                    last_ns: last,
+                    station,
+                    min_mps,
+                })
+            })
+            .collect()
     }
 
     /// The lines after a stop at `at` (see [`Self::riding_lines`]), and the stop before the next.
@@ -1048,6 +1244,7 @@ impl Fusion {
         let Some(station) = station.filter(|_| in_subway) else {
             return (lines.to_vec(), prev);
         };
+        let lines = &self.without_passed(lines, prev, at);
         let walked = self.walked(prev, at);
         // By complex: a stop named at another of its platforms (Queensboro Plaza's 7 one, from the N/W,
         // Tue Nov 3, 6:10 pm) is still a stop of the lines the train was on.
@@ -1057,7 +1254,13 @@ impl Fusion {
             .cloned()
             .collect();
         let lines = if both.is_empty() || walked {
-            station.lines.clone()
+            // Started over here, but not as a line that passed a station on the way (see [`Self::passes`]).
+            let fresh = self.without_passed(&station.lines, prev, at);
+            if fresh.iter().all(|l| station.lines.contains(l)) {
+                fresh
+            } else {
+                station.lines.clone()
+            }
         } else {
             both
         };
@@ -1225,16 +1428,17 @@ impl Fusion {
             .filter(|r| station.as_ref().is_none_or(|s| stations::serves(s, r)));
         // The route if the feeds give it, else the lines the train has been on, else the station's:
         // between trains, all the lines of its complex, any of which the rider may take next.
+        let riding_here = (!riding.is_empty() && aboard).then(|| {
+            let at: Vec<String> = riding
+                .iter()
+                .filter(|l| station.as_ref().is_none_or(|s| stations::serves(s, l)))
+                .cloned()
+                .collect();
+            if at.is_empty() { riding.clone() } else { at }
+        });
         let lines = match &route {
             Some(r) => vec![r.clone()],
-            None if !riding.is_empty() && aboard => {
-                let at: Vec<String> = riding
-                    .iter()
-                    .filter(|l| station.as_ref().is_none_or(|s| stations::serves(s, l)))
-                    .cloned()
-                    .collect();
-                if at.is_empty() { riding } else { at }
-            }
+            None if riding_here.is_some() => riding_here.clone().unwrap_or_default(),
             None if transfer_s.is_some() => station
                 .as_ref()
                 .map(stations::complex_lines)
@@ -1244,8 +1448,13 @@ impl Fusion {
                 .map(|s| s.lines.clone())
                 .unwrap_or_default(),
         };
+        // Shown when no route is: the lines the train has been on, else the station's.
+        let shown_lines = riding_here
+            .or_else(|| station.as_ref().map(|s| s.lines.clone()))
+            .unwrap_or_default();
         Status {
             mode,
+            lines: shown_lines,
             route,
             car_type: stations::car_type(
                 cars.map(|c| c == ChimeCars::Ntt),
@@ -2028,7 +2237,10 @@ impl Fusion {
                     }
                     self.on_train_stop(t_ns, stop)
                 }
-                train_stops::Event::Likely(stop) => self.on_likely_stop(stop),
+                train_stops::Event::Likely(stop) => {
+                    self.lurches.push(stop.t_ns);
+                    self.on_likely_stop(stop)
+                }
                 train_stops::Event::Departed(at) => {
                     if self.context.in_subway
                         && let Some(stop) =
@@ -2169,6 +2381,11 @@ impl Fusion {
             cycle.close_ns - (DWELL_SURE_S * 1e9) as i64,
             cycle.close_ns,
         );
+    }
+
+    /// Each station the radio named so far: when first and last named, and the station.
+    pub fn station_history(&self) -> &[(i64, i64, &'static Station)] {
+        &self.station_history
     }
 
     /// The train's start surges found so far (see [`crate::stops`]).
@@ -3485,6 +3702,16 @@ fn join_segments(joined: &mut Vec<Segment>, pieces: Vec<Segment>) {
     }
 }
 
+/// A station the train passed without stopping (see [`Fusion::passes`]): when the radio first and last named it,
+/// and the lowest live speed (m/s) between.
+#[derive(Clone, Copy, Debug)]
+pub struct Pass {
+    pub first_ns: i64,
+    pub last_ns: i64,
+    pub station: &'static Station,
+    pub min_mps: f32,
+}
+
 /// The lines ridden (see [`Fusion::riding_lines`]) as of the train stops before `upto`, the last of them
 /// with a station at `prev`, and the latest of their times.
 struct RidingLines {
@@ -3929,6 +4156,96 @@ mod tests {
     }
 
     const S: i64 = 1_000_000_000;
+
+    /// Tue Nov 3, 6:19 pm, as fusion saw it: the W's stops at 5 Av/59 St and 57 St-7 Av, then 49 St named
+    /// for a minute at speed with no stop, and the rider's lines; `tweak` adds what would make 49 St a stop.
+    fn passing_49_st(tweak: impl Fn(&mut Fusion)) -> (Vec<Pass>, Vec<String>) {
+        let named = |name: &str| {
+            stations::all()
+                .iter()
+                .find(|s| s.name == name && s.lines.iter().any(|l| l == "W"))
+                .unwrap()
+        };
+        let stop = |t_s: i64| train_stops::Stop {
+            t_ns: t_s * S,
+            score: 1.0,
+            braking_since_ns: (t_s - 10) * S,
+            turn_rad_s: 0.0,
+            turn_held_rad_s: 0.0,
+        };
+        let mut f = Fusion::whole_ride();
+        f.subway_changes.push((0, true));
+        f.train_stops
+            .push((stop(100), Some(named("5 Av/59 St")), true));
+        f.train_stops
+            .push((stop(200), Some(named("57 St-7 Av")), true));
+        f.station_history
+            .push((100 * S, 130 * S, named("5 Av/59 St")));
+        f.station_history
+            .push((190 * S, 250 * S, named("57 St-7 Av")));
+        f.station_history.push((290 * S, 350 * S, named("49 St")));
+        // Then Times Sq, and the lurch of stopping there.
+        f.station_history
+            .push((375 * S, 420 * S, named("Times Sq-42 St")));
+        f.lurches.push(390 * S);
+        f.live_speeds = (0..=400).map(|t| (t * S, 12.0)).collect();
+        f.settled_ns = Some(420 * S);
+        tweak(&mut f);
+        let lines = f.riding_lines(420 * S);
+        (f.passes(i64::MIN, 420 * S), lines)
+    }
+
+    #[test]
+    fn a_station_passed_rules_out_its_lines() {
+        let (passes, lines) = passing_49_st(|_| {});
+        assert_eq!(
+            passes
+                .iter()
+                .map(|p| p.station.name.as_str())
+                .collect::<Vec<_>>(),
+            ["49 St"]
+        );
+        // The W and N stop at 49 St: the rider changed at 57 St-7 Av to the Q.
+        assert_eq!(lines, ["Q"]);
+        // Not decided until the stop could have been felt.
+        let (passes, lines) = passing_49_st(|f| f.settled_ns = Some(380 * S));
+        assert!(passes.is_empty());
+        assert_eq!(lines, ["N", "R", "W"]);
+    }
+
+    #[test]
+    fn a_station_with_a_sign_of_stopping_is_not_passed() {
+        let none = |tweak: fn(&mut Fusion)| {
+            let (passes, lines) = passing_49_st(tweak);
+            assert!(passes.is_empty(), "{passes:?}");
+            assert_eq!(lines, ["N", "R", "W"]);
+        };
+        // A lurch, kept as a stop or not.
+        none(|f| f.lurches.push(320 * S));
+        // A start surge.
+        none(|f| f.departures.push(355 * S));
+        // A door cycle.
+        none(|f| {
+            f.door_cycles.push(DoorCycle {
+                open_ns: 300 * S,
+                close_ns: 330 * S,
+            })
+        });
+        // The speed down near a stop's.
+        none(|f| f.live_speeds[320] = (320 * S, 1.0));
+        // Out of the subway.
+        none(|f| f.subway_changes.push((300 * S, false)));
+        // No stop felt after it (nor before): the detectors may have missed this one too.
+        none(|f| f.lurches.clear());
+        none(|f| f.train_stops.truncate(1));
+        // A lurch at 49 St after it was named: it stopped there.
+        none(|f| {
+            let s49 = f.station_history[2].2;
+            f.station_history.truncate(3);
+            f.lurches = vec![400 * S];
+            f.station_history.push((390 * S, 410 * S, s49));
+        });
+    }
 
     #[test]
     fn no_likely_stop_just_after_departing() {
