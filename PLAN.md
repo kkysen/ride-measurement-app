@@ -1408,6 +1408,20 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
 38. Line names in order (Sun Nov 8, 2:40 pm, at 2:54 pm): "B/C", not "C/B"; sort as the MTA does (letters, numbers in order).
 39. False stops up again (Sun Nov 8, 2:40 pm, at 3:27 pm): "seems to be detecting way more false stops now", on 0.1.18.
     Score this ride's stops against its taps with `falsestops`, against 0.1.17's rules, before blaming items 22 or 27.
+    Checked (2026-11-09): no regression found. Items 22's pass rules (`cb3d2db`, `03f018d`) and item 30's curve rule
+    came after 0.1.18, so weren't on the phone. Replayed (`skip_still`) at 0.1.16 (`9a6ea7e`), 0.1.17 (`91e5506`)
+    and 0.1.18 (`40e18ab`), worktrees in `data/work/wt39-*`:
+    - Stop records (`falsestops`): 0.1.17 and 0.1.18 identical, 16 backed and 10 with no tap or closing (2:40 pm),
+      8 and 5 (9:29 pm); 0.1.16 13 and 13, 8 and 8. So 0.1.16 had more.
+    - Live, as shown (`data/work/livestops.rs`: runs of the speed held at 0, and of the dwell shown):
+      2:40 pm held 14 tapped and 9 untapped (0.1.17) to 13 and 11 (0.1.18); dwells 19 and 7 both; 9:29 pm unchanged.
+      The 2 more are `4fec3d9`'s weak start ending a false hold: at 3:01:51, 3:10:57 and 3:19:18 pm a lurch at
+      34 to 47 mph held 0 for 105 to 138 s through to the next true stop (counted as one tapped stop);
+      now it holds 27 to 93 s, the train is shown moving, then the true stop again: more stops seen, less time wrong.
+    This ride's own rate is high: 10 of 26 unbacked (item 30: 99 of 453 over 37 rides). Its unbacked lurches are
+    item 30's open kind, mid-leg at 34 to 47 mph live (3:01:51, 3:15:41, 3:19:18, 3:26:02, 3:27:17 pm, the note's time),
+    no closing; tapped stops at 3:14:47, 3:25:03 and 3:30:17 pm come at 30 to 42 mph live too, so the live speed
+    before doesn't tell them apart. Open with item 30: what tells a lurch at speed from a stop.
 40. A held train is a delay, not a stop (Sun Nov 8, 9:29 pm): the A held from 9:35 pm to 9:46 pm,
     "delay on A at Nostrand, unsanitary condition on A train in front of us".
     A label for item 26; check the app showed it as one hold, and the dwell isn't counted as a normal stop's.
