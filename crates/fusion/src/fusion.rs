@@ -1499,7 +1499,7 @@ impl Fusion {
             .unwrap_or_default();
         Status {
             mode,
-            lines: shown_lines,
+            lines: stations::in_order(shown_lines),
             route,
             car_type: stations::car_type(
                 cars.map(|c| c == ChimeCars::Ntt),

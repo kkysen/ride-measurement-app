@@ -33,7 +33,7 @@ fn table() -> &'static HashMap<i64, Station> {
                     cell.parse().ok()?,
                     Station {
                         name: name.to_string(),
-                        lines: lines.split_whitespace().map(str::to_uppercase).collect(),
+                        lines: in_order(lines.split_whitespace().map(str::to_uppercase).collect()),
                         lat: lat.parse().ok()?,
                         lon: lon.parse().ok()?,
                     },
@@ -41,6 +41,24 @@ fn table() -> &'static HashMap<i64, Station> {
             })
             .collect()
     })
+}
+
+/// Where a line goes in a list of them, as the MTA orders them: the numbered lines ascending, then the
+/// lettered ones alphabetically, then the S shuttles and the Staten Island Railway, last as in the MTA's
+/// `route_sort_order` (`data/mta/gtfs/routes.txt`, which otherwise groups the letters by trunk: A, C, E, B, D).
+fn line_order(line: &str) -> (u8, u32, &str) {
+    match line.parse::<u32>() {
+        Ok(n) => (0, n, line),
+        Err(_) if line == "S" => (2, 0, line),
+        Err(_) if line == "SIR" => (3, 0, line),
+        Err(_) => (1, 0, line),
+    }
+}
+
+/// `lines` in the MTA's order (see [`line_order`]): "B/C", not "C/B" (Sun Nov 8, 2:40 pm).
+pub fn in_order(mut lines: Vec<String>) -> Vec<String> {
+    lines.sort_by(|a, b| line_order(a).cmp(&line_order(b)));
+    lines
 }
 
 /// The distance (m) between two points (degrees), flat over a city's scale.
@@ -154,7 +172,7 @@ pub(crate) fn all() -> &'static [Station] {
                 };
                 Some(Station {
                     name: name.to_string(),
-                    lines: lines.split_whitespace().map(str::to_string).collect(),
+                    lines: in_order(lines.split_whitespace().map(str::to_string).collect()),
                     lat: lat.parse().ok()?,
                     lon: lon.parse().ok()?,
                 })
@@ -196,7 +214,7 @@ pub fn complex_lines(station: &Station) -> Vec<String> {
         .flat_map(|s| s.lines.iter().cloned())
         .chain(station.lines.iter().cloned())
         .collect();
-    lines.sort();
+    lines.sort_by(|a, b| line_order(a).cmp(&line_order(b)));
     lines.dedup();
     lines
 }
@@ -210,7 +228,7 @@ pub fn same_spot_lines(station: &Station) -> Vec<String> {
         .flat_map(|s| s.lines.iter().cloned())
         .chain(station.lines.iter().cloned())
         .collect();
-    lines.sort();
+    lines.sort_by(|a, b| line_order(a).cmp(&line_order(b)));
     lines.dedup();
     lines
 }
@@ -239,6 +257,18 @@ pub fn of_cell(cell_id: i64) -> Option<&'static Station> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lines_are_in_the_mtas_order() {
+        let lines = |s: &str| s.split_whitespace().map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(in_order(lines("C B")), lines("B C"));
+        assert_eq!(in_order(lines("SIR W S 7 A 2")), lines("2 7 A W S SIR"));
+        let columbus = all()
+            .iter()
+            .find(|s| s.name == "59 St-Columbus Circle" && s.lines.len() == 4)
+            .unwrap();
+        assert_eq!(columbus.lines, lines("A B C D"));
+    }
+
     use super::*;
 
     #[test]
