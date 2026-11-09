@@ -20,17 +20,20 @@ import dev.khyber.ride.proto.MicrophoneInfo
 import dev.khyber.ride.proto.StreamInfo
 import dev.khyber.ride.proto.StreamKind
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.io.File
 import uniffi.ride_ffi.StreamWriter
 
 /**
- * Lossless 16-bit PCM from every microphone at once (one interleaved channel each) at the input's highest
+ * Lossless 32-bit float PCM (16-bit if Android refuses float) from every microphone at once (one interleaved channel each) at the input's highest
  * native rate, into the `audio` stream, two seconds per chunk, with `AudioRecord` boot-time timestamps
  * so it lines up with the sensors.
  * Uses the `DEFAULT` source on the default input: on the S25 (Galaxy SM-S947U1) it's the only way both microphones
  * are recorded (`MicProbe`, 2026-11-09); `VOICE_RECOGNITION` and `VOICE_COMMUNICATION` give only the bottom one,
  * asking for a particular microphone gives it twice, `UNPROCESSED` only the bottom one with a strange 2nd channel,
  * and `MIC` and `CAMCORDER` clipped the back one on speech.
+ * Float because the S25's input is 24-bit (`PCM_8_24`), which float carries whole and 16-bit cuts (`MicProbe`, 2026-11-09).
  * The microphones, what the input supports, and any format Android refused are all written into the session.
  */
 @SuppressLint("MissingPermission") // Only made after `RECORD_AUDIO` is checked.
@@ -53,6 +56,9 @@ class AudioStreamRecorder(context: Context, dir: File) {
     private val record: AudioRecord = open()
     val sampleRateHz: Int = record.sampleRate
     val channels: Int = record.channelCount
+    /** Whether reads are 32-bit float (into `pcm_f32le`), else 16-bit (into `pcm_s16le`). */
+    private val float = record.audioFormat == AudioFormat.ENCODING_PCM_FLOAT
+    private val frameBytes = (if (float) 4 else 2) * channels
     private val readFrames = sampleRateHz / 10
     private val chunkFrames = sampleRateHz * 2
     private val writer = StreamWriter.create(dir.path, NAME)
@@ -91,7 +97,7 @@ class AudioStreamRecorder(context: Context, dir: File) {
      * The highest native rate the input lists (48 kHz if it lists none: Android resamples any rate asked for,
      * and more than native is no more data), with a channel per microphone (more are silent or copies on the S25),
      * or as many as the input says it has if Android lists no microphones.
-     * Fewer channels only if Android refuses, each refusal kept for the session.
+     * Float first, then 16-bit, at each; fewer channels only if Android refuses both, each refusal kept for the session.
      */
     private fun open(): AudioRecord {
         val rates = builtInMic?.sampleRates?.filter { it > 0 }?.sortedDescending()?.takeIf { it.isNotEmpty() } ?: listOf(48_000)
@@ -103,25 +109,30 @@ class AudioStreamRecorder(context: Context, dir: File) {
         )
         for (rate in rates) {
             for (n in most downTo 1) {
-                val format = AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(rate)
-                    .setChannelIndexMask((1 shl n) - 1)
-                    .build()
-                tryOpen(format, "$rate Hz, ${n} channels by index")?.let { return it }
+                for ((encoding, name) in ENCODINGS) {
+                    val format = AudioFormat.Builder()
+                        .setEncoding(encoding)
+                        .setSampleRate(rate)
+                        .setChannelIndexMask((1 shl n) - 1)
+                        .build()
+                    tryOpen(format, "$rate Hz, ${n} channels by index, $name")?.let { return it }
+                }
             }
         }
-        val mono = AudioFormat.Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(rates.first())
-            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-            .build()
-        return tryOpen(mono, "${rates.first()} Hz mono") ?: throw IllegalStateException("no audio format opened: $refused")
+        for ((encoding, name) in ENCODINGS) {
+            val mono = AudioFormat.Builder()
+                .setEncoding(encoding)
+                .setSampleRate(rates.first())
+                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                .build()
+            tryOpen(mono, "${rates.first()} Hz mono, $name")?.let { return it }
+        }
+        throw IllegalStateException("no audio format opened: $refused")
     }
 
     private fun tryOpen(format: AudioFormat, label: String): AudioRecord? {
         val r = try {
-            val frameBytes = 2 * format.channelCount
+            val frameBytes = (if (format.encoding == AudioFormat.ENCODING_PCM_FLOAT) 4 else 2) * format.channelCount
             val minBuffer = AudioRecord.getMinBufferSize(format.sampleRate, format.channelMask, format.encoding)
             AudioRecord.Builder()
                 .setAudioSource(source)
@@ -132,8 +143,10 @@ class AudioStreamRecorder(context: Context, dir: File) {
             refused.add("$label: $e")
             return null
         }
-        if (r.state != AudioRecord.STATE_INITIALIZED || r.channelCount != format.channelCount || r.sampleRate != format.sampleRate) {
-            refused.add("$label: got state ${r.state}, ${r.sampleRate} Hz, ${r.channelCount} channels")
+        if (r.state != AudioRecord.STATE_INITIALIZED || r.channelCount != format.channelCount || r.sampleRate != format.sampleRate ||
+            r.audioFormat != format.encoding
+        ) {
+            refused.add("$label: got state ${r.state}, ${r.sampleRate} Hz, ${r.channelCount} channels, encoding ${r.audioFormat}")
             r.release()
             return null
         }
@@ -168,10 +181,11 @@ class AudioStreamRecorder(context: Context, dir: File) {
     }
 
     private fun loop(r: AudioRecord) {
-        val frameBytes = 2 * channels
         val buf = ByteArray(readFrames * frameBytes)
+        val floats = if (float) FloatArray(readFrames * channels) else null
+        val floatBytes = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
         val pcm = ByteArrayOutputStream(chunkFrames * frameBytes)
-        val sameness = ChannelSameness(channels, sampleRateHz * SAMENESS_S)
+        val sameness = ChannelSameness(channels, frameBytes / channels, sampleRateHz * SAMENESS_S)
         val timestamps = ArrayList<PbAudioTimestamp>()
         val ts = AudioTimestamp()
         var chunkFirstFrame = 0L
@@ -181,7 +195,10 @@ class AudioStreamRecorder(context: Context, dir: File) {
             val chunk = Health.guard("audio chunk") {
                 AudioChunk.newBuilder()
                     .setFirstFrame(chunkFirstFrame)
-                    .setPcmS16Le(ByteString.copyFrom(pcm.toByteArray()))
+                    .apply {
+                        val bytes = ByteString.copyFrom(pcm.toByteArray())
+                        if (float) setPcmF32Le(bytes) else setPcmS16Le(bytes)
+                    }
                     .addAllTimestamps(timestamps)
                     .setWrittenElapsedRealtimeNs(SystemClock.elapsedRealtimeNanos())
                     .build()
@@ -193,7 +210,17 @@ class AudioStreamRecorder(context: Context, dir: File) {
             if (chunk != null) Health.guard("write audio") { writer.appendEncoded(chunk) }
         }
         while (running) {
-            val n = r.read(buf, 0, buf.size)
+            // Bytes read: a float read is a count of floats, put into `buf` as little-endian bytes.
+            val n = if (floats != null) {
+                val got = r.read(floats, 0, floats.size, AudioRecord.READ_BLOCKING)
+                if (got > 0) {
+                    floatBytes.clear()
+                    floatBytes.put(floats, 0, got)
+                }
+                if (got < 0) got else got * 4
+            } else {
+                r.read(buf, 0, buf.size)
+            }
             if (n < 0) {
                 Health.report("audio", java.io.IOException("AudioRecord.read returned $n"))
                 break
@@ -220,7 +247,7 @@ class AudioStreamRecorder(context: Context, dir: File) {
                     channels,
                     readFirstFrame,
                     buf.copyOf(n),
-                    false,
+                    float,
                     if (stamped) listOf(ts.framePosition) else emptyList(),
                     if (stamped) listOf(ts.nanoTime) else emptyList(),
                 )
@@ -234,6 +261,8 @@ class AudioStreamRecorder(context: Context, dir: File) {
         const val NAME = "audio"
         /** How long the channels are compared at the start, to tell copies of one microphone from several. */
         private const val SAMENESS_S = 10
+        /** Encodings tried at each format, best first. */
+        private val ENCODINGS = listOf(AudioFormat.ENCODING_PCM_FLOAT to "float", AudioFormat.ENCODING_PCM_16BIT to "16-bit")
 
         private const val PREFS = "audio"
         private const val ENABLED = "enabled"
@@ -271,7 +300,7 @@ private fun microphoneInfo(m: AndroidMicrophoneInfo): MicrophoneInfo {
  * Over the first [frames] frames, whether every channel is an exact copy of the first: if so, Android gave
  * one microphone several times over, which is said once (the recording itself is kept as it came).
  */
-private class ChannelSameness(private val channels: Int, private val frames: Int) {
+private class ChannelSameness(private val channels: Int, private val sampleBytes: Int, private val frames: Int) {
     private var seen = 0
     private val differs = BooleanArray(channels)
     private val sound = BooleanArray(channels)
@@ -279,12 +308,16 @@ private class ChannelSameness(private val channels: Int, private val frames: Int
 
     fun add(buf: ByteArray, n: Int): String? {
         if (done) return null
-        val frameBytes = 2 * channels
+        val frameBytes = sampleBytes * channels
         var f = 0
         while (f + frameBytes <= n && seen < frames) {
             for (c in 0 until channels) {
-                if (buf[f + 2 * c] != 0.toByte() || buf[f + 2 * c + 1] != 0.toByte()) sound[c] = true
-                if (c > 0 && (buf[f + 2 * c] != buf[f] || buf[f + 2 * c + 1] != buf[f + 1])) differs[c] = true
+                // Byte by byte, for 16-bit and float alike: silence is all zero bytes either way.
+                for (b in 0 until sampleBytes) {
+                    val x = buf[f + sampleBytes * c + b]
+                    if (x != 0.toByte()) sound[c] = true
+                    if (c > 0 && x != buf[f + b]) differs[c] = true
+                }
             }
             f += frameBytes
             seen++
