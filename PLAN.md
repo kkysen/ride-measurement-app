@@ -1241,6 +1241,11 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Fourth run (0.1.23, rider talking, `data/work/mic-probe/clips-4/`): all three give 2 microphones,
     the second channel consistently 10 to 13 samples later (0.2 to 0.3 ms) and 5 to 9 dB louder.
     In float the second channel reached full scale (1.0) with `MIC` and `CAMCORDER`, not with `DEFAULT` (peak 0.61).
+    Done, on the phone (0.1.24, installed 2026-11-09 overnight; `1777c94`, `b055932`, `b7c41ff`, `f344f75`), untested on a ride:
+    rides record `DEFAULT` on the default input (the rider heard little difference between the three), 2 channels, float
+    (`pcm_f32le`; 16-bit only if refused); recompression makes 24-bit FLAC only when every sample is exactly k/2^23,
+    else keeps the floats under `zstd`. Check on the first ride: 2 different channels, no `Health` copy/silence report,
+    and whether the chunks became FLAC (if not, the floats aren't plain 24-bit and storage is about 2x).
     Installed in 0.1.23 (`54c1e3c`): the probe's notification has a Stop button, and `probe_clips` is only those 6 tries (about 25 s).
     Then benchmark lossless codecs on it (FLAC, WavPack, MPEG-4 ALS, OptimFROG),
     and try lossless on OneDrive with Opus on the phone, dropped on the phone only after the upload is verified.
