@@ -1212,6 +1212,14 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     The `Health` check reported only the copy, in the first 10 s: also report silent channels, and check over the whole ride.
     Next, untested: try `CAMCORDER` or `MIC` with `CHANNEL_IN_STEREO` (bottom and back), or index masks on those sources,
     then drop channels that are copies or silent rather than storing them (FLAC hides it, but it's not more data).
+    The rider (2026-11-09) finds the 48 kHz recordings "massively better than before".
+    0.1.19's `MicProbe` (`adb shell am start -n dev.khyber.ride/.MainActivity --ez probe_mics true`, about 7 min)
+    tries 7 sources x default/bottom/back x 7 layouts x 16-bit/float into `mic-probe.tsv`.
+    First run (`data/work/mic-probe/`): only the first 7 rows have sound, the rest silent once the app left the screen
+    (Android silences a background app's microphone), so rerun with the app open.
+    So far `DEFAULT` with index masks of 2 to 4 channels gives the bottom and back microphones as 2 distinct channels,
+    a 3rd or 4th silent. The phone's audio policy lists 2 built-in microphones (`bottom`, `back`; a "2 Mic" device),
+    channel masks up to 4 (0x60000c: left, right, top left, top right), and 24-bit (`PCM_8_24`) at 48 kHz: try float capture for 24 bits.
     Then benchmark lossless codecs on it (FLAC, WavPack, MPEG-4 ALS, OptimFROG),
     and try lossless on OneDrive with Opus on the phone, dropped on the phone only after the upload is verified.
     Opus, measured on Thu Nov 5, 10:06 pm (16 kHz mono, 1:03:16): FLAC 80 MB, Opus 64 kbps 32 MB, 32 kbps 15 MB.
@@ -1384,6 +1392,15 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Service alerts (the "delay" text) aren't polled; add the subway alerts feed.
 41. Live speed inputs late: both of Sun Nov 8's rides reported "inputs arrived over 1500 ms late" from the start,
     356 in the first 21:45 of Sun Nov 8, 9:29 pm, and 344 on Sat Nov 7, 5:59 pm; find what's late (which sensor or the feeds), and why.
+42. Better compression (rider, 2026-11-09), all bit-exact lossless, benchmarked on real rides first:
+    - Audio is 95% of a ride (Sun Nov 8, 2:40 pm: 312 of 328 MB). First stop storing copied and silent channels (item 25),
+      then compare FLAC at its highest settings, WavPack (`-hhx6`), MPEG-4 ALS and OptimFROG on the 2-microphone audio;
+      stereo decorrelation should help most, since the microphones hear the same train.
+    - Sensor streams are still protobuf plus `zstd` (accel 1.58M samples in 8.7 MB, 5.5 bytes a sample):
+      the columnar encoding planned above (XOR or byte-shuffle values, delta-of-delta timestamps) was never built.
+      Try it, and `zstd --long` with a trained dictionary, and `xz`, on accel, gyro, mag and `radio` and `transit`.
+    - The feeds (`transit`) repeat almost everything poll to poll: store each poll as a diff to the previous one.
+    - Measure the phone's CPU and battery for each, since recompression runs there.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
