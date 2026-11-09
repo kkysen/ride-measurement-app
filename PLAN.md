@@ -1220,6 +1220,18 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     So far `DEFAULT` with index masks of 2 to 4 channels gives the bottom and back microphones as 2 distinct channels,
     a 3rd or 4th silent. The phone's audio policy lists 2 built-in microphones (`bottom`, `back`; a "2 Mic" device),
     channel masks up to 4 (0x60000c: left, right, top left, top right), and 24-bit (`PCM_8_24`) at 48 kHz: try float capture for 24 bits.
+    Second run (0.1.21, in a foreground service, `data/work/mic-probe/mic-probe-2.tsv`), all 294 opened, none refused:
+    - `VOICE_RECOGNITION` (what rides use now) and `VOICE_COMMUNICATION` are one microphone, the bottom:
+      every 2-channel layout gives an exact copy, and only the bottom is active. So every ride so far is mono.
+    - Both microphones active and 2 different channels: `DEFAULT`, `MIC` and `CAMCORDER`, by index mask (2 channels) or stereo,
+      on the default or bottom input (asking for the back one often gives two equal channels).
+      `CAMCORDER` most reliably (about -36 and -14 dBFS: bottom and back differ a lot).
+    - `UNPROCESSED` opens although the phone says it isn't supported, but only the bottom is active,
+      its second channel 40 dB quieter (not the back microphone), and mono near full scale (-2 dBFS): suspect.
+    - A 3rd or 4th channel is always silent or a copy. Float opens everywhere; whether it carries 24 bits is unchecked.
+    Left: levels alone can't tell a second microphone from a processed copy of the first; next probe, after asking:
+    correlation between channels, peaks and clipping, and a few seconds of each candidate saved to listen to.
+    Then record with the best (likely `CAMCORDER` or `MIC`, 2 channels, float), only after the rider hears it.
     Then benchmark lossless codecs on it (FLAC, WavPack, MPEG-4 ALS, OptimFROG),
     and try lossless on OneDrive with Opus on the phone, dropped on the phone only after the upload is verified.
     Opus, measured on Thu Nov 5, 10:06 pm (16 kHz mono, 1:03:16): FLAC 80 MB, Opus 64 kbps 32 MB, 32 kbps 15 MB.
