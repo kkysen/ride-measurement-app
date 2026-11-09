@@ -1182,6 +1182,11 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     and 49 St's BMT platform named from the 2 at 50 St; no stop was tapped during any.
     Left: passes of another line's platform at a complex (59 St's A/C/B/D one from the 2) rule out lines the rider isn't on;
     the 20 s after the last naming stays, for a cell naming the next station while the train is still stopping.
+    The rider (2026-11-08) doubts the 3 at 79 St on Thu Oct 22 (riding the 1 local is likelier then),
+    so the schedule match isn't confirmed: check that ride's stops at 79 St and 86 St again,
+    and whether the passes with no feeds (14, several at 79 St at 15 to 42 mph) are stops missed.
+    Houston St (Mon Oct 26, 11:36 am) should be a stop, the rider says;
+    a false stop may be just before or after it, which may be what hid the Franklin St pass.
 23. Done, not on the phone (`4affdf5`, `a27cacf`, `e1d4f91`): graph, map and replay (Mon Oct 26, 8:08 pm).
     The graph's time axis shows round 12-hour New York times, as many as fit (`clock_ticks`).
     The live map pins each tap where the rider was (`positions_at`), underground once its leg is drawn.
