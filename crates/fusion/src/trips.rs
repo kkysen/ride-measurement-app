@@ -37,6 +37,20 @@ fn gtfs_stops() -> &'static [(String, f64, f64)] {
     })
 }
 
+/// A GTFS parent stop's position.
+fn stop_position(id: &str) -> Option<(f64, f64)> {
+    static BY_ID: OnceLock<HashMap<&'static str, (f64, f64)>> = OnceLock::new();
+    BY_ID
+        .get_or_init(|| {
+            gtfs_stops()
+                .iter()
+                .map(|(id, lat, lon)| (id.as_str(), (*lat, *lon)))
+                .collect()
+        })
+        .get(id)
+        .copied()
+}
+
 /// The GTFS parent stop IDs of a station.
 pub fn stop_ids(station: &Station) -> Vec<&'static str> {
     gtfs_stops()
@@ -139,6 +153,8 @@ pub struct Trips {
     trips: HashMap<String, Trip>,
     /// Unix ns minus elapsed realtime ns, from the latest poll.
     offset_ns: Option<i64>,
+    /// The first and latest polls' request times (unix s): the span the feeds cover.
+    polled_s: Option<(i64, i64)>,
 }
 
 impl Trips {
@@ -146,6 +162,7 @@ impl Trips {
     pub fn on_poll(&mut self, received_ns: i64, request_unix_ms: i64, stops: Vec<TripStop>) {
         let now = request_unix_ms / 1000;
         self.offset_ns = Some(request_unix_ms * 1_000_000 - received_ns);
+        self.polled_s = Some((self.polled_s.map_or(now, |(first, _)| first), now));
         for s in stops {
             let trip = self.trips.entry(s.trip_id).or_default();
             trip.route = s.route;
@@ -244,6 +261,48 @@ impl Trips {
             || own_stop_ids(station)
                 .iter()
                 .any(|id| trip.stops.contains_key(*id))
+    }
+
+    /// Whether a trip the feeds listed could have been the rider's train passing `passed` without stopping:
+    /// one at the station of the rider's stop before (`before`, stopped at `stopped_ns`) from then until the pass
+    /// (`passed_ns`), heading toward `passed` (a stop after, nearer it than `before`), that doesn't stop there.
+    /// The feeds list a trip's stops ahead, so one listed at `before` lists `passed` too if it stops there.
+    /// None when the feeds weren't polled from the stop on (none recorded, as on Thu Oct 22).
+    /// Only then can a pass rule out the lines stopping there: on Thu Oct 22 at 3:13 am, the overnight 3 passed
+    /// 79 St, but a local 1 or 2 doesn't.
+    pub fn skipped_by_a_trip(
+        &self,
+        before: &Station,
+        stopped_ns: i64,
+        passed: &Station,
+        passed_ns: i64,
+    ) -> Option<bool> {
+        let offset = self.offset_ns?;
+        let unix_s = |ns: i64| (ns + offset).div_euclid(1_000_000_000);
+        let (stopped, passing) = (unix_s(stopped_ns), unix_s(passed_ns));
+        let (first, last) = self.polled_s?;
+        if first > stopped || last < stopped {
+            return None;
+        }
+        let at_before = stop_ids(before);
+        let here = (before.lat, before.lon);
+        let there = (passed.lat, passed.lon);
+        Some(self.trips.values().any(|trip| {
+            let Some(left) = at_before
+                .iter()
+                .filter_map(|id| trip.stops.get(*id))
+                .find(|&&(a, d)| d >= stopped - SLACK_S && a <= passing + SLACK_S)
+                .map(|&(_, d)| d)
+            else {
+                return false;
+            };
+            let toward = trip.stops.iter().any(|(id, &(a, _))| {
+                a > left
+                    && stop_position(id)
+                        .is_some_and(|next| meters(there, next) < meters(here, next))
+            });
+            toward && !Self::stops_at(trip, passed)
+        }))
     }
 
     /// The route of [`Self::route`], its best trip, and how many of the stops that trip matches;
@@ -471,6 +530,66 @@ mod tests {
         assert!(!Trips::stops_at(&trip("Q", &["R14", "R16"]), passed[0]));
         assert!(!Trips::stops_at(&trip("WX", &[]), passed[0]));
         assert!(Trips::stops_at(&trip("Q", &["R15"]), passed[0]));
+    }
+
+    #[test]
+    fn a_pass_counts_only_if_a_trip_listed_then_skips_it() {
+        // Thu Oct 22, 3:12 am: the rider's train left 72 St and passed 79 St. The 3 runs express there,
+        // the 1 local; the 2, local overnight, is listed at 79 St by the feeds though the MTA lists only the 1.
+        let t0 = 1_792_653_000;
+        let offset = 1_000_000_000_000i64;
+        let named = |name: &str| {
+            crate::stations::all()
+                .iter()
+                .find(|s| s.name == name && s.lines.iter().any(|l| l == "1"))
+                .unwrap()
+        };
+        let (s72, s79) = (named("72 St"), named("79 St"));
+        let at = |s: i64| offset + s * 1_000_000_000;
+        let skipped = |stops: Vec<TripStop>| {
+            let mut trips = Trips::default();
+            // Polled as the train came in and as it left.
+            trips.on_poll(at(-20), (t0 - 20) * 1000, stops.clone());
+            trips.on_poll(at(10), (t0 + 10) * 1000, stops);
+            trips.skipped_by_a_trip(s72, at(0), s79, at(60))
+        };
+        let local = |trip: &str, route: &str| {
+            vec![
+                stop(trip, route, "123", t0),
+                stop(trip, route, "122", t0 + 60),
+                stop(trip, route, "120", t0 + 180),
+            ]
+        };
+        // Only locals then: the pass doesn't count, a stop there was missed.
+        assert_eq!(skipped(local("1", "1")), Some(false));
+        assert_eq!(skipped(local("2", "2")), Some(false));
+        // An express from 72 St to 96 St: it does.
+        let express = vec![stop("3", "3", "123", t0), stop("3", "3", "120", t0 + 150)];
+        assert_eq!(skipped(express.clone()), Some(true));
+        // One the other way, to 66 St, isn't passing 79 St.
+        assert_eq!(
+            skipped(vec![
+                stop("3s", "3", "123", t0),
+                stop("3s", "3", "124", t0 + 60)
+            ]),
+            Some(false)
+        );
+        // At 72 St long before the rider's stop: not the rider's train.
+        assert_eq!(
+            skipped(vec![
+                stop("3", "3", "123", t0 - 600),
+                stop("3", "3", "120", t0 - 450)
+            ]),
+            Some(false)
+        );
+        // No feeds then, or polled only from after the stop: can't tell.
+        assert_eq!(
+            Trips::default().skipped_by_a_trip(s72, at(0), s79, at(60)),
+            None
+        );
+        let mut late = Trips::default();
+        late.on_poll(at(30), (t0 + 30) * 1000, express);
+        assert_eq!(late.skipped_by_a_trip(s72, at(0), s79, at(60)), None);
     }
 
     #[test]

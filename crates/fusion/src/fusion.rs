@@ -1014,7 +1014,7 @@ impl Fusion {
         }
         // Stations passed since the first of those stops rule out the trips that stop there.
         let passed: Vec<&Station> = self
-            .passes(recent.first()?.stopped_ns, t)
+            .counted_passes(recent.first()?.stopped_ns, t)
             .iter()
             .map(|p| p.station)
             .collect();
@@ -1074,7 +1074,7 @@ impl Fusion {
         }
         // Not the whole ride's namings at each status: a pass comes within minutes of the stops around it.
         let from = from.max(to.saturating_sub(PASS_LOOK_BACK_NS));
-        let passes = self.passes(from, to);
+        let passes = self.counted_passes(from, to);
         if passes.is_empty() {
             return lines.to_vec();
         }
@@ -1101,7 +1101,7 @@ impl Fusion {
     /// but those stopping at a station passed: what the rider changed to there; none if nothing's left.
     fn changed_by_passes(&self, from: i64, to: i64) -> Option<Vec<String>> {
         let from = from.max(to.saturating_sub(PASS_LOOK_BACK_NS));
-        let passes = self.passes(from, to);
+        let passes = self.counted_passes(from, to);
         let first = passes.first()?;
         let passed: Vec<String> = passes
             .iter()
@@ -1119,14 +1119,29 @@ impl Fusion {
     /// found, else as the radio named it once standing there ([`MOVED_ON_AFTER_S`] in; the cell often names
     /// it only some seconds into the dwell).
     fn stop_station_before(&self, t: i64, from: i64) -> Option<&'static Station> {
+        self.stop_before(t, from).map(|(_, station)| station)
+    }
+
+    /// [`Self::stop_station_before`] with when the train stopped there.
+    fn stop_before(&self, t: i64, from: i64) -> Option<(i64, &'static Station)> {
         let lag = (RECORDS_SETTLE_S * 1e9) as i64;
         recent(&self.train_stops, |x| x.0.t_ns, from, lag)
             .iter()
             .filter(|(stop, _, in_subway)| *in_subway && stop.t_ns >= from && stop.t_ns < t)
             .max_by_key(|(stop, ..)| stop.t_ns)
             .and_then(|&(stop, station, _)| {
-                station.or_else(|| self.station_at(stop.t_ns + (MOVED_ON_AFTER_S * 1e9) as i64))
+                let station = station
+                    .or_else(|| self.station_at(stop.t_ns + (MOVED_ON_AFTER_S * 1e9) as i64))?;
+                Some((stop.t_ns, station))
             })
+    }
+
+    /// [`Self::passes`] that rule out the lines stopping there (see [`Pass::skipped_by_a_trip`]).
+    fn counted_passes(&self, from: i64, to: i64) -> Vec<Pass> {
+        self.passes(from, to)
+            .into_iter()
+            .filter(|p| p.skipped_by_a_trip != Some(false))
+            .collect()
     }
 
     /// Whether the subway detector said subway at `t`.
@@ -1222,11 +1237,21 @@ impl Fusion {
                     .iter()
                     .map(|&(_, v)| v)
                     .reduce(f32::min)?;
-                (min_mps >= PASS_MPS).then_some(Pass {
+                if min_mps < PASS_MPS {
+                    return None;
+                }
+                let skipped_by_a_trip =
+                    self.stop_before(first, first - near)
+                        .and_then(|(stopped, before)| {
+                            self.trips
+                                .skipped_by_a_trip(before, stopped, station, first)
+                        });
+                Some(Pass {
                     first_ns: first,
                     last_ns: last,
                     station,
                     min_mps,
+                    skipped_by_a_trip,
                 })
             })
             .collect()
@@ -3710,6 +3735,10 @@ pub struct Pass {
     pub last_ns: i64,
     pub station: &'static Station,
     pub min_mps: f32,
+    /// Whether a trip the feeds listed at the stop before passed it too (see [`trips::Trips::skipped_by_a_trip`]);
+    /// none without the feeds then. Only a pass some train could have made rules out the lines stopping there
+    /// ([`Fusion::counted_passes`]).
+    pub skipped_by_a_trip: Option<bool>,
 }
 
 /// The lines ridden (see [`Fusion::riding_lines`]) as of the train stops before `upto`, the last of them
