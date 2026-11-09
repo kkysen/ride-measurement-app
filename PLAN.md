@@ -1297,7 +1297,11 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     (8:41:17 pm), and 43 to 47 mph from 5:32:37 pm; walking is measured only after 6 windows (24 s),
     and between trains the cap was 3 m/s, the 6.7 mph shown at 5:33:10 pm, before GNSS came back at 5:33:38 pm
     (with GNSS the walk read 2 to 4 mph). Now, without recent GNSS, after a likely stop with steps since it
-    or between trains, the live speed shows at most the gait's pace (1.4 m/s walking, 3 m/s running): 3.1 mph.
+    or between trains, the live speed shows at most the rider's fastest pace on foot:
+    `WALK_MAX_MPS` 2.3 m/s (5 mph) walking, `RUN_MAX_MPS` 6.7 m/s (15 mph) running,
+    the one pair of on-foot limits, the offline gap holds included (were 2.6 and 4.5 m/s): 5.1 mph in both cases.
+    `liveratio` at these caps (205 legs): unchanged, 31 under 0.5, 93 within 0.7 to 1.3, median 0.97, 49 over 1.3.
+    At the first caps (1.4 m/s walking, 3 m/s running):
     `liveratio` (`no_live_smoothing`, 204 legs): 9 legs shorter, none longer; under 0.5 30 to 31
     (a 236 s leg averaging 5.4 mph, 0.67 to 0.34, peak 13.6 to 7.4 mph), within 0.7 to 1.3 91, median 0.95, over 1.3 48.
     Open: offline, the smoothed speed walking off at 8:41 pm still runs 14 to 30 mph (8:40:54 to 8:42:20 pm);
