@@ -24,6 +24,46 @@ pub const FORMAT_VERSION: u32 = 1;
 pub const SESSION_INFO_FILE: &str = "session.pb";
 pub const STREAM_EXTENSION: &str = "zst";
 
+/// One audio chunk's samples as recorded: which field holds them decides the format.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Pcm<'a> {
+    /// 16-bit little-endian integers.
+    S16(&'a [u8]),
+    /// 32-bit little-endian IEEE floats, nominally in [-1, 1].
+    F32(&'a [u8]),
+}
+
+impl<'a> Pcm<'a> {
+    pub fn bytes(self) -> &'a [u8] {
+        match self {
+            Self::S16(b) | Self::F32(b) => b,
+        }
+    }
+
+    pub fn bytes_per_sample(self) -> usize {
+        match self {
+            Self::S16(_) => 2,
+            Self::F32(_) => 4,
+        }
+    }
+
+    /// Whole frames of `channels` samples each.
+    pub fn frames(self, channels: usize) -> usize {
+        self.bytes().len() / (self.bytes_per_sample() * channels.max(1))
+    }
+}
+
+impl AudioChunk {
+    /// The chunk's PCM, float if it has any, else 16-bit (empty if moved into `flac`).
+    pub fn pcm(&self) -> Pcm<'_> {
+        if self.pcm_f32le.is_empty() {
+            Pcm::S16(&self.pcm_s16le)
+        } else {
+            Pcm::F32(&self.pcm_f32le)
+        }
+    }
+}
+
 impl SensorChunk {
     /// Absolute timestamps, undoing the delta encoding.
     pub fn timestamps_ns(&self) -> Vec<i64> {

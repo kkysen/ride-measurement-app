@@ -73,7 +73,7 @@ impl Session {
     }
 
     /// Reads an audio stream.
-    /// Chunks recompressed to FLAC come back as recorded, with their PCM in `pcm_s16le`;
+    /// Chunks recompressed to FLAC come back as recorded, with their PCM in `pcm_s16le` or `pcm_f32le`;
     /// one whose FLAC doesn't decode is left out and counted as damage.
     pub fn read_audio(&self, name: &str) -> anyhow::Result<StreamContents<AudioChunk>> {
         let mut contents: StreamContents<AudioChunk> = read_stream_file(&self.stream_path(name))?;

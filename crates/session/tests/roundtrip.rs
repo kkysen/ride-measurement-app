@@ -157,6 +157,7 @@ fn audio_stream_round_trips() {
         .map(|c| AudioChunk {
             first_frame: c * 32_000,
             pcm_s16le: pcm.clone(),
+            pcm_f32le: Vec::new(),
             timestamps: vec![AudioTimestamp {
                 frame_position: c * 32_000,
                 boottime_ns: 1_000_000_000 * (c + 1),
@@ -175,6 +176,37 @@ fn audio_stream_round_trips() {
         .unwrap();
     assert!(!read.truncated);
     assert_eq!(read.chunks, chunks);
+}
+
+#[test]
+fn float_audio_stream_round_trips() {
+    use ride_session::{AudioChunk, Pcm};
+
+    let dir = tempfile::tempdir().unwrap();
+    write_session(dir.path(), &[]);
+    // Neither a 24-bit sample nor in [-1, 1] for some: kept bit for bit regardless.
+    let pcm: Vec<u8> = (0..32_000u32)
+        .flat_map(|i| ((i as f32 * 0.37).sin() * 1.25 + 1e-9).to_le_bytes())
+        .collect();
+    let chunks: Vec<_> = (0..3)
+        .map(|c| AudioChunk {
+            first_frame: c * 16_000,
+            pcm_f32le: pcm.clone(),
+            ..Default::default()
+        })
+        .collect();
+    let mut w = StreamWriter::create(dir.path(), "audio").unwrap();
+    for c in &chunks {
+        w.append(c).unwrap();
+    }
+    let read = Session::open(dir.path())
+        .unwrap()
+        .read_audio("audio")
+        .unwrap();
+    assert!(!read.truncated);
+    assert_eq!(read.chunks, chunks);
+    assert!(matches!(read.chunks[0].pcm(), Pcm::F32(_)));
+    assert_eq!(read.chunks[0].pcm().frames(2), 16_000);
 }
 
 mod damage {

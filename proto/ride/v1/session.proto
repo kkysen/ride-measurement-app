@@ -71,7 +71,7 @@ message AudioInfo {
   repeated int32 device_channel_masks = 10;
   // The channel index mask recorded with (channel i is bit i), or 0 if a positional mask was used.
   int32 channel_index_mask = 11;
-  // `AudioFormat` encoding as recorded.
+  // `AudioFormat` encoding as recorded: `ENCODING_PCM_FLOAT` (4) in `pcm_f32le`, `ENCODING_PCM_16BIT` (2) in `pcm_s16le`.
   int32 encoding = 12;
   // Formats asked for and refused before this one, as "rate Hz, mask: reason", in order.
   repeated string refused_formats = 13;
@@ -400,7 +400,8 @@ message BatteryStatus {
   optional int32 charge_counter_uah = 8;
 }
 
-// Lossless 16-bit little-endian PCM, interleaved if multi-channel.
+// Lossless PCM as recorded, interleaved if multi-channel: 32-bit float in `pcm_f32le`,
+// or 16-bit in `pcm_s16le` (older sessions, or when Android refused float), never both.
 message AudioChunk {
   // Index of the first frame (sample per channel) in this chunk since the stream started.
   int64 first_frame = 1;
@@ -410,8 +411,13 @@ message AudioChunk {
   repeated AudioTimestamp timestamps = 3;
   int64 written_elapsed_realtime_ns = 4;
   // The same samples as one FLAC stream, bit-exact, instead of `pcm_s16le`: post-ride recompression sets it
-  // only when converting back gives the original chunk byte for byte. Readers restore `pcm_s16le` from it.
+  // only when converting back gives the original chunk byte for byte. Readers restore the PCM from it:
+  // a 16-bit stream into `pcm_s16le`, a 24-bit one into `pcm_f32le` (each sample k / 2^23, as Android
+  // gives a 24-bit input as float), which is used only when every float is exactly that.
   bytes flac = 5;
+  // `AudioFormat.ENCODING_PCM_FLOAT` as recorded, 32-bit IEEE little-endian, nominally in [-1, 1]
+  // (Android may give more); empty once moved into `flac`, or in 16-bit chunks.
+  bytes pcm_f32le = 6;
 }
 
 message AudioTimestamp {

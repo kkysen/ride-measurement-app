@@ -139,21 +139,55 @@ fn keeps_original_cut_at_a_frame_boundary_mid_message() {
     assert_eq!(fs::read(&path).unwrap(), bytes);
 }
 
+/// How `write_audio` records the tone.
+#[derive(Clone, Copy)]
+enum Format {
+    S16,
+    /// Float, each sample exactly a 24-bit integer over 2^23, as a 24-bit input gives it.
+    F32From24,
+    /// Float with more precision than 24 bits.
+    F32Fine,
+}
+
 /// An audio stream of `chunks` 2 s chunks of a noisy tone, in the live format.
 fn write_audio(dir: &Path, chunks: usize) -> PathBuf {
+    write_audio_as(dir, chunks, Format::S16)
+}
+
+fn write_audio_as(dir: &Path, chunks: usize, format: Format) -> PathBuf {
     let mut w = StreamWriter::create(dir, "audio").unwrap();
     let mut x: u32 = 7;
     for c in 0..chunks {
-        let pcm: Vec<u8> = (0..32_000)
-            .flat_map(|i| {
+        let samples: Vec<f64> = (0..32_000)
+            .map(|i| {
                 x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
                 let t = (c * 32_000 + i) as f64;
-                (((t * 0.07).sin() * 3000.0) as i16 + (x >> 26) as i16).to_le_bytes()
+                (t * 0.07).sin() * 3000.0 + f64::from(x >> 26)
             })
             .collect();
+        let bytes = |f: &dyn Fn(f64) -> [u8; 4]| samples.iter().flat_map(|&s| f(s)).collect();
+        let (pcm_s16le, pcm_f32le) = match format {
+            Format::S16 => (
+                samples
+                    .iter()
+                    .flat_map(|&s| (s as i16).to_le_bytes())
+                    .collect(),
+                Vec::new(),
+            ),
+            // 256 times the 16-bit tone, so it uses 24 bits.
+            Format::F32From24 => (
+                Vec::new(),
+                bytes(&|s| ((s * 256.0).round() as f32 / 8_388_608.0).to_le_bytes()),
+            ),
+            Format::F32Fine => (
+                Vec::new(),
+                bytes(&|s| ((s / 32_768.0) as f32).to_le_bytes()),
+            ),
+        };
         w.append(&ride_session::AudioChunk {
             first_frame: (c * 32_000) as i64,
-            pcm_s16le: pcm,
+            pcm_s16le,
+            pcm_f32le,
             timestamps: Vec::new(),
             written_elapsed_realtime_ns: c as i64,
             flac: Vec::new(),
@@ -255,4 +289,65 @@ fn keeps_audio_whose_flac_is_damaged() {
         "{outcome:?}"
     );
     assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn float_audio_of_24_bit_samples_becomes_flac_and_reads_back_as_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    audio_session(dir.path());
+    let path = write_audio_as(dir.path(), 3, Format::F32From24);
+    let before = Session::open(dir.path())
+        .unwrap()
+        .read_audio("audio")
+        .unwrap()
+        .chunks;
+    let plain = tempfile::tempdir().unwrap();
+    let plain_path = write_audio_as(plain.path(), 3, Format::F32From24);
+    recompress_stream(&plain_path, LEVEL);
+    let zstd_only = fs::metadata(&plain_path).unwrap().len();
+    let results = recompress_session(dir.path(), LEVEL).unwrap();
+    assert!(
+        matches!(results[0].1, Outcome::Replaced { .. }),
+        "{results:?}"
+    );
+    let flac = fs::metadata(&path).unwrap().len();
+    assert!(flac < zstd_only, "{flac} >= {zstd_only}");
+    let raw = ride_session::read::read_stream_file::<ride_session::AudioChunk>(&path).unwrap();
+    assert!(
+        raw.chunks
+            .iter()
+            .all(|c| c.pcm_f32le.is_empty() && c.pcm_s16le.is_empty() && !c.flac.is_empty())
+    );
+    let after = Session::open(dir.path())
+        .unwrap()
+        .read_audio("audio")
+        .unwrap();
+    assert!(after.is_clean());
+    assert_eq!(after.chunks, before);
+    assert!(after.chunks.iter().all(|c| !c.pcm_f32le.is_empty()));
+}
+
+#[test]
+fn float_audio_finer_than_24_bits_stays_float_under_zstd() {
+    let dir = tempfile::tempdir().unwrap();
+    audio_session(dir.path());
+    let path = write_audio_as(dir.path(), 3, Format::F32Fine);
+    let before = Session::open(dir.path())
+        .unwrap()
+        .read_audio("audio")
+        .unwrap()
+        .chunks;
+    recompress_session(dir.path(), LEVEL).unwrap();
+    let raw = ride_session::read::read_stream_file::<ride_session::AudioChunk>(&path).unwrap();
+    assert!(
+        raw.chunks
+            .iter()
+            .all(|c| !c.pcm_f32le.is_empty() && c.flac.is_empty())
+    );
+    let after = Session::open(dir.path())
+        .unwrap()
+        .read_audio("audio")
+        .unwrap();
+    assert!(after.is_clean());
+    assert_eq!(after.chunks, before);
 }
