@@ -1525,6 +1525,12 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     not the whole stream in memory, then rerun it on those rides. Also: Sat Nov 14's two channels look like one microphone twice
     (the second 1.04 times the first, the rest 28 dB down, correlation 0.99 even above 2 kHz), which the `Health` copy check misses
     since they aren't exact copies; Mon Nov 9's are two microphones (correlation about 0.8).
+51. Clock times in the ride's own time zone, not New York's (rider, 2026-11-15: "don't assume this is in NYC";
+    rides elsewhere, and flights, cross zones). Today the app formats every time in `America/New_York`
+    (`TapMarks.kt`, `PastRides.kt`, `LiveGraph.kt`), and `ride_session::clock` (`6e4b1ce`) is New York only.
+    Sessions record no zone; their ids are the phone's local time at the start, so old ones imply the start's offset.
+    Do: record the phone's zone (IANA id) in `SessionInfo`, and its changes during a ride; format every time, in the app and the tools,
+    in the zone in effect then, with that zone's daylight saving rules; old sessions fall back to the offset their id implies.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
