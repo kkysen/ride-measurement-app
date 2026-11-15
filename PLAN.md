@@ -1391,6 +1391,15 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     on Tue Oct 27 it reads 4 to 6 mph. Offline has no between-trains hold; adding one (or measuring walking sooner)
     is for the rider to approve, as a live and offline difference.
 34. The 2 from GTFS-RT keeps being lost (Mon Oct 26, 8:08 pm, at 8:19 pm). Check against v2 (item 29).
+    Looked into (2026-11-15, `skip_still`, live): not reproduced at 8:19 pm, with the code now or at 0.1.16 (the phone's that night).
+    The status names the 2 from 8:13:16 pm to 8:27 pm; the recorded v1 feeds list the rider's trip (`118950_2`, 5 stops from Bergen St)
+    throughout, and have no polls from 8:17:41 pm to 8:20:14 pm (no cell under the East River), which changes nothing.
+    What is lost: (1) no route before 8:13:16 pm, as stop detection found no stop at Atlantic Av or Nevins St until 8:12:30 pm (item 7);
+    (2) from 8:27 pm the route drops each time the cell names a station the 2 doesn't serve while it runs express
+    (Canal St, Houston St, Christopher St, 23 St and 28 St, all the 1's): the `stops_here` filter in `Fusion::status`.
+    v2 (item 29) wouldn't change either: the trip is in v1 at every stop.
+    Fix tried, not committed (stash "item 34: keep the route at a cell-named station..."): apply that filter only at a station the train stopped at.
+    Not scored: the 37-session replays took over an hour under load and were stopped; it needs `data/work/sessions-with-legs.txt` replayed before and after.
 35. Station cells missing (the registered cell, item 7 of 2026-10-21):
     none at 138 St and 149 St-Grand Concourse on the 5 (Tue Oct 27, 10:04 pm, at 10:16 and 10:21 pm);
     the southbound 4 missed 110 St, 103 St, 86 St and 59 St (Mon Nov 2, 6:04 pm, at 6:22 and 6:24 pm);
