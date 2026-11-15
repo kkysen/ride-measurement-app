@@ -1654,9 +1654,10 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     The rider chose the location's zone whenever there are fixes, else the phone's recorded zone, else the id's offset
     (`SessionClock::shown`; live, `RideClock::live` at the latest fix), so a flight in airplane mode shows local time
     where the plane is; the tools still list the phone's zone and where it differs.
-    Left: check the `python/experiments` scripts that use `America/New_York` (`train_line.py`, `actual_trips.py`,
-    `sensor_trips.py`, `transfers.py`, `untagged_cells_check.py`, and the ride clocks in `train_beacons.py`,
-    `boarding.py`, `elevator_shape.py`): GTFS times should take the feed's `agency_timezone`, ride times the session's zone.
+    Done: the `python/experiments` scripts that used `America/New_York` (`train_line.py`, `actual_trips.py`,
+    `sensor_trips.py`, `transfers.py`, `untagged_cells_check.py`, `train_beacons.py`, `boarding.py`, `elevator_shape.py`)
+    take ride times from `ride.local_clock` and `ride.local_ms` (the session's zone, from `SessionClock`),
+    and `train_line.py` compares GTFS times in the schedule's zone with `ride.agency_ms`; none is obsolete, all are kept.
     The `ACTION_TIMEZONE_CHANGED` receiver is untested on the phone.
 
 ## Future: flights
