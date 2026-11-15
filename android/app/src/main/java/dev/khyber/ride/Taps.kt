@@ -30,6 +30,7 @@ fun TapsScreen(onBack: () -> Unit) {
     val marks by RecorderService.marks.collectAsStateWithLifecycle()
     // The tap waiting for its delete to be confirmed, if any.
     var confirming by remember { mutableStateOf<Long?>(null) }
+    val clock = rememberLiveClock()
     Column(
         Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -42,7 +43,7 @@ fun TapsScreen(onBack: () -> Unit) {
                     val label = kindLabel(mark.kind) +
                         if (mark.text.isNotEmpty()) ": ${mark.text}" else ""
                     Text(
-                        "${clockTime(mark.wallMs)}  $label",
+                        "${clock.time(mark.wallMs)}  $label",
                         Modifier.weight(1f),
                         style = MaterialTheme.typography.bodyLarge,
                         textDecoration = if (mark.deleted) TextDecoration.LineThrough else null,

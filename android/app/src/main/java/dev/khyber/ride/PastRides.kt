@@ -27,13 +27,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.os.SystemClock
 import android.util.Log
 import java.io.File
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.ride_ffi.ReplayProgress
+import uniffi.ride_ffi.RideClock
 import uniffi.ride_ffi.RideReplay
 import uniffi.ride_ffi.SessionSpan
 import uniffi.ride_ffi.cachedReplay
@@ -45,19 +42,17 @@ import dev.khyber.ride.proto.ManualEvent
 /** One recording on the phone, as far as its files tell without decoding them. */
 private data class PastRide(val id: String, val bytes: Long, val recompressed: Boolean)
 
-private val NEW_YORK = ZoneId.of("America/New_York")
-private val DATE = DateTimeFormatter.ofPattern("EEE MMM d, yyyy", Locale.US)
-private val TIME = DateTimeFormatter.ofPattern("h:mm:ss a", Locale.US)
-
-/** A ride's start and end in New York time, the date once if both are on the same day, and how long: h:mm:ss. */
+/**
+ * A ride's start and end in its own zone (formatted by Rust, see `session_span`), the date once if both are
+ * on the same day, and how long: h:mm:ss.
+ */
 private fun describeSpan(span: SessionSpan): String {
-    val start = Instant.ofEpochMilli(span.startUnixMs).atZone(NEW_YORK)
-    val time = { t: java.time.ZonedDateTime -> TIME.format(t).lowercase() }
-    val endMs = span.endUnixMs ?: return "${DATE.format(start)}, ${time(start)}"
-    val end = Instant.ofEpochMilli(endMs).atZone(NEW_YORK)
-    val until = if (end.toLocalDate() == start.toLocalDate()) time(end) else "${DATE.format(end)}, ${time(end)}"
+    val endMs = span.endUnixMs
+    val endTime = span.endTime
+    if (endMs == null || endTime == null) return "${span.startDate}, ${span.startTime}"
+    val until = if (span.endDate == span.startDate) endTime else "${span.endDate}, $endTime"
     val total = ((endMs - span.startUnixMs) / 1000).coerceAtLeast(0)
-    return "${DATE.format(start)}, ${time(start)} to $until · " +
+    return "${span.startDate}, ${span.startTime} to $until · " +
         "%d:%02d:%02d".format(total / 3600, total / 60 % 60, total % 60)
 }
 
@@ -150,7 +145,11 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
     // The ride's taps (not deleted ones), shown on the graph and map with the "Taps" button.
     var showTaps by remember { mutableStateOf(false) }
     var taps by remember { mutableStateOf<List<TapMark>>(emptyList()) }
+    // The ride's own zone; the phone's now until it's read.
+    var clock by remember { mutableStateOf<RideClock?>(null) }
+    val shownClock = clock ?: rememberLiveClock()
     LaunchedEffect(id) {
+        clock = withContext(Dispatchers.IO) { sessionClock(File(RecorderService.sessionsDir(), id).path) }
         taps = withContext(Dispatchers.IO) {
             runCatching { sessionMarks(File(RecorderService.sessionsDir(), id).path) }
                 .onFailure { Log.e("RideLogger", "reading taps failed", it) }
@@ -250,7 +249,7 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
     val shownTaps = if (showTaps) taps else emptyList()
     if (showGraph) {
         val samples = remember(r) { r.smoothed.map { LiveSeries.Sample(it.elapsedRealtimeNs, it.speedMps, it.accelMps2) } }
-        SpeedGraphScreen(samples, r.stops, r.timeline, pastClockOffsetMs = r.clockOffsetMs, onBack, toggle, taps = shownTaps)
+        SpeedGraphScreen(samples, r.stops, r.timeline, pastClockOffsetMs = r.clockOffsetMs, shownClock, onBack, toggle, taps = shownTaps)
     } else {
         val fixes = remember(r) {
             r.track.map {
@@ -290,9 +289,9 @@ fun PastRideScreen(id: String, onBack: () -> Unit) {
         }
         val shownPlaced = if (showTaps) placed else emptyList()
         if (points.isEmpty()) {
-            TrackMapScreen(fixes, live = false, onBack, toggle, taps = shownPlaced)
+            TrackMapScreen(fixes, live = false, shownClock, onBack, toggle, taps = shownPlaced)
         } else {
-            TrackMapScreen(points, live = false, onBack, toggle, gpsFixes = fixes, taps = shownPlaced)
+            TrackMapScreen(points, live = false, shownClock, onBack, toggle, gpsFixes = fixes, taps = shownPlaced)
         }
     }
 }

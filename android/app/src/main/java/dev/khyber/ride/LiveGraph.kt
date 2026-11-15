@@ -39,21 +39,16 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import uniffi.ride_ffi.RideClock
 import uniffi.ride_ffi.LiveStop
 import uniffi.ride_ffi.TimelineSegment
-import uniffi.ride_ffi.clockTicks
 
 /** How much of the ride the graph shows, ending now; null is the whole ride. */
 private val WINDOWS_MIN = listOf(5, 15, 60, null)
-private val NEW_YORK = ZoneId.of("America/New_York")
-private val CLOCK = DateTimeFormatter.ofPattern("h:mm a", java.util.Locale.US).withZone(NEW_YORK)
 
 /** The rider's taps' lines on the graphs. */
 private val TAP_COLOR = Color(0xFFD81B60)
@@ -72,12 +67,13 @@ fun LiveGraphScreen(onBack: () -> Unit) {
     val samples by LiveSeries.samples.collectAsStateWithLifecycle()
     val stops by LiveSeries.stops.collectAsStateWithLifecycle()
     val timeline by LiveSeries.timeline.collectAsStateWithLifecycle()
-    SpeedGraphScreen(samples, stops, timeline, pastClockOffsetMs = null, onBack)
+    SpeedGraphScreen(samples, stops, timeline, pastClockOffsetMs = null, rememberLiveClock(), onBack)
 }
 
 /**
  * The graphs for the current recording, or for a past ride if [pastClockOffsetMs] (unix ms minus elapsed-realtime ms
  * over that ride) is given: then the ride's end stands for now, and it's shown whole at first.
+ * Clock times are in [clock]'s zone: the past ride's own, or the phone's now.
  * [taps] are drawn as lines across both graphs, labeled on the speed graph where there's room.
  */
 @Composable
@@ -86,6 +82,7 @@ fun SpeedGraphScreen(
     stops: List<LiveStop>,
     timeline: List<TimelineSegment>,
     pastClockOffsetMs: Long?,
+    clock: RideClock,
     onBack: () -> Unit,
     extraButtons: (@Composable () -> Unit)? = null,
     taps: List<TapMark> = emptyList(),
@@ -167,7 +164,7 @@ fun SpeedGraphScreen(
             plot(text, ink, accelColor, shown.map { it.elapsedRealtimeNs to Units.accel(it.accelMps2) }, startNs, endNs, shownStops, shownTaps, nowNs, zeroBased = false, labels = false)
         }
         Canvas(Modifier.fillMaxWidth().height(20.dp).then(gestures)) {
-            timeAxis(text, ink, clockOffsetMs, startNs, endNs)
+            timeAxis(text, ink, clock, clockOffsetMs, startNs, endNs)
         }
     }
 }
@@ -280,20 +277,19 @@ private fun DrawScope.plot(
 }
 
 /**
- * The time axis under the graphs: round clock times (12-hour, New York) from Rust's `clock_ticks`,
+ * The time axis under the graphs: round clock times (12-hour, in [clock]'s zone) from Rust's `RideClock.ticks`,
  * as many as fit, each centered on its time and kept on the canvas.
  */
-private fun DrawScope.timeAxis(text: TextMeasurer, ink: Color, clockOffsetMs: Long, startNs: Long, endNs: Long) {
+private fun DrawScope.timeAxis(text: TextMeasurer, ink: Color, clock: RideClock, clockOffsetMs: Long, startNs: Long, endNs: Long) {
     val left = 36.dp.toPx()
     val w = size.width - left
     val startMs = clockOffsetMs + startNs / 1_000_000
     val endMs = clockOffsetMs + endNs / 1_000_000
     val style = TextStyle(color = ink, fontSize = 11.sp)
-    val offsetMs = NEW_YORK.rules.getOffset(Instant.ofEpochMilli(startMs)).totalSeconds * 1000L
     val maxTicks = (w / 72.dp.toPx()).toInt().coerceAtLeast(2)
-    for (ms in clockTicks(startMs, endMs, offsetMs, maxTicks.toUInt())) {
+    for (ms in clock.ticks(startMs, endMs, maxTicks.toUInt())) {
         val tx = left + w * (ms - startMs).toFloat() / max(1L, endMs - startMs).toFloat()
-        val label = text.measure(CLOCK.format(Instant.ofEpochMilli(ms)).lowercase(), style)
+        val label = text.measure(clock.timeHm(ms), style)
         val lx = (tx - label.size.width / 2f).coerceIn(0f, max(0f, size.width - label.size.width))
         drawLine(ink.copy(alpha = 0.5f), Offset(tx, 0f), Offset(tx, 3.dp.toPx()), 1f)
         drawText(label, topLeft = Offset(lx, size.height - label.size.height))

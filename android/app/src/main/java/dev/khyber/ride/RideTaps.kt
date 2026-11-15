@@ -29,6 +29,7 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import uniffi.ride_ffi.RideClock
 import uniffi.ride_ffi.SessionMark
 import uniffi.ride_ffi.editSessionMark
 import uniffi.ride_ffi.sessionMarks
@@ -48,6 +49,7 @@ fun kindLabel(kind: ManualEvent.Kind): String = kind.name.removePrefix("KIND_").
 fun RideTapsScreen(sessionId: String, onBack: () -> Unit) {
     val dir = File(RecorderService.sessionsDir(), sessionId).path
     var marks by remember { mutableStateOf<List<SessionMark>?>(null) }
+    var clock by remember { mutableStateOf<RideClock?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
     // The tap whose kinds are showing, and the one waiting for its delete to be confirmed.
@@ -56,6 +58,7 @@ fun RideTapsScreen(sessionId: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     LaunchedEffect(reload) {
         withContext(Dispatchers.IO) {
+            if (clock == null) clock = sessionClock(dir)
             try {
                 marks = sessionMarks(dir)
             } catch (e: Exception) {
@@ -93,7 +96,7 @@ fun RideTapsScreen(sessionId: String, onBack: () -> Unit) {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            "${clockTime(mark.unixMs)}  ${kindLabel(kind)}" +
+                            "${clock?.time(mark.unixMs).orEmpty()}  ${kindLabel(kind)}" +
                                 (if (mark.text.isNotEmpty()) ": ${mark.text}" else "") +
                                 (if (mark.edited) " (changed)" else ""),
                             Modifier.weight(1f),

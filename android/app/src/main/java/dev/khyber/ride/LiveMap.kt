@@ -42,6 +42,7 @@ import org.osmdroid.views.overlay.FolderOverlay
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
+import uniffi.ride_ffi.RideClock
 import uniffi.ride_ffi.SpeedScale
 import uniffi.ride_ffi.accelBoundsMps2
 import uniffi.ride_ffi.accelEdgeColorArgb
@@ -84,7 +85,7 @@ fun LiveMapScreen(onBack: () -> Unit) {
             emptyList()
         }
     }
-    TrackMapScreen(points, live = true, onBack, underground = underground, taps = placed)
+    TrackMapScreen(points, live = true, rememberLiveClock(), onBack, underground = underground, taps = placed)
 }
 
 /**
@@ -92,11 +93,13 @@ fun LiveMapScreen(onBack: () -> Unit) {
  * or a past ride's, shown whole.
  * A past ride's [points] are its fused path (joined to the subway track underground), and [gpsFixes] the GPS fixes
  * themselves, drawn as a thin dark line over it. The live map's [underground] legs are drawn under its GPS path.
+ * Taps show their times in [clock]'s zone: the past ride's own, or the phone's now.
  */
 @Composable
 fun TrackMapScreen(
     points: List<LiveTrack.Point>,
     live: Boolean,
+    clock: RideClock,
     onBack: () -> Unit,
     extraButtons: (@Composable () -> Unit)? = null,
     gpsFixes: List<LiveTrack.Point> = emptyList(),
@@ -180,7 +183,7 @@ fun TrackMapScreen(
                         track.sync(points, scale.scale, colorByAccel)
                         undergroundTrack.syncLegs(underground, scale.scale, colorByAccel)
                         track.syncGps(gpsFixes)
-                        tapOverlays.sync(view, taps)
+                        tapOverlays.sync(view, taps, clock)
                         // The newest of the GPS path and the path along the track underground.
                         val last = listOfNotNull(points.lastOrNull(), underground.lastOrNull()?.lastOrNull()).maxByOrNull { it.elapsedRealtimeNs }
                         // Pans only once the newest fix nears the edge, so the map isn't always moving and
@@ -443,19 +446,21 @@ private class TrackOverlays {
 private class TapOverlays {
     val folder = FolderOverlay()
     private var drawn = emptyList<Pair<TapMark, LiveTrack.Point>>()
+    private var drawnClock: RideClock? = null
 
-    fun sync(map: MapView, taps: List<Pair<TapMark, LiveTrack.Point>>) {
-        if (taps == drawn) return
+    fun sync(map: MapView, taps: List<Pair<TapMark, LiveTrack.Point>>, clock: RideClock) {
+        if (taps == drawn && clock === drawnClock) return
         folder.items.forEach { (it as? Marker)?.closeInfoWindow() }
         folder.items.clear()
         for ((tap, p) in taps) {
             folder.add(Marker(map).apply {
                 position = GeoPoint(p.lat, p.lon)
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                title = "${clockTime(tap.unixMs)} ${tap.label}"
+                title = "${clock.time(tap.unixMs)} ${tap.label}"
             })
         }
         drawn = taps
+        drawnClock = clock
     }
 }
 

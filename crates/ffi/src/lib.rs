@@ -614,15 +614,51 @@ pub fn speed_scale_bands_kmh(scale: SpeedScale) -> Vec<u32> {
     Scale::from(scale).bands_kmh().into()
 }
 
-/// Round clock times (unix ms) to label the graph's time axis with, at most `max_ticks`; see [`display::clock_ticks`].
+/// Clock times as the app shows them, in a ride's own zone (see `ride_session::clock`):
+/// a past ride's as its session says, or the phone's zone now while recording.
+#[derive(uniffi::Object)]
+pub struct RideClock(ride_session::clock::Clock);
+
 #[uniffi::export]
-pub fn clock_ticks(
-    start_unix_ms: i64,
-    end_unix_ms: i64,
-    utc_offset_ms: i64,
-    max_ticks: u32,
-) -> Vec<i64> {
-    display::clock_ticks(start_unix_ms, end_unix_ms, utc_offset_ms, max_ticks)
+impl RideClock {
+    /// A past ride's: the phone's recorded zone, else its location's, else the offset its id implies.
+    #[uniffi::constructor]
+    pub fn for_session(session_dir: String) -> Result<Arc<Self>, RideError> {
+        let session = ride_session::read::Session::open(&session_dir)?;
+        let clock = ride_session::clock::SessionClock::for_session(&session);
+        Ok(Arc::new(Self(clock.shown().clone())))
+    }
+
+    /// The phone's zone now (`ZoneId.systemDefault().id`), or its offset now if the zone is one Rust doesn't know.
+    #[uniffi::constructor]
+    pub fn live(zone_id: String, utc_offset_ms: i64) -> Arc<Self> {
+        Arc::new(Self(ride_session::clock::Clock::named_or_fixed(
+            &zone_id,
+            utc_offset_ms,
+        )))
+    }
+
+    /// Like `6:18:30 pm`.
+    pub fn time(&self, unix_ms: i64) -> String {
+        self.0.time(unix_ms)
+    }
+
+    /// Like `6:18 pm`.
+    pub fn time_hm(&self, unix_ms: i64) -> String {
+        self.0.time_hm(unix_ms)
+    }
+
+    /// Like `Sat Nov 14, 2026`.
+    pub fn date(&self, unix_ms: i64) -> String {
+        self.0.date(unix_ms)
+    }
+
+    /// Round clock times (unix ms) to label the graph's time axis with, at most `max_ticks`,
+    /// on round local times at the start; see [`display::clock_ticks`].
+    pub fn ticks(&self, start_unix_ms: i64, end_unix_ms: i64, max_ticks: u32) -> Vec<i64> {
+        let offset = self.0.utc_offset_ms(start_unix_ms);
+        display::clock_ticks(start_unix_ms, end_unix_ms, offset, max_ticks)
+    }
 }
 
 /// A point on the map.
@@ -770,19 +806,34 @@ impl From<anyhow::Error> for RideError {
     }
 }
 
-/// When a past ride started and ended (unix ms), from its data (see `Session::end_unix_ms`).
+/// When a past ride started and ended (unix ms), from its data (see `Session::end_unix_ms`),
+/// and as dates and clock times in the ride's own zone (see [`RideClock::for_session`]).
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct SessionSpan {
     pub start_unix_ms: i64,
     pub end_unix_ms: Option<i64>,
+    /// Like `Sat Nov 14, 2026`.
+    pub start_date: String,
+    /// Like `7:01:48 pm`.
+    pub start_time: String,
+    pub end_date: Option<String>,
+    pub end_time: Option<String>,
 }
 
 #[uniffi::export]
 pub fn session_span(session_dir: String) -> Result<SessionSpan, RideError> {
     let session = ride_session::read::Session::open(&session_dir)?;
+    let clock = ride_session::clock::SessionClock::for_session(&session);
+    let clock = clock.shown();
+    let start = session.info.start_unix_ms;
+    let end = session.end_unix_ms()?;
     Ok(SessionSpan {
-        start_unix_ms: session.info.start_unix_ms,
-        end_unix_ms: session.end_unix_ms()?,
+        start_unix_ms: start,
+        end_unix_ms: end,
+        start_date: clock.date(start),
+        start_time: clock.time(start),
+        end_date: end.map(|t| clock.date(t)),
+        end_time: end.map(|t| clock.time(t)),
     })
 }
 

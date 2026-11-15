@@ -6,7 +6,7 @@
 const STEPS_MIN: [i64; 12] = [1, 2, 5, 10, 15, 20, 30, 60, 120, 180, 360, 720];
 
 /// Round clock times (unix ms) in `start_ms..=end_ms` to label the time axis with, at most `max_ticks` of them,
-/// the closest together that fit. `utc_offset_ms` is the local zone's offset from UTC (New York's, from the app),
+/// the closest together that fit. `utc_offset_ms` is the local zone's offset from UTC (at the start, from `RideClock`),
 /// so ticks hours apart fall on local round hours. Empty if the span is empty or `max_ticks` is 0.
 pub fn clock_ticks(start_ms: i64, end_ms: i64, utc_offset_ms: i64, max_ticks: u32) -> Vec<i64> {
     if end_ms < start_ms || max_ticks == 0 {
