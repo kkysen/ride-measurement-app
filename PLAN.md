@@ -1649,6 +1649,9 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Recompression was queued only after a ride or from the hidden OneDrive buttons (no client ID), so 0.1.26 never ran it;
     0.1.27 (installed 2026-11-15, 1:07 pm, from `0ca5f69`) also queues it whenever the app opens (`6cf90af`).
     Left: OneDrive upload needs an app registration and its client ID (the rider's choice).
+    Checked (2026-11-15): opening 0.1.27 redid the three long rides' audio on the phone in 10 min (1:12 to 1:22 pm), within one background job:
+    Mon Nov 9, 12:50 pm 760 to 486 MB, 4:16 pm 764 to 483 MB, Sat Nov 14, 7:01 pm 960 to 557 MB (957 MB saved);
+    each content SHA-256 the phone logged matches the one computed on the PC from the copies pulled that morning.
 51. Clock times in the ride's own time zone, not New York's (rider, 2026-11-15: "don't assume this is in NYC";
     rides elsewhere, and flights, cross zones). Today the app formats every time in `America/New_York`
     (`TapMarks.kt`, `PastRides.kt`, `LiveGraph.kt`), and `ride_session::clock` (`6e4b1ce`) is New York only.
