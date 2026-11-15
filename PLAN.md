@@ -1447,7 +1447,14 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     (Canal St, Houston St, Christopher St, 23 St and 28 St, all the 1's): the `stops_here` filter in `Fusion::status`.
     v2 (item 29) wouldn't change either: the trip is in v1 at every stop.
     Fix tried, not committed (stash "item 34: keep the route at a cell-named station..."): apply that filter only at a station the train stopped at.
-    Not scored: the 37-session replays took over an hour under load and were stopped; it needs `data/work/sessions-with-legs.txt` replayed before and after.
+    Scored (2026-11-15, live, `no_live_smoothing`, `skip_still`, the 37 sessions with legs, 2 replays of about 3 minutes each; scratch example `routeonlegs`, taps unused):
+    time on legs with a route named 15721 s of 25731 s to 16881 s (61% to 66%), drops 45 to 21, flips 1 to 3; 9 sessions changed, none lost time.
+    Not landed: part of the gain is a wrong route, which the filter had been hiding by accident.
+    On Fri Oct 30, 4:02 pm, the 1 locals 50 St to 96 St (4:04 to 4:11 pm) read GS (none before), and the stale 3 stays at 103 St until 4:18 pm (flip 3 to 1);
+    on Sat Oct 31, 9:57 pm, the 3 reads at 86 St, 79 St, 66 St and 59 St (10:25 to 10:29 pm) while the rider is on a 1 (flip 3 to 1 at 50 St).
+    Also new 3s on Sat Oct 24 8:51 am, Mon Oct 26 11:10 am and Thu Oct 29 11:07 pm, and GS on Sat Oct 24 10:04 pm: not checked against the rides.
+    The 2 on Mon Oct 26, 8:08 pm gains 120 s and Tue Nov 3, 6:01 pm 10 s (drops 8 to 2, 1 to 0), so the filter is right to be relaxed only if the route is also trustworthy:
+    the next try should keep the filter unless the feeds' trip itself lists the station as passed express (the trip's stop list, not the cell).
 35. Station cells missing (the registered cell, item 7 of 2026-10-21):
     none at 138 St and 149 St-Grand Concourse on the 5 (Tue Oct 27, 10:04 pm, at 10:16 and 10:21 pm);
     the southbound 4 missed 110 St, 103 St, 86 St and 59 St (Mon Nov 2, 6:04 pm, at 6:22 and 6:24 pm);
