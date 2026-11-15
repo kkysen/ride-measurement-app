@@ -137,15 +137,30 @@ fn put_section(out: &mut Vec<u8>, section: &[u8]) {
 /// The columns for a stream's chunk bodies, or why they can't give the bodies back exactly
 /// (a body protobuf wouldn't encode the same way, or chunks that aren't whole samples of one shape).
 pub fn encode_columns(bodies: &[Vec<u8>]) -> Result<Vec<u8>, String> {
-    let mut chunks = Vec::with_capacity(bodies.len());
-    for (i, body) in bodies.iter().enumerate() {
-        let c = SensorChunk::decode(body.as_slice())
-            .map_err(|e| format!("chunk {i} doesn't decode: {e}"))?;
-        if c.encode_to_vec() != *body {
-            return Err(format!("chunk {i} doesn't re-encode to the same bytes"));
-        }
-        chunks.push(c);
+    let chunks = bodies
+        .iter()
+        .enumerate()
+        .map(|(i, body)| column_chunk(body).map_err(|e| format!("chunk {i} {e}")))
+        .collect::<Result<Vec<_>, _>>()?;
+    encode_chunk_columns(&chunks)
+}
+
+/// A chunk body decoded for [`encode_chunk_columns`], or why the columns couldn't give it back exactly;
+/// its vectors hold no spare capacity, so a whole stream of them takes little more than its content.
+pub fn column_chunk(body: &[u8]) -> Result<SensorChunk, String> {
+    let mut c = SensorChunk::decode(body).map_err(|e| format!("doesn't decode: {e}"))?;
+    if c.encode_to_vec() != body {
+        return Err("doesn't re-encode to the same bytes".into());
     }
+    c.timestamp_deltas_ns.shrink_to_fit();
+    c.value_bits.shrink_to_fit();
+    c.accuracy.shrink_to_fit();
+    Ok(c)
+}
+
+/// The columns for a stream's chunks, each from [`column_chunk`],
+/// or why they can't give them back exactly (chunks that aren't whole samples of one shape).
+pub fn encode_chunk_columns(chunks: &[SensorChunk]) -> Result<Vec<u8>, String> {
     let vps = chunks.first().map_or(1, |c| c.values_per_sample);
     if vps == 0 && chunks.iter().any(|c| !c.timestamp_deltas_ns.is_empty()) {
         return Err("samples without values".into());
@@ -170,7 +185,7 @@ pub fn encode_columns(bodies: &[Vec<u8>]) -> Result<Vec<u8>, String> {
     let mut prev_t = 0i64;
     let mut prev_d = 0i64;
     let mut prev_a = 0i32;
-    for c in &chunks {
+    for c in chunks {
         put_varint(&mut head, c.timestamp_deltas_ns.len() as u64);
         put_varint(
             &mut head,
@@ -318,12 +333,20 @@ pub fn decode_columns(bytes: &[u8]) -> io::Result<Vec<SensorChunk>> {
 
 /// A whole file in this encoding for a stream's chunk bodies, compressed at `level`.
 pub fn encode_file(bodies: &[Vec<u8>], level: i32) -> Result<Vec<u8>, String> {
-    let columns = encode_columns(bodies)?;
+    file_of(&encode_columns(bodies)?, level)
+}
+
+/// Like [`encode_file`], for chunks from [`column_chunk`].
+pub fn encode_chunks_file(chunks: &[SensorChunk], level: i32) -> Result<Vec<u8>, String> {
+    file_of(&encode_chunk_columns(chunks)?, level)
+}
+
+fn file_of(columns: &[u8], level: i32) -> Result<Vec<u8>, String> {
     let mut out = header();
     let mut encoder =
         zstd::stream::write::Encoder::new(&mut out, level).map_err(|e| e.to_string())?;
     encoder.include_checksum(true).map_err(|e| e.to_string())?;
-    io::Write::write_all(&mut encoder, &columns).map_err(|e| e.to_string())?;
+    io::Write::write_all(&mut encoder, columns).map_err(|e| e.to_string())?;
     encoder.finish().map_err(|e| e.to_string())?;
     Ok(out)
 }

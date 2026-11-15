@@ -32,10 +32,11 @@ pub const LEVEL: i32 = 19;
 /// Written into a session once every stream was handled; uploads wait for it.
 pub const MARKER: &str = ".recompressed";
 /// The most decoded content a sensor stream may have to be written in columns, which are encoded
-/// and decoded in memory (at a few times this); past it, the stream is written as plain zstd.
-/// About 2.5 hours of `accel_uncal` at 480 Hz (about 50 MB/h);
-/// recompressing 33 MB of it in columns peaked at 211 MB.
-pub const SENSOR_COLUMNS_MAX_BYTES: u64 = 128 << 20;
+/// and decoded in memory; past it, the stream is written as plain zstd.
+/// About 80 min of `accel_uncal` at 480 Hz (about 50 MB/h).
+/// Measured on the PC: about 92 MB for the level-19 encoder plus 1.8 times the content,
+/// so 154 MB at 33 MB of content, 204 MB at 65 MB, and about 210 MB at this limit.
+pub const SENSOR_COLUMNS_MAX_BYTES: u64 = 64 << 20;
 const TMP_SUFFIX: &str = ".recompress-tmp";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -536,30 +537,33 @@ fn write_sensor_recompressed(
 ) -> io::Result<[u8; 32]> {
     let mut decoder = BufReader::new(decode_original(original)?);
     let mut sha = Sha256::new();
-    let mut bodies = Vec::new();
+    // Decoded as they're read, so the bodies aren't held too.
+    let mut chunks = Vec::new();
     let mut content = 0u64;
     while let Some(message) = read_message(&mut decoder).map_err(invalid)? {
         content += (delimiter(message.len()).len() + message.len()) as u64;
-        if content > columns_max {
-            // Too long a stream for columns in memory: plain, streaming, from the start.
-            drop(bodies);
-            return write_recompressed(original, tmp, level);
-        }
+        let chunk = match crate::sensor_columns::column_chunk(&message) {
+            Ok(chunk) if content <= columns_max => chunk,
+            // Too long a stream for columns in memory, or a chunk they can't give back:
+            // plain, streaming, from the start.
+            _ => {
+                drop(chunks);
+                return write_recompressed(original, tmp, level);
+            }
+        };
         hash_message(&mut sha, &message);
-        bodies.push(message);
+        chunks.push(chunk);
     }
-    match crate::sensor_columns::encode_file(&bodies, level) {
+    let encoded = crate::sensor_columns::encode_chunks_file(&chunks, level);
+    drop(chunks);
+    match encoded {
         Ok(bytes) => {
-            drop(bodies);
             let mut file = File::create_new(tmp)?;
             file.write_all(&bytes)?;
             file.sync_all()?;
             Ok(sha.finalize().into())
         }
-        Err(_) => {
-            drop(bodies);
-            write_recompressed(original, tmp, level)
-        }
+        Err(_) => write_recompressed(original, tmp, level),
     }
 }
 
