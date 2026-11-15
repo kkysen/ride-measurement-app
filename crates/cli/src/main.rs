@@ -216,6 +216,14 @@ fn summary(session: &Session, problems: &mut Problems) {
     if let Some(d) = &info.device {
         println!("device {} {} (SDK {})", d.manufacturer, d.model, d.sdk_int);
     }
+    let clock = ride_session::clock::SessionClock::for_session(session);
+    println!(
+        "started {}, {} ({})",
+        clock.shown().date(info.start_unix_ms),
+        clock.time(info.start_unix_ms),
+        clock.shown().abbreviation(info.start_unix_ms)
+    );
+    println!("{}", clock.describe());
     for stream in &info.streams {
         let label = format!("{}/{}", info.session_id, stream.name);
         let result = match stream.kind() {

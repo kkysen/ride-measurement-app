@@ -9,6 +9,7 @@ use ride_session::proto::manual_event::Kind;
 use ride_session::read::Session;
 
 pub fn run(s: &Session, r: &Replay, out: &mut String) -> anyhow::Result<()> {
+    let zone = ride_session::clock::SessionClock::for_session(s);
     let dump = std::env::var("DUMP").is_ok();
     let ms: Vec<_> = marks(s)?.into_iter().filter(|m| !m.deleted).collect();
     if !ms.iter().any(|m| m.kind == Kind::TrainStopped) {
@@ -17,8 +18,7 @@ pub fn run(s: &Session, r: &Replay, out: &mut String) -> anyhow::Result<()> {
     }
     let offset_ms = ms.first().map(|m| m.unix_ms - m.t_ns / 1_000_000).unwrap();
     let clock = |t: i64| {
-        let d = (ride_session::clock::to_new_york_ms(t / 1_000_000 + offset_ms) / 1000)
-            .rem_euclid(86400);
+        let d = (zone.local_ms(t / 1_000_000 + offset_ms) / 1000).rem_euclid(86400);
         let (h, m, s) = (d / 3600, d / 60 % 60, d % 60);
         let h12 = if h % 12 == 0 { 12 } else { h % 12 };
         format!("{h12}:{m:02}:{s:02} {}", if h < 12 { "am" } else { "pm" })

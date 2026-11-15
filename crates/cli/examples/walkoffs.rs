@@ -12,6 +12,7 @@ use ride_session::read::Session;
 
 fn main() -> anyhow::Result<()> {
     let s = Session::open(std::env::args().nth(1).unwrap())?;
+    let zone = ride_session::clock::SessionClock::for_session(&s);
     let ms: Vec<_> = marks(&s)?.into_iter().filter(|m| !m.deleted).collect();
     let taps: Vec<i64> = ms
         .iter()
@@ -31,7 +32,7 @@ fn main() -> anyhow::Result<()> {
     let offset_ms = ms.first().map(|m| m.unix_ms - m.t_ns / 1_000_000);
     let clock = |t: i64| match offset_ms {
         Some(o) => {
-            let secs = ride_session::clock::to_new_york_ms(t / 1_000_000 + o) / 1000;
+            let secs = zone.local_ms(t / 1_000_000 + o) / 1000;
             let d = secs.rem_euclid(86400);
             let (h, m, s) = (d / 3600, d / 60 % 60, d % 60);
             let h12 = if h % 12 == 0 { 12 } else { h % 12 };

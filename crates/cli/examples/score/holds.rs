@@ -15,13 +15,14 @@ use ride_session::proto::record::Payload;
 use ride_session::read::Session;
 
 pub fn run(s: &Session, r: &Replay, out: &mut String) -> anyhow::Result<()> {
+    let zone = ride_session::clock::SessionClock::for_session(s);
     let dump = std::env::var("DUMP").is_ok();
     let ms: Vec<_> = marks(s)?.into_iter().filter(|m| !m.deleted).collect();
     // Unix ms of an elapsed time, from the marks, for New York clock times (EDT, UTC-4, until November 1).
     let offset_ms = ms.first().map(|m| m.unix_ms - m.t_ns / 1_000_000);
     let clock = |t: i64| match offset_ms {
         Some(o) => {
-            let secs = ride_session::clock::to_new_york_ms(t / 1_000_000 + o) / 1000;
+            let secs = zone.local_ms(t / 1_000_000 + o) / 1000;
             let d = secs.rem_euclid(86400);
             let (h, m, s) = (d / 3600, d / 60 % 60, d % 60);
             let h12 = if h % 12 == 0 { 12 } else { h % 12 };

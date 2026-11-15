@@ -3,6 +3,7 @@ use ride_session::read::Session;
 use ride_session::track::gps_segments;
 fn main() -> anyhow::Result<()> {
     let s = Session::open(std::env::args().nth(1).unwrap())?;
+    let zone = ride_session::clock::SessionClock::for_session(&s);
     let loc = s.read_records("location")?;
     let segs = gps_segments(&loc.chunks);
     let pts: Vec<_> = segs.iter().flatten().collect();
@@ -12,7 +13,7 @@ fn main() -> anyhow::Result<()> {
     for p in &pts {
         let t = (p.elapsed_realtime_ns - t0) as f64 * 1e-9;
         let gap = (p.elapsed_realtime_ns - prev) as f64 * 1e-9;
-        let local = (ride_session::clock::to_new_york_ms(p.time_ms) / 1000).rem_euclid(86400);
+        let local = (zone.local_ms(p.time_ms) / 1000).rem_euclid(86400);
         if t >= next || gap > 5.0 {
             println!(
                 "{t:6.0} s {:02}:{:02}:{:02}  {:.5},{:.5}  {:5.1} km/h ±{:?} m{}",

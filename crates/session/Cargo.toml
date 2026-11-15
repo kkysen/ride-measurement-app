@@ -9,9 +9,12 @@ publish.workspace = true
 anyhow.workspace = true
 claxon = "0.4.3"
 flacenc = "0.5.1"
+jiff.workspace = true
 prost.workspace = true
 sha2 = "0.11.1"
 zstd.workspace = true
+# Which zone a location is in (lite boundaries, about 4 MB); see `clock`.
+tzf-rs = { version = "2.3.0", default-features = false, features = ["bundled"] }
 
 [build-dependencies]
 anyhow.workspace = true
