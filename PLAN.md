@@ -1540,7 +1540,15 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Zone rules are `jiff`'s bundled IANA database, so the phone's older `/system` copy (2025c) doesn't matter.
     The native library grew from 5.9 MB to 10.9 MB, mostly the boundaries (4.1 MB).
     The MTA schedule's hours use the GTFS `agency_timezone` (`crates/fusion/data/service_zone.txt`).
-    Left: the `python/experiments` scripts still use `America/New_York`.
+    Open choice (the rider's): which zone the app shows when the phone recorded one. Now (A) the phone's,
+    matching its clock and the taps; but a phone whose zone doesn't change in flight (airplane mode) then shows
+    the departure zone all flight, and only the tools show the location's. (B, recommended) the location's whenever
+    there are fixes, else the phone's: local time where the train or plane is. (C) the phone's, switching to the
+    location's once they've disagreed for some minutes.
+    Left: check the `python/experiments` scripts that use `America/New_York` (`train_line.py`, `actual_trips.py`,
+    `sensor_trips.py`, `transfers.py`, `untagged_cells_check.py`, and the ride clocks in `train_beacons.py`,
+    `boarding.py`, `elevator_shape.py`): GTFS times should take the feed's `agency_timezone`, ride times the session's zone.
+    The `ACTION_TIMEZONE_CHANGED` receiver is untested on the phone.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
