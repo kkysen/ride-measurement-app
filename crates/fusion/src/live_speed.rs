@@ -8,9 +8,12 @@
 //!   by the gyro, and gravity is re-learned from the accelerometer, so sustained acceleration isn't taken for tilt.
 //! - Measurements, each weighted by its own uncertainty:
 //!   GNSS Doppler speed, speed from successive GNSS positions, and stops (speed 0, from a quiet accelerometer).
-//! - Every measurement is gated: one more than [`GATE_SIGMA`] sigma from the prediction is rejected and counted,
-//!   so a single wrong sensor can't drag the estimate. If GNSS is rejected [`GNSS_REINIT_REJECTS`] times in a row,
-//!   the IMU side is what's wrong, and the filter re-initializes from GNSS.
+//! - Every measurement but GNSS Doppler is gated: one more than [`GATE_SIGMA`] sigma from the prediction is rejected
+//!   and counted, so a single wrong sensor can't drag the estimate. If the position-differenced GNSS speed is
+//!   rejected [`GNSS_REINIT_REJECTS`] times in a row, the IMU side is what's wrong, and the filter re-initializes
+//!   from GNSS. Good GNSS Doppler is checked only on its own (its sigma, and a change from the last plausible GNSS
+//!   speed a vehicle can make); disagreeing with the prediction, it is the IMU that's wrong, and GNSS sets the
+//!   speed at once. Poorer Doppler is gated and restarts the filter like the position-differenced speed.
 //! - The travel axis's sign (which way is forward) comes from GNSS speed changes, or from a departure from a stop
 //!   (a train or bus accelerates forward when leaving). Until it's known, speed is the magnitude of the integral.
 
@@ -121,6 +124,14 @@ const STANDING_HISTORY_S: f64 = 60.0;
 const STANDING_MIN_S: f64 = 1.0;
 /// How recent GNSS must be for the fused acceleration to be the vehicle's, so gravity can follow the rest.
 const GNSS_RECENT_S: f64 = 5.0;
+/// With GNSS recent, the most the speed rises past the last plausible GNSS speed (m/s^2 since, plus
+/// [`GATE_SIGMA`] of its sigma): trains brake at most 3.2 m/s^2 in an emergency and motor at 1.1 to 1.6.
+/// Without it, an IMU error ran free for the 5 fixes the gate rejects before restarting on GNSS:
+/// 60 to 75 mph over GNSS at a few mph (`20261023-011209`, `20261103-185919`; item 43).
+const GNSS_REACH_MPS2: f64 = 3.0;
+/// The worst GNSS Doppler sigma (m/s) that sets the speed over the IMU's prediction rather than being gated by it:
+/// the phone's fixes claim 0.8 to 1 m/s walking and our own solution 0.1, a bad one of our own 2.5 (`20261030-160000`).
+const GNSS_WINS_MAX_SIGMA_MPS: f64 = 1.5;
 const AXIS_MIN_VARIANCE: f64 = 0.002;
 const DEPARTURE_EVIDENCE_MPS: f64 = 1.0;
 const SIGN_EVIDENCE: f64 = 2.0;
@@ -436,8 +447,11 @@ pub struct LiveSpeedEstimator {
 
     // GNSS.
     last_gnss_ns: i64,
-    /// The last plausible GNSS speed and its time.
+    /// The last plausible GNSS speed and its time, and its sigma.
     last_gnss_speed: Option<(i64, f64)>,
+    last_gnss_sigma: f64,
+    /// The latest GNSS speed in range, plausible or not: time, speed, sigma (see [`GNSS_REACH_MPS2`]).
+    latest_gnss: Option<(i64, f64, f64)>,
     /// Recent (time, signed speed), every [`HISTORY_EVERY_S`], for measurements of a past moment.
     history: std::collections::VecDeque<(i64, f64)>,
     /// How far the covariance has been propagated, by the IMU or [`Self::inflate_to`].
@@ -511,6 +525,8 @@ impl Default for LiveSpeedEstimator {
             accel_reset: false,
             last_gnss_ns: 0,
             last_gnss_speed: None,
+            last_gnss_sigma: 0.0,
+            latest_gnss: None,
             history: std::collections::VecDeque::new(),
             predicted_ns: 0,
             prev_doppler: None,
@@ -744,6 +760,30 @@ impl LiveSpeedEstimator {
             }
             self.v += y;
             self.mark_used(Sensor::SpeedLimit, t_ns);
+        }
+        // GNSS itself is never capped, but between fixes the IMU is held to what the vehicle can reach from
+        // the last GNSS speeds: rejected by the gate, GNSS stands the caps aside without setting the speed.
+        // From the last plausible speed or the latest one, whichever allows more, so a jump GNSS really measured
+        // (implausible until a few agree) only loosens it. The bias is left alone: the IMU's error here is
+        // gravity's or the axis's, not one the bias would carry on.
+        if gnss_recent {
+            let reach = |at: i64, speed: f64, sigma: f64| {
+                speed + GNSS_REACH_MPS2 * ((t_ns - at) as f64 * 1e-9).max(0.0) + GATE_SIGMA * sigma
+            };
+            let max = [
+                self.last_gnss_speed
+                    .map(|(at, v)| reach(at, v, self.last_gnss_sigma)),
+                self.latest_gnss.map(|(at, v, sigma)| reach(at, v, sigma)),
+            ]
+            .into_iter()
+            .flatten()
+            .reduce(f64::max);
+            if let Some(max) = max
+                && self.v.abs() > max
+            {
+                self.v = self.v.signum() * max;
+                self.mark_used(Sensor::SpeedLimit, t_ns);
+            }
         }
         if !gnss_recent {
             self.limit_accel(t_ns, dt);
@@ -1224,11 +1264,19 @@ impl LiveSpeedEstimator {
             *self.rejected.entry(sensor).or_default() += 1;
             return;
         }
+        self.latest_gnss = Some((t_ns, speed, sigma));
         if !self.plausible_change(sensor, t_ns, speed, sigma) {
             *self.rejected.entry(sensor).or_default() += 1;
             return;
         }
+        // Within what the vehicle reaches from the last plausible GNSS speed, by `GNSS_REACH_MPS2`.
+        let steady = self.last_gnss_speed.is_none_or(|(at, v0)| {
+            let dt = ((t_ns - at) as f64 * 1e-9).max(0.0);
+            (speed - v0).abs()
+                <= GNSS_REACH_MPS2 * dt + GATE_SIGMA * self.last_gnss_sigma.hypot(sigma)
+        });
         self.last_gnss_speed = Some((t_ns, speed));
+        self.last_gnss_sigma = sigma;
         let signed = if self.v < 0.0 && !self.axis_sign_known {
             -speed
         } else {
@@ -1237,8 +1285,27 @@ impl LiveSpeedEstimator {
         if !self.initialized {
             self.v = signed;
             self.p00 = sigma * sigma;
+            // A speed set afresh is uncorrelated with the bias: the predictions' correlation, left with the new small
+            // variance, made the covariance indefinite, and an ungated update on it ran to NaN.
+            self.p01 = 0.0;
             self.initialized = true;
             self.mark_used(sensor, t_ns);
+            return;
+        }
+        if sensor == Sensor::GnssDoppler && sigma <= GNSS_WINS_MAX_SIGMA_MPS && steady {
+            // GNSS Doppler that passes its own checks (a good sigma, and a change from the last plausible GNSS speed
+            // a vehicle can make) wins over the IMU: disagreeing with the prediction means the IMU side is wrong, so
+            // the speed's variance grows to the disagreement and GNSS sets it now, not after 5 rejected fixes.
+            // Gated, the IMU ran free for those 5 s each time, to over 100 mph with GNSS at 3.5 mph (item 43).
+            // A poorer one is gated as before: our own Doppler solution once read 41 mph, sigma 5.6 mph, standing.
+            let y = signed - self.v;
+            if y * y > GATE_SIGMA * GATE_SIGMA * (self.p00 + sigma * sigma) {
+                self.p00 = self.p00.max(y * y);
+                self.accel_reset = true;
+            }
+            self.update_ungated(signed, sigma * sigma, sensor, t_ns);
+            self.gnss_reject_streak = 0;
+            self.gnss_rejected.clear();
             return;
         }
         if self.update(signed, sigma * sigma, sensor, t_ns) {
@@ -1723,6 +1790,17 @@ mod tests {
             e.on_accel(i * 2_500_000 + 1, 0.0, 0.0, 9.81);
         }
         assert!((norm(&e.axis) - 1.0).abs() < 1e-6, "{}", norm(&e.axis));
+    }
+
+    #[test]
+    fn a_gnss_speed_that_disagrees_with_the_imu_sets_the_speed_at_once() {
+        // Item 43: the IMU ran away while GNSS read 3.5 mph; gated, GNSS was rejected 5 times before it counted.
+        let mut e = LiveSpeedEstimator::new();
+        e.on_gnss_speed(1_000_000_000, 1.5, 0.3);
+        e.v = 40.0;
+        e.on_gnss_speed(2_000_000_000, 1.6, 0.3);
+        assert!((e.v - 1.6).abs() < 0.1, "{}", e.v);
+        assert!(e.p00 * e.p11 >= e.p01 * e.p01);
     }
 
     #[test]
