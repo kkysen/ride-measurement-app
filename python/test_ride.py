@@ -22,3 +22,11 @@ def test_kotlin_fixture_bits(suffix):
     assert np.array_equal(s.values.reshape(-1).view(np.uint32), expected)
     samples = np.arange(300)
     assert np.array_equal(s.timestamps_ns, 1_000_000_000 + samples * 2_500_000 + samples % 3)
+
+
+def test_local_clock_is_the_rides_zone():
+    d = "../data/sessions/20261114-190148"
+    if not os.path.exists(d):
+        return
+    assert ride.local_clock(d, 1794700000000) == "6:46:40 pm"
+    assert ride.agency_ms(1794700000000) - 1794700000000 == -5 * 3600 * 1000

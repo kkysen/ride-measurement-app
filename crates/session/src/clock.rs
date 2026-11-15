@@ -152,7 +152,8 @@ impl Clock {
         unix_ms + self.utc_offset_ms(unix_ms)
     }
 
-    fn format(&self, unix_ms: i64, pattern: &str) -> String {
+    /// `unix_ms` formatted with a `strftime` `pattern` in the zone then.
+    pub fn format(&self, unix_ms: i64, pattern: &str) -> String {
         let zone = self.span_at(unix_ms).zone.clone();
         timestamp(unix_ms)
             .to_zoned(zone)
@@ -356,6 +357,11 @@ impl SessionClock {
 
     pub fn time(&self, unix_ms: i64) -> String {
         self.shown.time(unix_ms)
+    }
+
+    /// `unix_ms` formatted with a `strftime` `pattern` in the shown zone.
+    pub fn format(&self, unix_ms: i64, pattern: &str) -> String {
+        self.shown.format(unix_ms, pattern)
     }
 
     /// The zones, one line per source, for tools to print: each zone with when it took effect,

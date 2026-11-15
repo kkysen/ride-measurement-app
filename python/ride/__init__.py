@@ -30,3 +30,18 @@ def read_stream(session_dir: str, stream: str) -> Stream:
         truncated=raw["truncated"],
         damaged_ranges=raw["damaged_ranges"],
     )
+
+
+def local_clock(session_dir: str, unix_ms: int, pattern: str = "%-I:%M:%S %P") -> str:
+    """`unix_ms` as the ride's own local time (Rust's `SessionClock`), `strftime` `pattern`, default like `6:19:30 pm`."""
+    return _native.local_clock(str(session_dir), int(unix_ms), pattern)
+
+
+def local_ms(session_dir: str, unix_ms: int) -> int:
+    """`unix_ms` as local milliseconds in the ride's zone."""
+    return _native.local_ms(str(session_dir), int(unix_ms))
+
+
+def agency_ms(unix_ms: int) -> int:
+    """`unix_ms` as local milliseconds in the MTA schedule's zone (the GTFS `agency_timezone`)."""
+    return _native.agency_ms(int(unix_ms))

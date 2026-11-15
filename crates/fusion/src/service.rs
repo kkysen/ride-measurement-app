@@ -30,7 +30,8 @@ fn table() -> &'static HashMap<String, [u32; 7]> {
 /// The zone the schedule's hours are in: the feed's `agency_timezone` (`data/service_zone.txt`).
 const ZONE: &str = include_str!("../data/service_zone.txt");
 
-fn zone() -> &'static ride_session::clock::Clock {
+/// The schedule's zone as a clock, for tools comparing times with the feed's (never a literal zone).
+pub fn zone() -> &'static ride_session::clock::Clock {
     static CLOCK: OnceLock<ride_session::clock::Clock> = OnceLock::new();
     // GTFS requires the zone; one the database doesn't know (it never is) leaves times in UTC.
     CLOCK.get_or_init(|| ride_session::clock::Clock::named_or_fixed(ZONE.trim(), 0))
