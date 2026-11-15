@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
     for p in &pts {
         let t = (p.elapsed_realtime_ns - t0) as f64 * 1e-9;
         let gap = (p.elapsed_realtime_ns - prev) as f64 * 1e-9;
-        let local = (p.time_ms / 1000 - 4 * 3600).rem_euclid(86400);
+        let local = (ride_session::clock::to_new_york_ms(p.time_ms) / 1000).rem_euclid(86400);
         if t >= next || gap > 5.0 {
             println!(
                 "{t:6.0} s {:02}:{:02}:{:02}  {:.5},{:.5}  {:5.1} km/h ±{:?} m{}",

@@ -17,7 +17,8 @@ pub fn run(s: &Session, r: &Replay, out: &mut String) -> anyhow::Result<()> {
     }
     let offset_ms = ms.first().map(|m| m.unix_ms - m.t_ns / 1_000_000).unwrap();
     let clock = |t: i64| {
-        let d = ((t / 1_000_000 + offset_ms) / 1000 - 4 * 3600).rem_euclid(86400);
+        let d = (ride_session::clock::to_new_york_ms(t / 1_000_000 + offset_ms) / 1000)
+            .rem_euclid(86400);
         let (h, m, s) = (d / 3600, d / 60 % 60, d % 60);
         let h12 = if h % 12 == 0 { 12 } else { h % 12 };
         format!("{h12}:{m:02}:{s:02} {}", if h < 12 { "am" } else { "pm" })

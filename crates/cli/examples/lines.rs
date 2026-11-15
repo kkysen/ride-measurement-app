@@ -8,8 +8,7 @@ fn main() -> anyhow::Result<()> {
     let s = Session::open(&a[1])?;
     let offset_ms = s.info.start_unix_ms - s.info.start_elapsed_realtime_ns / 1_000_000;
     let clock = |t_ns: i64| {
-        // New York is UTC-4 in October.
-        let ms = offset_ms + t_ns / 1_000_000 - 4 * 3_600_000;
+        let ms = ride_session::clock::to_new_york_ms(offset_ms + t_ns / 1_000_000);
         let secs = ms.div_euclid(1000).rem_euclid(86_400);
         let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
         format!(

@@ -30,7 +30,7 @@ fn main() -> anyhow::Result<()> {
     let offset_ms = ms.first().map(|m| m.unix_ms - m.t_ns / 1_000_000);
     let clock = |t: i64| match offset_ms {
         Some(o) => {
-            let secs = (t / 1_000_000 + o) / 1000 - 4 * 3600;
+            let secs = ride_session::clock::to_new_york_ms(t / 1_000_000 + o) / 1000;
             let d = secs.rem_euclid(86400);
             let (h, m, s) = (d / 3600, d / 60 % 60, d % 60);
             let h12 = if h % 12 == 0 { 12 } else { h % 12 };

@@ -9,10 +9,7 @@ fn main() -> anyhow::Result<()> {
     let s = Session::open(&a[1])?;
     let offset_ms = s.info.start_unix_ms - s.info.start_elapsed_realtime_ns / 1_000_000;
     let clock = |t_ns: i64| {
-        let unix_ms = offset_ms + t_ns / 1_000_000;
-        // New York: UTC-4 from 2026-03-08 to 2026-11-01 (7 am and 6 am UTC), else UTC-5.
-        let dst = (1_772_953_200_000..1_793_512_800_000).contains(&unix_ms);
-        let ms = unix_ms - if dst { 4 } else { 5 } * 3_600_000;
+        let ms = ride_session::clock::to_new_york_ms(offset_ms + t_ns / 1_000_000);
         let secs = ms.div_euclid(1000).rem_euclid(86_400);
         let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
         format!(
