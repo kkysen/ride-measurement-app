@@ -1281,6 +1281,22 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Estimated for 48 kHz and 3 microphones: FLAC 550 to 700 MB an hour, Opus at 48 kbps a microphone about 65 MB.
     Uncoupled channels (mapping family 255), so the microphones stay separate; check announcements and chimes survive.
     Find car 2239's train, the only one with the 1's new automated announcements.
+    First rides checked (2026-11-15, 0.1.25; scratch `crates/session/examples/audiobench.rs`, `check`; log `data/work/audio-bench/logs/check.log`):
+    Mon Nov 9, 12:50 pm (38:47), 4:16 pm (38:52), 5:46 pm (4:05), 8:34 pm (18:31), and Sat Nov 14, 7:01 pm (48:42).
+    - All five: 48 kHz, 2 channels, `DEFAULT` on the bottom input, index mask 0x3, float, nothing refused, no frame discontinuities,
+      no `Health` copy or silence report (the only `Health` sources were `live speed` and one `orbit download`).
+    - The floats are plain 24-bit: every sample of every ride is exactly k/2^23 (in [-1, 1), no negative zeros, nothing non-finite),
+      and the low bits are all used (half the samples have bit 2^-23 set, a quarter 2^-22 lowest, and so on): no coarser or finer grid.
+      Full scale (-1 or (2^23 - 1)/2^23) is reached a few hundred times a ride on the long Monday rides.
+    - FLAC: the two short rides' chunks all became FLAC (Mon Nov 9, 5:46 pm 738 MB/h, 8:34 pm 682 MB/h);
+      the three long ones didn't, though every chunk fits: post-ride recompression skipped them as "too large to check in memory"
+      (item 50), so they're the live `zstd -3`, about 1,180 MB/h.
+    - Mon Nov 9: two microphones. Per 10 s window, channel levels within 0.1 dB of each other (median -19 to -24 dBFS),
+      correlation median 0.8 at the best lag (median lag 0 to 8 samples, 10th to 90th percentile -13 to +17),
+      down to 0.3 in 1 s windows, and about 0 above 2 kHz.
+    - Sat Nov 14, 7:01 pm: one microphone twice. Correlation 0.99 or more in every window, at lag 0, even above 2 kHz;
+      the second channel is 1.04 times the first plus a residual 28 dB down, and only it reaches full scale (222 times, the first once).
+      Not exact copies, so the `Health` check missed it; it needs a correlation test (above 2 kHz), not equality. Why that ride differs is unknown (same app, source and mask).
 26. Labels from notes to learn from: the W parked on the center track at 30 Av (Sat Nov 7, 5:59 pm),
     the M4 bus (Thu Nov 5, 4:30 pm), the Grand St to W 4 St shuttle bus (Thu Oct 29, 10:22 pm), car numbers.
     All notes are listed by `ride summary`; a copy of them is in `data/work/notes.txt`.
@@ -1533,6 +1549,53 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     mag 2.40 to 0.73 and 1.64 to 0.49, pressure 0.18 to 0.13, light 0.08 to 0.05, as benchmarked;
     `ride summary`, `ride csv` of each stream, and whole and live replays are identical to the originals'.
     On the phone in 0.1.25 (installed 2026-11-09, 9:24 am, from `f63ff3f`). Left: phone timing; already-recompressed rides get it only by running `ride recompress` again.
+    Audio codecs measured (2026-11-15) on the rides of Nov 9 and Nov 14 (item 25's checks; scratch `audiobench.rs` exports, `data/work/audio-bench/bench.sh`,
+    log `data/work/audio-bench/logs/bench.tsv`): 10 min from each of Mon Nov 9, 12:50 pm and 4:16 pm and Sat Nov 14, 7:01 pm,
+    2 min of 4:16 pm for the slow settings, and the whole of Mon Nov 9, 8:34 pm.
+    Every decode hashed (SHA-256 of the f32 samples) against the stored samples: all bit for bit, no mismatch.
+    CPU time, single thread, on the PC; FLAC 1.4.3, WavPack 5.7.0, MPEG-4 ALS reference RM23 (built without its binary-only adaptive LPC).
+    - Lossless (MB/h; Mon Nov 9, 4:16 pm 2 min / 12:50 pm 10 min / Sat 10 min / 8:34 pm whole):
+      today's live float `zstd -3` 1,199 / 1,181 / 1,171 / 1,196 (encode about 200x realtime); `zstd -19` on the floats 1,129 (8x).
+      FLAC `-8` 752 / 725 / 684 / 664 (encode 200x to 330x, decode 500x to 800x); `-5` 1% bigger and faster;
+      `-8 -e -p` 0.1% smaller at 7x; `--lax -l 32 -e` 0.1% at 3x.
+      WavPack `-hh` 750 / 726 / 683 / 667 (100x to 190x, decodes 100x to 190x); `-hhx3` 0.1% to 0.6% smaller than `-hh` (14x to 21x); `-hhx6` 0.05% more on the 2 min (2x);
+      float mode the same as integer. ALS default 751; `-7` 750 (0.4x, decodes 5x); `-7 -z3` (RLS-LMS) 742, the best, 1.3% under FLAC `-8` (6x, decodes 7x).
+      OptimFROG not measured: its site serves an expired self-signed certificate, and it's closed source, so it wasn't downloaded or run.
+    - Every codec is within about 1% of every other: what's left is noise at 15 to 17 bits a sample (665 to 750 MB/h for two microphones), which no predictor removes.
+      Stereo decorrelation does nothing on two real microphones (FLAC without mid-side 0.01% bigger, WavPack `-j0` the same),
+      but 6% on Sat Nov 14's copied channel (FLAC 684 against 731 without mid-side).
+      Today's in-app FLAC (`flacenc` defaults, per chunk) is 682 MB/h on Mon Nov 9, 8:34 pm against 664 for `flac -8` on the whole ride: 2.6% to gain.
+    - Lossless recommendation (the archive copy, OneDrive): FLAC, kept as today's per-chunk FLAC inside the protobuf chunks,
+      with `flacenc` tuned toward `flac -8` (4096-frame blocks, LPC order up to 12, mid-side tried) and the 512 MiB limit fixed by streaming (item 50).
+      That's 1,180 to about 665 to 750 MB/h on long rides (37% to 44% smaller). ALS saves 1.3% more at 30 to 50 times the CPU, with only the reference code
+      (ISO reference software license, no maintained library; FFmpeg decodes only a subset); WavPack (BSD-3-Clause, C, via the NDK) saves 0.2% to 0.5% for 10x the CPU.
+      FLAC is already on the phone in Rust (`flacenc` encodes, `claxon` decodes, Apache-2.0/MIT), or libFLAC (BSD-3-Clause) via the NDK.
+      Not measured: phone CPU and battery.
+    - Lossy side measurement (not storage of the archive; for the phone's own copy after the lossless one is verified on OneDrive),
+      Opus (`libopus` via FFmpeg, `-application audio`, uncoupled: mapping family 255, checked as 2 streams, 0 coupled),
+      on the whole of Mon Nov 9, 8:34 pm and 4:16 pm and Sat Nov 14, 7:01 pm (`data/work/audio-bench/lossy.sh`, `logs/lossy.tsv`):
+      per microphone 12 kbps 11 MB/h, 16 kbps 12 to 13, 24 kbps 19 to 20, 32 kbps 25 to 27, 48 kbps 39 to 40, 64 kbps 52 to 53;
+      AAC-LC (FFmpeg's encoder) 64 kbps a microphone 59 MB/h. Opus encodes 50x to 75x realtime, decodes 115x to 165x; full band (to 20 kHz) at every rate.
+    - Scored by what the app takes from audio, which is only the door detector (`crates/fusion/src/doors.rs`: door cycles for the stops' doors,
+      and the confirmed chime's pitch family for the car type). A session rebuilt from the lossless samples replays identically (the control);
+      with decoded lossy samples (`audiobench rebuild`, `crates/fusion/examples/audiocmp.rs`, `data/work/audio-bench/logs/doorscore.log`),
+      cycles matched within 1 s on the three rides: Opus 16 kbps 26 of 39, 24 33, 32 33, 48 34, 64 36, AAC 64 34;
+      chimes (within 0.5 s, same family) 32 / 38 / 40 / 41 / 42 / 41 of 43. Whole replays keep every stop at every rate, but door times change
+      at 1 to 3 of 17 or 25 stops even at 64 kbps (`logs/lossyreplay.log`). The detector's thresholds make it flip on small changes,
+      so no lossy rate gives the same replay: replays after the swap must use stored analysis, not the lossy audio.
+      Clips to listen to, 20 s each (Mon Nov 9, 8:34 pm, the NTT chime at Grand Central, the R62 chime at 14 St-Union Sq, and moving),
+      lossless FLAC and each rate: `data/work/audio-bench/clips/`.
+    - Lossy recommendation (pending the rider's listening): Opus, uncoupled, 48 kbps a microphone, about 39 MB/h (19 times under FLAC);
+      32 kbps (26 MB/h) if the clips sound the same. On the phone: libopus (BSD-3-Clause) via the NDK or a Rust binding, packets kept in our own chunks
+      with their timestamps; Android's own Opus encoder (Android 10+) is untested with uncoupled channels.
+    - Stored analysis (design only), computed from the lossless audio before the swap, as a small derived stream in the session:
+      the door detector's own intermediate values, exactly as it computes them, so a replay feeds them to the detector in place of audio and gets the lossless result:
+      per 0.1 s level window its time and 1 to 4 kHz level (dB), and per 32 ms chime window its time and the best prominence of each pitch family (2 values);
+      plus its outputs (door cycles, confirmed chimes and family) and a detector version, to tell when it changed.
+      Quantized to 0.1 dB and delta coded, that's 0.04 MB/h for the level and 0.24 MB/h for the prominences (`featsize.py`, `xz`);
+      stored exactly, as needed for identical replays (the detector's 64-bit values, or 32-bit if the detector rounds to that live too), 1 to 2 MB/h before compression. Thresholds (steps, prominence, durations) can be retuned on it, band edges and windows can't,
+      so also store 1/3-octave band levels (26 bands, 50 Hz to 16 kHz, 10 Hz) for later detectors: about 1 MB/h at 0.1 dB.
+      Altogether at most 2 to 3 MB/h, beside about 39 MB/h of Opus and 13 MB/h of sensors.
 43. Live speed over 100 mph outdoors (Mon Nov 9, 12:50 pm, at 1:06:32 pm): "it's going crazy high speeds now
     even outdoors with gnss doppler, over 100 mph", 44 s after boarding (1:05:48 pm).
     The average speed too: "totally wrong" (1:06:48 pm), then "more normal now but still too high (11 mph), but was 26 mph" (1:08:26 pm).
