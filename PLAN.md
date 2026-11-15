@@ -1604,12 +1604,45 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
       stored exactly, as needed for identical replays (the detector's 64-bit values, or 32-bit if the detector rounds to that live too), 1 to 2 MB/h before compression. Thresholds (steps, prominence, durations) can be retuned on it, band edges and windows can't,
       so also store 1/3-octave band levels (26 bands, 50 Hz to 16 kHz, 10 Hz) for later detectors: about 1 MB/h at 0.1 dB.
       Altogether at most 2 to 3 MB/h, beside about 39 MB/h of Opus and 13 MB/h of sensors.
-43. Live speed over 100 mph outdoors (Mon Nov 9, 12:50 pm, at 1:06:32 pm): "it's going crazy high speeds now
+43. Done, not on the phone (`9e8a903`, `2211995`): live speed over 100 mph outdoors (Mon Nov 9, 12:50 pm, at 1:06:32 pm): "it's going crazy high speeds now
     even outdoors with gnss doppler, over 100 mph", 44 s after boarding (1:05:48 pm).
     The average speed too: "totally wrong" (1:06:48 pm), then "more normal now but still too high (11 mph), but was 26 mph" (1:08:26 pm).
     With GNSS Doppler in, nothing should reach 100 mph: find which input drove it (GNSS itself, or the IMU with GNSS standing aside,
     item 27's "GNSS is never capped"), and why the average follows it. Car 3681 tagged at 12:51:08 pm on the ride before.
     Pulled 2026-11-15, with Mon Nov 9 (4:16 pm, 5:46 pm, 8:34 pm) and Sat Nov 14, 7:01 pm; the first rides on 0.1.25.
+    Cause: the IMU, not GNSS. GNSS read 3 to 4 mph the whole time, the phone handled (walking steps at times).
+    The gyro turned the travel axis by a first-order step, `v - omega x v dt`, which grows it by `(omega dt)^2 / 2`
+    a sample; once GNSS had learned the axis nothing renormalized it, so it grew from 1 to 5.4 times its length over
+    about 15 min of handling, and the acceleration along it as much: about 8.5 m/s^2 along the axis.
+    GNSS Doppler was then rejected by the gate (3 sigma of a prediction already 20 mph off) 5 times in a row,
+    the filter restarted on GNSS, and ran off again: a 5 s sawtooth from 16 to 104 mph. The caps stood aside
+    because GNSS arrived (`last_gnss_ns`), though rejected. The average is the whole ride's smoothed speed, whose
+    forward half carried the runaway: replayed it rose 9.7 to 15.4 mph from 1:05 to 1:09 pm (GNSS mean 3.3 mph);
+    the phone's 26 then 11 mph is not reproduced (0.1.25 then, HEAD now), so why it fell is not known.
+    - `9e8a903`: gravity, the axis, its mean, the GNSS cross term and the horizontal integral turn exactly
+      (`rotate_exact`), and the axis covariance as `R^T C R`. That ride's 1:04 to 1:09 pm peaks at 4.7 mph.
+    - `2211995`, the rider's call (GNSS should usually win): a GNSS Doppler speed that passes its own checks
+      (sigma at most 1.5 m/s, a change from the last plausible GNSS speed within `GNSS_REACH_MPS2`) isn't gated
+      against the prediction; disagreeing, the speed's variance grows to the disagreement and GNSS sets it at once.
+      Poorer Doppler is gated as before: our own solution read 41 mph, sigma 5.6 mph, standing at home
+      (Fri Oct 30, 4:00 pm, at 4:35:03 pm), and taken ungated it showed 40 mph.
+      With GNSS recent, the speed stays under the last plausible or latest GNSS speed plus 3 m/s^2 since and
+      3 sigma (`GNSS_REACH_MPS2`). The first measurement's speed drops its correlation with the bias (`p01`),
+      which had made the covariance indefinite and the ungated update NaN.
+      The average on the ride: 4.0 to 4.4 mph from 1:04 to 1:09 pm.
+    Scored by `crates/cli/examples/gnssgap.rs` (scratch, untracked: each second, the live speed against a `gps`
+    fix under 1 s old) over 58 rides with `skip_still`, before, after `9e8a903`, after both:
+    over the fix by 10 mph 2470, 401, 133 s; by 20 mph 1714, 177, 21 s; under by 10 mph 59, 62, 18 s;
+    rides more than 30 mph over 20, 10, 2. Runaways it fixed: Tue Oct 20, 3:49 pm (185 mph),
+    Thu Oct 22, 12:29 am (153), Thu Nov 5, 10:06 pm (198), Mon Nov 9, 4:16 pm (213), Sat Nov 14, 7:01 pm (104).
+    `liveratio` (212 legs, baseline `0de23c4`): under 0.5 31, 46, 38; within 0.7 to 1.3 94, 89, 92;
+    over 1.3 55, 53, 51; median 0.99, 0.91, 0.91. The axis growth had inflated underground speeds too
+    (80 legs on a grown axis: median 0.95 to 0.81 with `9e8a903`), masking item 27's slow integration;
+    legs also flip from 1e-4 changes (on legs where the axis stayed 1.000), so differences of a few legs are noise.
+    The rider's call: land it; the legs under 0.5 (31 to 38) are item 27's slow integration, to fix there.
+    Open: the Sun Nov 1, 1:50 am ride still reads 51 mph over GNSS at 2:58:27 am, and Sat Oct 31, 1:11 pm 30 mph
+    at its start (1:12 pm); the parked idea of taking the vehicle's acceleration for gravity from the GNSS speeds'
+    rate instead of the fused one (gains within the bound's seconds; unscored on top of it).
 44. Music playing (Mon Nov 9, 4:16 pm, at 4:38:02 pm): "music playing, might disrupt sound detection".
     A label for item 26: check the chime and door detection over the stretch with music against the taps,
     and whether the detectors need to reject it.
