@@ -14,11 +14,13 @@ inside the cycle if one), and `combined` (steps in the cycle, else beacon, else 
 Needs `data/work/analysis/stops3-<ride>/{stops,steps,door_cycles,events,fixes}.csv` and `data/work/analysis/<ride>/ble.csv`."""
 
 import csv
-from datetime import datetime
+import sys
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import clock_from_fixes, session_dir  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 ANALYSIS = ROOT / "data/work/analysis"
@@ -60,9 +62,7 @@ def main():
     errors = {k: [] for k in ("last_steps", "cycle", "beacon", "combined")}
     for ride in RIDES:
         d = ANALYSIS / f"stops3-{ride}"
-        fx = read(d / "fixes.csv")[0]
-        off = int(fx["time_ms"]) * 1_000_000 - int(fx["t_ns"])
-        clock = lambda t: datetime.fromtimestamp((t + off) / 1e9, ZoneInfo("America/New_York")).strftime("%-I:%M:%S %p").lower()  # noqa: E731
+        clock = clock_from_fixes(d / "fixes.csv", session_dir(ride))
         taps = [int(e["t_ns"]) for e in read(d / "events.csv") if e["kind"].endswith("BOARDED")]
         steps = [(int(r["t_ns"]), r["steps"] == "true") for r in read(d / "steps.csv")]
         cycles = [(int(r["open_ns"]), int(r["close_ns"])) for r in read(d / "door_cycles.csv")]

@@ -18,8 +18,11 @@ LOCAL = Path(__file__).resolve().parents[2] / "data/sessions"
 
 def session_dir(name):
     """The session pulled into `data/sessions/` (`just pull`), else the OneDrive copy."""
-    local = LOCAL / f"20261020-{name}"
-    return local if local.exists() else SESSIONS / f"20261020-{name}"
+    for root in (LOCAL, SESSIONS):
+        found = sorted(root.glob(f"2026*-{name}")) if root.exists() else []
+        if found:
+            return found[0]
+    return LOCAL / f"20261020-{name}"
 
 
 def imu(name, rate=50.0):
@@ -69,3 +72,12 @@ def fused(name, t0):
     return {k: np.array([float(r[k]) for r in rows]) for k in ["speed", "sigma", "forward", "backward", "accel"]} | {
         "t": np.array([(int(r["t_ns"]) - t0) * 1e-9 for r in rows])
     }
+
+
+def clock_from_fixes(fixes_csv, session, pattern="%-I:%M:%S %P"):
+    """Boot-time ns to the ride's own local clock text (Rust's `SessionClock`, never a fixed zone).
+
+    The boot-to-Unix offset comes from the first fix with a wall time in `fixes_csv`; `session` is the session directory."""
+    row = next(r for r in csv.DictReader(open(fixes_csv)) if r["time_ms"])
+    off_ms = int(row["time_ms"]) - int(row["t_ns"]) // 1_000_000
+    return lambda t_ns: ride.local_clock(session, int(t_ns) // 1_000_000 + off_ms, pattern)

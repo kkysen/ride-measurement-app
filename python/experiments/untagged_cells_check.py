@@ -15,23 +15,18 @@ the rider's 69 St tag; above ground, with GPS, so harmless. No jumps, and no cel
 import csv
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from common import ANALYSIS  # noqa: E402
+from common import ANALYSIS, clock_from_fixes, session_dir  # noqa: E402
 from station_cells_check import RIDES, meters  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-NY = ZoneInfo("America/New_York")
 
 
 def clock_of(ride):
-    """Boot-time ns to a New York clock time, from the ride's first GPS fix."""
-    r = next(csv.DictReader(open(ANALYSIS / ride / "fixes.csv")))
-    off = int(r["time_ms"]) * 1_000_000 - int(r["t_ns"])
-    return lambda t: datetime.fromtimestamp((t + off) / 1e9, NY).strftime("%b %-d %-I:%M %p").replace("AM", "am").replace("PM", "pm")
+    """Boot-time ns to the ride's own local clock time, from the ride's first GPS fix."""
+    return clock_from_fixes(ANALYSIS / ride / "fixes.csv", session_dir(ride), "%b %-d %-I:%M %P")
 
 
 def main():

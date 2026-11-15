@@ -9,13 +9,11 @@
   with the last leg ending at the exit station.
 - Above ground: stations within 150 m of the GNSS track in order, and whether the train stopped there.
 
-Prints each trip's legs with start and end times (New York, am/pm), stations, and the stops heard."""
+Prints each trip's legs with start and end times (the ride's local zone, am/pm), stations, and the stops heard."""
 
 import csv
-import datetime
 import math
 import sys
-import zoneinfo
 from pathlib import Path
 
 import numpy as np
@@ -38,18 +36,18 @@ RIDES = {
     "182135": "20261021-182135",
     "215922": "20261021-215922",
 }
-NY = zoneinfo.ZoneInfo("America/New_York")
 GAP_S = 120.0
 WALK_WINDOW_S = 4.0
 MIN_LEG_S = 60.0
 
 
 def clock(ride_name):
-    """Elapsed realtime ns to New York time, from a fix's UTC time."""
+    """Elapsed realtime ns to the ride's own local time, from a fix's UTC time."""
     fx = [f for f in T.read(ANALYSIS / ride_name / "fixes.csv") if f["time_ms"]]
     f = fx[len(fx) // 2]
-    off = int(f["time_ms"]) * 1e6 - int(f["t_ns"])
-    return lambda t: datetime.datetime.fromtimestamp((t + off) / 1e9, NY).strftime("%-I:%M:%S %p").lower()
+    off_ms = int(f["time_ms"]) - int(f["t_ns"]) // 1_000_000
+    session = ROOT / "data/sessions" / RIDES[ride_name]
+    return lambda t: ride.local_clock(session, int(t) // 1_000_000 + off_ms)
 
 
 def walking(session):

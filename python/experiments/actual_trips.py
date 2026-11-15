@@ -29,13 +29,13 @@ import math
 import os
 import sys
 from collections import defaultdict
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import session_dir  # noqa: E402
+import ride  # noqa: E402
 ANALYSIS = ROOT / "data/work/analysis"
-NY = ZoneInfo("America/New_York")
 RIDES = ["151449", "154951", "184134", "214427", "135509", "155919", "182135", "215922"]
 SLACK_S = 45.0
 NEAR_M = 250.0
@@ -142,8 +142,9 @@ def match(leg, at, names, net):
     return ranked
 
 
-def clock(t):
-    return datetime.fromtimestamp(t, NY).strftime("%-I:%M:%S %p").lower()
+def clock(ride_name, t):
+    """Unix seconds as the ride's own local clock time."""
+    return ride.local_clock(session_dir(ride_name), round(t * 1000))
 
 
 def main(rides):
@@ -157,7 +158,7 @@ def main(rides):
                 continue
             ranked = match(leg, at, names, net)
             first, last = leg[0], leg[-1]
-            span = f"{clock(first[1])} {first[0]} to {clock(last[1])} {last[0]}, {len(leg)} stops"
+            span = f"{clock(ride, first[1])} {first[0]} to {clock(ride, last[1])} {last[0]}, {len(leg)} stops"
             if not ranked:
                 print(f"  {span}: no trip")
                 continue

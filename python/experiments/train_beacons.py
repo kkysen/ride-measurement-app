@@ -16,11 +16,9 @@ Needs `ble.csv` and `fixes.csv` per ride in `data/work/analysis`."""
 import csv
 import sys
 from collections import defaultdict
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from common import ANALYSIS  # noqa: E402
+from common import ANALYSIS, clock_from_fixes, session_dir  # noqa: E402
 
 PREFIX = "e2c56db5dffb48d2b060d0f5a710"
 
@@ -31,9 +29,7 @@ def signed(b):
 
 def main(rides):
     for ride in rides:
-        fx = next(csv.DictReader(open(ANALYSIS / ride / "fixes.csv")))
-        off = int(fx["time_ms"]) * 1_000_000 - int(fx["t_ns"])
-        clock = lambda t: datetime.fromtimestamp((t + off) / 1e9, ZoneInfo("America/New_York")).strftime("%-I:%M:%S %p").lower()  # noqa: E731
+        clock = clock_from_fixes(ANALYSIS / ride / "fixes.csv", session_dir(ride))
         seen = defaultdict(dict)
         for r in csv.DictReader(open(ANALYSIS / ride / "ble.csv")):
             i = r["data"].find(PREFIX)

@@ -22,6 +22,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ride  # noqa: E402
+from common import clock_from_fixes  # noqa: E402
 from elevator import moves  # noqa: E402
 from elevator_jolts import altitude, ends  # noqa: E402
 from sensor_trips import walking  # noqa: E402
@@ -44,17 +45,11 @@ def shape(sec, alt, a, b):
 
 
 def clock(session, t):
-    """`t` as a New York clock time, from the ride's exported fixes (`data/work/analysis/<ride>/fixes.csv`)."""
-    import csv
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
+    """`t` as the ride's own local clock time, from the ride's exported fixes (`data/work/analysis/<ride>/fixes.csv`)."""
     fixes = ROOT / "data/work/analysis" / session.name.split("-")[1] / "fixes.csv"
     if not fixes.exists():
         return "?"
-    r = next(csv.DictReader(open(fixes)))
-    off = int(r["time_ms"]) * 1_000_000 - int(r["t_ns"])
-    return datetime.fromtimestamp((t + off) / 1e9, ZoneInfo("America/New_York")).strftime("%b %-d %-I:%M:%S %p").lower()
+    return clock_from_fixes(fixes, session, "%b %-d %-I:%M:%S %P")(t)
 
 
 def gaps(walks, a, b):

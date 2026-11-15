@@ -25,14 +25,12 @@ import csv
 import sys
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import train_line as tl  # noqa: E402
 
-NY = ZoneInfo("America/New_York")
 MAX_TRANSFER_S = 20 * 60
 STEP_WINDOW_S = 4.0
 PASSAGE_M = 2.5

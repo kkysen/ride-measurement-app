@@ -25,14 +25,15 @@ import math
 import sys
 from bisect import bisect_left
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ride as ride_pkg  # noqa: E402
+from common import session_dir  # noqa: E402
 GTFS = ROOT / "data/mta/gtfs"
 ANALYSIS = ROOT / "data/work/analysis"
-NY = ZoneInfo("America/New_York")
 RIDES = {r: f"stops3-{r}" for r in ["151449", "154951", "184134", "214427", "135509", "155919", "182135", "215922"]}
 ON_TRACK_M = 80.0
 SWITCH = float(__import__("os").environ.get("SWITCH", 2.0))
@@ -125,10 +126,14 @@ def services(day):
     return ["Weekday"] if wd < 5 else ["Saturday", "Saturday-H-20260908-20261031"] if wd == 5 else ["Sunday", "Sunday-H-20260908-20261031"]
 
 
-def clock_of(ride):
+def clock_of(ride, schedule=False):
+    """Boot-time ns to a wall-clock `datetime` (no zone attached): the ride's own local time to show,
+    or with `schedule` the MTA schedule's (the GTFS `agency_timezone`) to compare with GTFS times."""
     fx = read(ANALYSIS / RIDES[ride] / "fixes.csv")[0]
-    off = int(fx["time_ms"]) * 1_000_000 - int(fx["t_ns"])
-    return lambda t: datetime.fromtimestamp((t + off) / 1e9, NY)
+    off_ms = int(fx["time_ms"]) - int(fx["t_ns"]) // 1_000_000
+    session = session_dir(ride)
+    local = (lambda ms: ride_pkg.agency_ms(ms)) if schedule else (lambda ms: ride_pkg.local_ms(session, ms))
+    return lambda t: datetime(1970, 1, 1) + timedelta(milliseconds=local(int(t) // 1_000_000 + off_ms))
 
 
 def observations(ride):
@@ -325,7 +330,7 @@ def tags(ride):
 
 def identify(ride, patterns, pos):
     """The ride's train segments: [{t0, t1, route, dir, routes (near-equal), trip, first, last, passed}]."""
-    clock = clock_of(ride)
+    clock = clock_of(ride, schedule=True)
     obs = observations(ride)
     path, svc = viterbi(obs, patterns, pos, clock)
     out = []
