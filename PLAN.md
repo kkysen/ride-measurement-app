@@ -1534,6 +1534,14 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     not the whole stream in memory, then rerun it on those rides. Also: Sat Nov 14's two channels look like one microphone twice
     (the second 1.04 times the first, the rest 28 dB down, correlation 0.99 even above 2 kHz), which the `Health` copy check misses
     since they aren't exact copies; Mon Nov 9's are two microphones (correlation about 0.8).
+    Done on the PC (2026-11-15, not yet on the phone): recompression streams in bounded memory, streams of any size,
+    with the same guarantee (replaced only once the new file decodes to the same SHA-256 of the chunks),
+    and `.recompressed` names each stream's content SHA-256 (`recompress::content_sha256`), to check copies against.
+    On a copy of Mon Nov 9, 4:16 pm (38:52): audio 764 to 483 MB (1,180 to 746 MB/h), the session 777 to 495 MB,
+    in 2:41 at a peak of 177 MB; every stream's chunks byte for byte the same as the original's.
+    SHA-256 runs at about 1.7 GB/s on the PC. Sensor columns stay whole-stream in memory,
+    so they're limited to 64 MiB of content (about 80 min of `accel_uncal`, about 210 MB at peak); longer is plain zstd.
+    Still open: rerun it on the three long rides, timing on the phone, and the Sat Nov 14 one-microphone-twice check.
 51. Clock times in the ride's own time zone, not New York's (rider, 2026-11-15: "don't assume this is in NYC";
     rides elsewhere, and flights, cross zones). Today the app formats every time in `America/New_York`
     (`TapMarks.kt`, `PastRides.kt`, `LiveGraph.kt`), and `ride_session::clock` (`6e4b1ce`) is New York only.
