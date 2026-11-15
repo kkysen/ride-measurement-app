@@ -1063,6 +1063,34 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     x0.25, 36 / 77 / 0.95 (over 1.3: 55, 67, 61, against 47).
     So the stop zeros were absorbing a real along-axis error that a frozen bias leaves in the speed.
     Open: what that error is (gravity's gyro drift, the axis between departures), rather than tuning the bias.
+    Found (2026-11-15, `cb95e4f`, not on the phone): the gyro's bias left after Android's calibration,
+    about 0.0003 rad/s, the same vector in the phone's frame ([-0.0002, -0.0003, ~0] rad/s) on every
+    interval between stills on 5 rides. Carried by the gyro, gravity tilted 1.5 to 2 deg per leg,
+    and 15 to 23 deg over 10 to 30 min with no stillness (the phone in hand underground);
+    each degree leaks 0.17 m/s^2 along the track. Standing at stations on Thu Nov 5, 10:06 pm,
+    the along-axis reading was -0.7 to -2.8 m/s^2 (should be 0), matching each leg's mean error,
+    and the bias read -1.2 to -1.9, absorbing it; gravity was also 21% too long (11.9 m/s^2, the first-order turn).
+    The old "not a gravity tilt leak" probe looked only at the phone's own stills, where gravity re-learns
+    in 0.5 s, so it missed it. Probes: stash "item19: gravity and gyro bias probes".
+    Fixed at the cause: gravity set from the accelerometer's mean while the train stands
+    (`LiveSpeedEstimator::on_standing`, from `hold_standing`, in a gyro-carried frame since the phone moves in a hand
+    and standings are found up to 25 s late), and the gyro's bias learned from how far gravity carried by the gyro
+    alone turned away from each still or standing (`learn_gyro_bias`).
+    Baseline at `664da70` (the plan's 30 / 91 / 0.95 / 48, 81 of 147 was about 50 commits older):
+    `liveratio` 212 legs, under 0.5 34, within 0.7 to 1.3 89, over 1.3 58, median 0.98;
+    `brakecause` falls 70 of 142. Now 31 / 94 / 55 / 0.99, falls 73.
+    Variants (sweeps move by a few legs between near-identical runs): gravity at stands only with no GNSS
+    28 / 94 / 55, 74; no bias learned from stands 34 / 98 / 49, 73; stand bias gain 1000 s 36 / 104 / 46, 77;
+    300 s 40 / 95 / 50, 69; bias from stills only 34 / 88 / 56, 73; with the exact rotation 44 / 95 / 46, 75.
+    A second cause, open: the travel axis between departures underground. Over the 12 s after 74 departures
+    on 6 rides, the train's own acceleration (gyro-carried) against the axis: median |cos| 0.93, 30% under 0.83,
+    10% under 0.68, and the sign reversed at 43 (the speed shown is its magnitude, so the sign matters little);
+    the first-order turn lengthening the axis to 1.3 to 1.9 had covered the lost part, which is why the exact
+    rotation scored low (along over the departure's speed change, median 0.95 first order, 0.79 exact).
+    Setting the axis (unit length) from each departure's acceleration: 30 / 95 / 58, 70;
+    keeping the axis's length 25 / 101 / 61, 69 (mean |log ratio| 0.514 to 0.477) but more runaways, so not kept;
+    with the exact rotation 30 / 91 / 62, 70. Stash "item19: gyro bias, gravity at stands, and departure axis
+    experiments with flags". Open: the departure axis with the runaways' caps, and the exact rotation with it.
 20. Done, unchecked on the phone (`34cfce3`, `6b7d63f`, `10fdd80`, `00681c8`): the live map underground, noted on
     four rides, the latest Sat Nov 7, 5:59 pm. `Fusion::recent_track_path`, drawn under the GPS path:
     each leg between stations once the train stops at its far station (placed as a past ride's by `track::Along`);
@@ -1316,6 +1344,9 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     The MTA's Speed and Capacity Review (mta.info/document/13046) blocks scripted downloads: the rider is to save it.
     The rider's note on what works: with the phone very still, leaving a station from a correct stop,
     the numbers look accurate by eye (Mon Oct 26, 8:08 pm, at 8:18 pm).
+    Gravity underground (2026-11-15, `cb95e4f`, item 19): the gyro's leftover bias tilted gravity
+    15 to 23 deg between stills; now set while the train stands and the bias learned. Under 0.5 34 to 31,
+    within 89 to 94, over 1.3 58 to 55 (baseline `664da70`, 212 legs). The axis between departures is item 19's open part.
 28. Learn the trains' acceleration curves (speeding up, cruise, braking) from the above-ground rides,
     per line and car model, to bound and shape the speed between stations (rider, 2026-11-08). Done (2026-11-08).
     Open track grid (`b7317bc`, `0377dfb`, `6f988ba`): plus OpenStreetMap's subway ways not tagged as tunnels
