@@ -1553,15 +1553,13 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     `ride_session::clock::SessionClock` keeps three sources apart: the phone's zone, the location's
     (each fix's zone from `tzf-rs`'s lite boundaries, about once a minute, needing two lookups in a row to change),
     and the session id's fixed offset. Times are shown in the phone's zone if recorded (its clock timed the taps),
-    else the location's, else the id's offset; `ride summary` lists all three and where the phone's and the location's differ.
+    else the location's, else the id's offset (changed below); `ride summary` lists all three and where they differ.
     Zone rules are `jiff`'s bundled IANA database, so the phone's older `/system` copy (2025c) doesn't matter.
     The native library grew from 5.9 MB to 10.9 MB, mostly the boundaries (4.1 MB).
     The MTA schedule's hours use the GTFS `agency_timezone` (`crates/fusion/data/service_zone.txt`).
-    Open choice (the rider's): which zone the app shows when the phone recorded one. Now (A) the phone's,
-    matching its clock and the taps; but a phone whose zone doesn't change in flight (airplane mode) then shows
-    the departure zone all flight, and only the tools show the location's. (B, recommended) the location's whenever
-    there are fixes, else the phone's: local time where the train or plane is. (C) the phone's, switching to the
-    location's once they've disagreed for some minutes.
+    The rider chose the location's zone whenever there are fixes, else the phone's recorded zone, else the id's offset
+    (`SessionClock::shown`; live, `RideClock::live` at the latest fix), so a flight in airplane mode shows local time
+    where the plane is; the tools still list the phone's zone and where it differs.
     Left: check the `python/experiments` scripts that use `America/New_York` (`train_line.py`, `actual_trips.py`,
     `sensor_trips.py`, `transfers.py`, `untagged_cells_check.py`, and the ride clocks in `train_beacons.py`,
     `boarding.py`, `elevator_shape.py`): GTFS times should take the feed's `agency_timezone`, ride times the session's zone.
