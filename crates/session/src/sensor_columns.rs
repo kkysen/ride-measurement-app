@@ -330,6 +330,16 @@ pub fn encode_file(bodies: &[Vec<u8>], level: i32) -> Result<Vec<u8>, String> {
 
 /// The stream content (length-delimited chunks, as the live format decodes to) of a whole file in this encoding.
 pub fn decode_file(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    let mut content = Vec::new();
+    decode_file_with(bytes, |body| {
+        put_varint(&mut content, body.len() as u64);
+        content.extend_from_slice(body);
+    })?;
+    Ok(content)
+}
+
+/// Like [`decode_file`], handing each chunk's body to `each` in order instead of collecting the content.
+pub fn decode_file_with(bytes: &[u8], mut each: impl FnMut(&[u8])) -> io::Result<()> {
     let header = header();
     if !bytes.starts_with(&header) {
         return Err(invalid("not a sensor columns file"));
@@ -344,13 +354,12 @@ pub fn decode_file(bytes: &[u8]) -> io::Result<Vec<u8>> {
     zstd::stream::read::Decoder::with_buffer(frame)?
         .single_frame()
         .read_to_end(&mut columns)?;
-    let mut content = Vec::new();
-    for c in decode_columns(&columns)? {
-        let body = c.encode_to_vec();
-        put_varint(&mut content, body.len() as u64);
-        content.extend_from_slice(&body);
+    let chunks = decode_columns(&columns)?;
+    drop(columns);
+    for c in chunks {
+        each(&c.encode_to_vec());
     }
-    Ok(content)
+    Ok(())
 }
 
 #[cfg(test)]

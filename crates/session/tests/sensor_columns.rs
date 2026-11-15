@@ -5,8 +5,8 @@ use prost::Message;
 use ride_session::proto::StreamInfo;
 use ride_session::read::{Session, decode_stream_bytes};
 use ride_session::recompress::{
-    Encoding, LEVEL, Outcome, recompress_sensor_stream, recompress_session,
-    recompress_stream_checked,
+    Encoding, LEVEL, Outcome, recompress_sensor_stream, recompress_sensor_stream_with_max,
+    recompress_session, recompress_stream_checked,
 };
 use ride_session::sensor_columns::{decode_file, encode_file, is_columnar};
 use ride_session::write::{StreamWriter, write_session_info};
@@ -234,4 +234,28 @@ fn unencodable_sensor_stream_falls_back_to_plain() {
     let bytes = fs::read(&path).unwrap();
     assert!(!is_columnar(&bytes));
     assert_eq!(decode_stream_bytes::<SensorChunk>(&bytes).chunks.len(), 100);
+}
+
+#[test]
+fn sensor_stream_past_the_columns_limit_is_plain_with_the_same_chunks() {
+    let dir = tempfile::tempdir().unwrap();
+    let chunks = ride(dir.path(), "accel_uncal");
+    let path = dir.path().join("accel_uncal.zst");
+    let size = content(&chunks).len() as u64;
+    let copy = dir.path().join("copy.zst");
+    fs::copy(&path, &copy).unwrap();
+    let outcome = recompress_sensor_stream_with_max(&path, LEVEL, size - 1);
+    assert!(matches!(outcome, Outcome::Replaced { .. }), "{outcome}");
+    let bytes = fs::read(&path).unwrap();
+    assert!(!is_columnar(&bytes));
+    assert_eq!(
+        zstd::decode_all(bytes.as_slice()).unwrap(),
+        content(&chunks)
+    );
+    // At the limit, columns.
+    let outcome = recompress_sensor_stream_with_max(&copy, LEVEL, size);
+    assert!(matches!(outcome, Outcome::Replaced { .. }), "{outcome}");
+    let columns = fs::read(&copy).unwrap();
+    assert!(is_columnar(&columns));
+    assert_eq!(decode_file(&columns).unwrap(), content(&chunks));
 }
