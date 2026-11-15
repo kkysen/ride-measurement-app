@@ -8,11 +8,10 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.ride_ffi.recompressSession
-import uniffi.ride_ffi.recompressedMarker
+import uniffi.ride_ffi.sessionNeedsRecompression
 
 /**
  * Recompresses finished sessions with the Rust recompressor (`crates/session/src/recompress.rs`),
@@ -23,9 +22,8 @@ class RecompressWorker(context: Context, params: WorkerParameters) : CoroutineWo
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val current = RecorderService.state.value.sessionId
         try {
-            val marker = recompressedMarker()
             RecorderService.sessionsDir().listFiles().orEmpty()
-                .filter { it.isDirectory && it.name != current && !File(it, marker).exists() }
+                .filter { it.isDirectory && it.name != current && sessionNeedsRecompression(it.path) }
                 .sortedBy { it.name }
                 .forEach { session ->
                     try {

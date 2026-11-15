@@ -1105,6 +1105,12 @@ pub fn recompressed_marker() -> String {
     ride_session::recompress::MARKER.into()
 }
 
+/// Whether the session in `dir` needs [`recompress_session`]: no marker yet, or one naming a stream left as recorded for being too large.
+#[uniffi::export]
+pub fn session_needs_recompression(dir: String) -> bool {
+    ride_session::recompress::needs_recompression(std::path::Path::new(&dir))
+}
+
 /// Post-ride recompression of the session in `dir` (`ride_session::recompress`).
 #[uniffi::export]
 pub fn recompress_session(dir: String) -> Result<Vec<StreamRecompression>, RideError> {

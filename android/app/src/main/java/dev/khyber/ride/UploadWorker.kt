@@ -12,6 +12,7 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.ride_ffi.recompressedMarker
+import uniffi.ride_ffi.sessionNeedsRecompression
 
 /**
  * Uploads every finished session not yet uploaded. Nothing is ever deleted here:
@@ -32,7 +33,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         }
         val sessions = RecorderService.sessionsDir().listFiles().orEmpty()
             .filter {
-                it.isDirectory && it.name != current && File(it, recompressed).exists() &&
+                it.isDirectory && it.name != current && File(it, recompressed).exists() && !sessionNeedsRecompression(it.path) &&
                     !File(it, UPLOADED_MARKER).exists()
             }
         try {
