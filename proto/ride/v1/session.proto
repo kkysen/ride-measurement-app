@@ -31,6 +31,9 @@ message SessionInfo {
   repeated StreamInfo streams = 6;
   // Set when Android killed the recording and it restarted itself: the session this one continues.
   string continues_session_id = 7;
+  // The phone's time zone at the start, as an IANA id (`ZoneId.systemDefault()`, e.g. "America/New_York");
+  // empty in sessions from before it was recorded. Changes during the ride are `TimeZoneChange` records in `events`.
+  string time_zone = 8;
 }
 
 message Device {
@@ -169,7 +172,19 @@ message Record {
     RecorderError recorder_error = 17;
     WalletNotification wallet_notification = 18;
     GtfsRealtimeFeed gtfs_realtime = 19;
+    TimeZoneChange time_zone_change = 20;
   }
+}
+
+// The phone's time zone changed during the ride (`Intent.ACTION_TIMEZONE_CHANGED`), in the `events` stream:
+// clock times from then on are in the new zone.
+message TimeZoneChange {
+  // The new zone, as an IANA id (`ZoneId.systemDefault()` once changed).
+  string time_zone = 1;
+  // Its offset from UTC then, in seconds, for readers that don't know the id.
+  int32 utc_offset_s = 2;
+  // Wall clock milliseconds when the app received it.
+  int64 unix_ms = 3;
 }
 
 // A Google Wallet notification, e.g. after an OMNY tap, from `NotificationListenerService` (the rider grants access).

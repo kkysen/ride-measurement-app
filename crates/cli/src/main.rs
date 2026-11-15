@@ -481,6 +481,7 @@ fn payload_name(payload: Option<&Payload>) -> &'static str {
         Some(Payload::RecorderError(_)) => "recorder_error",
         Some(Payload::WalletNotification(_)) => "wallet_notification",
         Some(Payload::GtfsRealtime(_)) => "gtfs_realtime",
+        Some(Payload::TimeZoneChange(_)) => "time_zone_change",
     }
 }
 

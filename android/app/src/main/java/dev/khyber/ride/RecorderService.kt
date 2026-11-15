@@ -5,8 +5,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.hardware.Sensor
@@ -21,8 +23,11 @@ import android.util.Log
 import dev.khyber.ride.proto.Device
 import dev.khyber.ride.proto.ManualEvent
 import dev.khyber.ride.proto.SessionInfo
+import dev.khyber.ride.proto.TimeZoneChange
 import java.io.File
 import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +48,7 @@ class RecorderService : Service() {
     private var radioRecorder: RadioRecorder? = null
     private var bleRecorder: BleRecorder? = null
     private var audioRecorder: AudioStreamRecorder? = null
+    private var zoneReceiver: BroadcastReceiver? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -154,6 +160,7 @@ class RecorderService : Service() {
                 .setStartUnixMs(startUnixMs)
                 .setStartElapsedRealtimeNs(startElapsedNs)
                 .setContinuesSessionId(continues)
+                .setTimeZone(ZoneId.systemDefault().id)
                 .setDevice(
                     Device.newBuilder()
                         .setManufacturer(Build.MANUFACTURER)
@@ -177,6 +184,7 @@ class RecorderService : Service() {
         Health.guard("radio") { radioRecorder?.start() }
         Health.guard("ble") { bleRecorder?.start() }
         Health.guard("audio") { audioRecorder?.start() }
+        if (events != null) Health.guard("time zone") { zoneReceiver = recordZoneChanges(events) }
         if (restarted) {
             events?.add {
                 manualEvent = ManualEvent.newBuilder()
@@ -192,6 +200,8 @@ class RecorderService : Service() {
     override fun onDestroy() {
         // Each part stops on its own, so one failing still lets the rest flush and close their files.
         eventsStream = null
+        zoneReceiver?.let { Health.guard("stop time zone") { unregisterReceiver(it) } }
+        zoneReceiver = null
         Health.guard("stop gnss") { gnssRecorder?.stop() }
         gnssRecorder = null
         WalletListener.sink = null
@@ -216,6 +226,29 @@ class RecorderService : Service() {
         _state.value = State(recording = false, sessionId = null)
         RecompressWorker.enqueueThenUpload(this)
         super.onDestroy()
+    }
+
+    /** Records each change of the phone's time zone (as on a flight), so clock times follow it. */
+    private fun recordZoneChanges(events: RecordStreamRecorder): BroadcastReceiver {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                Health.guard("time zone") {
+                    val now = System.currentTimeMillis()
+                    // The intent's own extra, else the default, which Android has updated by now.
+                    val zone = intent.getStringExtra(Intent.EXTRA_TIMEZONE)?.let { runCatching { ZoneId.of(it) }.getOrNull() }
+                        ?: ZoneId.systemDefault()
+                    events.add {
+                        timeZoneChange = TimeZoneChange.newBuilder()
+                            .setTimeZone(zone.id)
+                            .setUtcOffsetS(zone.rules.getOffset(Instant.ofEpochMilli(now)).totalSeconds)
+                            .setUnixMs(now)
+                            .build()
+                    }
+                }
+            }
+        }
+        registerReceiver(receiver, IntentFilter(Intent.ACTION_TIMEZONE_CHANGED))
+        return receiver
     }
 
     private fun notification(locationAllowed: Boolean): Notification {
