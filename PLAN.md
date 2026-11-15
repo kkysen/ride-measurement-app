@@ -1517,6 +1517,14 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     before I feel acceleration. what's that from? door sound? magnetometer? imu?"
     Answer from the replay: what moves the live speed off 0 at the departures on this ride (the IMU's surge, the weak start, an anchor or the cell),
     against when the gyro-tracked acceleration actually rises.
+50. Long rides' audio never recompressed (found 2026-11-15 on the rides pulled that day):
+    post-ride recompression skips a stream over `MAX_STREAM_BYTES` (512 MiB, `crates/session/src/recompress.rs`)
+    as "too large to check in memory", so every ride over about 25 min of 2-microphone float audio keeps the live `zstd -3` chunks,
+    about 1,180 MB/h (Mon Nov 9, 12:50 pm and 4:16 pm; Sat Nov 14, 7:01 pm), against about 680 to 740 MB/h as 24-bit FLAC on the short ones.
+    Every sample was exactly k/2^23 on all five rides, so FLAC applies. Fix: recompress and verify in a stream (chunk by chunk, or hashes),
+    not the whole stream in memory, then rerun it on those rides. Also: Sat Nov 14's two channels look like one microphone twice
+    (the second 1.04 times the first, the rest 28 dB down, correlation 0.99 even above 2 kHz), which the `Health` copy check misses
+    since they aren't exact copies; Mon Nov 9's are two microphones (correlation about 0.8).
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
