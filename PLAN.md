@@ -1531,6 +1531,16 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Sessions record no zone; their ids are the phone's local time at the start, so old ones imply the start's offset.
     Do: record the phone's zone (IANA id) in `SessionInfo`, and its changes during a ride; format every time, in the app and the tools,
     in the zone in effect then, with that zone's daylight saving rules; old sessions fall back to the offset their id implies.
+    Done (`8842b22`, `601b474`, `ebddf33`, `161fb71`; not on the phone yet, so the next version needs `just bump`):
+    `SessionInfo.time_zone` and `TimeZoneChange` records in `events` hold the phone's zone and its changes.
+    `ride_session::clock::SessionClock` keeps three sources apart: the phone's zone, the location's
+    (each fix's zone from `tzf-rs`'s lite boundaries, about once a minute, needing two lookups in a row to change),
+    and the session id's fixed offset. Times are shown in the phone's zone if recorded (its clock timed the taps),
+    else the location's, else the id's offset; `ride summary` lists all three and where the phone's and the location's differ.
+    Zone rules are `jiff`'s bundled IANA database, so the phone's older `/system` copy (2025c) doesn't matter.
+    The native library grew from 5.9 MB to 10.9 MB, mostly the boundaries (4.1 MB).
+    The MTA schedule's hours use the GTFS `agency_timezone` (`crates/fusion/data/service_zone.txt`).
+    Left: the `python/experiments` scripts still use `America/New_York`.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
