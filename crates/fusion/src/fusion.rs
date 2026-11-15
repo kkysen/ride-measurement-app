@@ -2917,6 +2917,7 @@ impl Fusion {
                 }
             }
         }
+        self.estimator.on_standing(from, to);
         self.estimator.on_stopped_at(to, t_ns);
         self.buffer(to, Input::StandingSince(from));
         let mut t = from;

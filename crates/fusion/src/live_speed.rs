@@ -109,6 +109,16 @@ const GRAVITY_TAU_HANDLED_S: f64 = 2.0;
 const HANDLED_RAD_S: f64 = 0.15;
 const HANDLED_TAU_S: f64 = 2.0;
 const AXIS_TAU_S: f64 = 30.0;
+/// Learning the gyro's bias from gravity's tilt between stills (see [`LiveSpeedEstimator::learn_gyro_bias`]):
+/// the shortest time apart to use, the time over which a tilt counts as fully measured,
+/// and the most bias believed (more is the phone handled, or a still that wasn't).
+const GYRO_BIAS_MIN_S: f64 = 5.0;
+const GYRO_BIAS_TAU_S: f64 = 30.0;
+const GYRO_BIAS_MAX_RAD_S: f64 = 0.005;
+/// How long the accelerometer's integral is kept for a standing found late (s; up to 25 s seen), and the shortest
+/// standing that measures gravity.
+const STANDING_HISTORY_S: f64 = 60.0;
+const STANDING_MIN_S: f64 = 1.0;
 /// How recent GNSS must be for the fused acceleration to be the vehicle's, so gravity can follow the rest.
 const GNSS_RECENT_S: f64 = 5.0;
 const AXIS_MIN_VARIANCE: f64 = 0.002;
@@ -390,6 +400,17 @@ pub struct LiveSpeedEstimator {
     h_since_gnss: [f64; 3],
     h_since_gnss_s: f64,
     omega: [f64; 3],
+    /// The gyro's bias left after Android's own calibration (rad/s, the phone's frame), subtracted from each sample
+    /// (see [`Self::learn_gyro_bias`]).
+    gyro_bias: [f64; 3],
+    /// Gravity carried by the gyro alone since the phone was last still, and since when.
+    gyro_gravity: Option<(i64, [f64; 3])>,
+    /// The phone's attitude in a frame the gyro carries (row-major, phone to that frame), the accelerometer's
+    /// integral in that frame, and that integral every [`HISTORY_EVERY_S`] for [`STANDING_HISTORY_S`],
+    /// to measure gravity over a time the train was found to stand, after the fact (see [`Self::on_standing`]).
+    frame: [f64; 9],
+    accel_sum: [f64; 3],
+    accel_sums: VecDeque<(i64, [f64; 3])>,
     last_ns: i64,
     mag_mean: f64,
     mag_var: f64,
@@ -466,6 +487,11 @@ impl Default for LiveSpeedEstimator {
             h_since_gnss: [0.0; 3],
             h_since_gnss_s: 0.0,
             omega: [0.0; 3],
+            gyro_bias: [0.0; 3],
+            gyro_gravity: None,
+            frame: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            accel_sum: [0.0; 3],
+            accel_sums: VecDeque::new(),
             last_ns: 0,
             mag_mean: 0.0,
             mag_var: 0.0,
@@ -537,6 +563,8 @@ impl LiveSpeedEstimator {
             p11: self.p11,
             max_speed_mps: self.max_speed_mps,
             backward: !self.backward,
+            // The backward pass is fed the gyro negated, bias and all.
+            gyro_bias: self.gyro_bias.map(|b| -b),
             // The phone's along-axis acceleration flips with the axis, so the car's correlation with it does too.
             cars: self
                 .cars
@@ -572,9 +600,10 @@ impl LiveSpeedEstimator {
         self.max_speed_mps = max_speed_mps;
     }
 
-    /// Gyro sample (rad/s), bias already removed.
+    /// Gyro sample (rad/s), Android's bias estimate already removed; what's left of the bias is learned here.
     pub fn on_gyro(&mut self, wx: f64, wy: f64, wz: f64) {
-        self.omega = [wx, wy, wz];
+        let b = self.gyro_bias;
+        self.omega = [wx - b[0], wy - b[1], wz - b[2]];
     }
 
     /// Accelerometer sample with gravity included (m/s^2), bias already removed, on the elapsed realtime clock.
@@ -605,6 +634,10 @@ impl LiveSpeedEstimator {
 
         // World-fixed vectors seen from a rotating phone turn the other way: v' = v - (omega x v) dt.
         rotate_world_fixed(&self.omega, &mut self.gravity, dt);
+        if let Some((_, g)) = self.gyro_gravity.as_mut() {
+            rotate_exact(&self.omega, g, dt);
+        }
+        self.track_frame(t_ns, [ax, ay, az], dt);
         // The travel axis is fixed to the vehicle, not the world: a curve turns the vehicle about the vertical with
         // the phone, so only the phone's tilting (rotation about horizontal axes) moves the axis in its frame.
         // A turn of the phone in hand about the vertical looks the same as a curve; GNSS re-learns the axis then.
@@ -729,6 +762,10 @@ impl LiveSpeedEstimator {
         self.stopped =
             self.still_since_ns != 0 && (t_ns - self.still_since_ns) as f64 * 1e-9 >= STILL_S;
         if self.stopped {
+            if !was_stopped {
+                self.learn_gyro_bias(t_ns);
+            }
+            self.gyro_gravity = Some((t_ns, self.gravity));
             // Like a door cycle, not gated without recent GNSS: underground the speed's sigma grows to a few m/s,
             // so the gate rejected the quiet phone's zero exactly when the speed had run away
             // (`rejected as outliers: stop`, standing on the platforms at 6 Av and 14 St on `20261023-193658`).
@@ -771,6 +808,99 @@ impl LiveSpeedEstimator {
             }
         }
         self.track_accel(t_ns);
+    }
+
+    /// The phone is still, so its gravity is the accelerometer's: how far the gravity carried by the gyro alone
+    /// since it was last still turned away from it, over the time since, is what's left of the gyro's bias
+    /// across gravity (the part along it doesn't tilt gravity). Android's calibration leaves about 0.0003 rad/s,
+    /// the same vector in the phone's frame on every ride (2026-11-15, 5 rides): gravity tilts 1 to 2 deg a minute,
+    /// and each degree leaks 0.17 m/s^2 into the acceleration along the track, so without stillness for 10 to
+    /// 30 min underground it tilted 15 to 23 deg, and standing at stations read -0.7 to -2.8 m/s^2 along the track.
+    /// Weighted by how long the gyro carried gravity alone ([`GYRO_BIAS_TAU_S`]), since the tilt grows with it.
+    fn learn_gyro_bias(&mut self, t_ns: i64) {
+        self.learn_gyro_bias_from(t_ns, self.gravity);
+    }
+
+    /// Like [`Self::learn_gyro_bias`], with gravity measured as `measured` at `t_ns`.
+    fn learn_gyro_bias_from(&mut self, t_ns: i64, measured: [f64; 3]) {
+        let Some((since_ns, carried)) = self.gyro_gravity else {
+            return;
+        };
+        let t = (t_ns - since_ns) as f64 * 1e-9;
+        if t < GYRO_BIAS_MIN_S {
+            return;
+        }
+        let n = norm(&carried) * norm(&measured);
+        if n < 1e-12 {
+            return;
+        }
+        // The rotation from the carried gravity to the measured one: its axis and angle.
+        let c = cross(&carried, &measured).map(|x| x / n);
+        let sin = norm(&c);
+        if sin < 1e-12 {
+            return;
+        }
+        let rate = sin.atan2(dot(&carried, &measured) / n) / t;
+        if rate > GYRO_BIAS_MAX_RAD_S {
+            return;
+        }
+        let w = t / (t + GYRO_BIAS_TAU_S);
+        for (b, x) in self.gyro_bias.iter_mut().zip(c) {
+            *b += w * rate * x / sin;
+        }
+    }
+
+    /// Carries the phone's attitude through `omega dt` and adds the accelerometer sample to its integral in that frame.
+    fn track_frame(&mut self, t_ns: i64, a: [f64; 3], dt: f64) {
+        let r = rotation(&self.omega, dt);
+        let q = self.frame;
+        self.frame = std::array::from_fn(|k| {
+            let (i, j) = (k / 3, k % 3);
+            (0..3).map(|m| q[i * 3 + m] * r[m * 3 + j]).sum()
+        });
+        for i in 0..3 {
+            self.accel_sum[i] += (0..3).map(|j| self.frame[i * 3 + j] * a[j]).sum::<f64>() * dt;
+        }
+        if self
+            .accel_sums
+            .back()
+            .is_none_or(|&(t, _)| (t_ns - t) as f64 * 1e-9 >= HISTORY_EVERY_S)
+        {
+            self.accel_sums.push_back((t_ns, self.accel_sum));
+            while self
+                .accel_sums
+                .front()
+                .is_some_and(|&(t, _)| (t_ns - t) as f64 * 1e-9 > STANDING_HISTORY_S)
+            {
+                self.accel_sums.pop_front();
+            }
+        }
+    }
+
+    /// The train stood from `from_ns` to `to_ns` (found since, with the phone perhaps in a hand): the accelerometer's
+    /// mean then, in the gyro's frame, is gravity, as the hand's own acceleration averages out. Underground the phone
+    /// is rarely still, so this is where gravity is set again and the gyro's bias learned (see
+    /// [`Self::learn_gyro_bias`]); before, the gyro alone carried gravity between stills, for up to 30 min.
+    pub fn on_standing(&mut self, from_ns: i64, to_ns: i64) {
+        let at = |ns: i64| {
+            let i = self.accel_sums.partition_point(|&(t, _)| t <= ns);
+            i.checked_sub(1).map(|i| self.accel_sums[i])
+        };
+        let (Some(a), Some(b)) = (at(from_ns), at(to_ns)) else {
+            return;
+        };
+        let span = (b.0 - a.0) as f64 * 1e-9;
+        if span < STANDING_MIN_S {
+            return;
+        }
+        let mean: [f64; 3] = std::array::from_fn(|i| (b.1[i] - a.1[i]) / span);
+        // Back into the phone's frame as it is now.
+        let m: [f64; 3] =
+            std::array::from_fn(|j| (0..3).map(|i| self.frame[i * 3 + j] * mean[i]).sum());
+        let mid = a.0 + (b.0 - a.0) / 2;
+        self.learn_gyro_bias_from(mid, m);
+        self.gravity = m;
+        self.gyro_gravity = Some((mid, m));
     }
 
     /// A reading of a steady car's own accelerometer (m/s^2, the beacon's frame, gravity included), at `t_ns`.
@@ -1516,6 +1646,44 @@ fn rotate_world_fixed(omega: &[f64; 3], v: &mut [f64; 3], dt: f64) {
     for i in 0..3 {
         v[i] -= c[i] * dt;
     }
+}
+
+/// Turns a world-fixed vector seen from the phone through the whole rotation `omega dt` (Rodrigues' formula),
+/// where [`rotate_world_fixed`] is first order.
+fn rotate_exact(omega: &[f64; 3], v: &mut [f64; 3], dt: f64) {
+    let w = norm(omega);
+    if w < 1e-12 {
+        return;
+    }
+    let k = omega.map(|x| x / w);
+    let (sin, cos) = (w * dt).sin_cos();
+    let k_x_v = cross(&k, v);
+    let k_v = dot(&k, v);
+    for i in 0..3 {
+        v[i] = v[i] * cos - k_x_v[i] * sin + k[i] * k_v * (1.0 - cos);
+    }
+}
+
+/// The phone's own rotation through `omega dt` as a matrix (row-major), by Rodrigues' formula.
+fn rotation(omega: &[f64; 3], dt: f64) -> [f64; 9] {
+    let w = norm(omega);
+    if w < 1e-12 {
+        return [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+    }
+    let [x, y, z] = omega.map(|o| o / w);
+    let (s, c) = (w * dt).sin_cos();
+    let t = 1.0 - c;
+    [
+        c + x * x * t,
+        x * y * t - z * s,
+        x * z * t + y * s,
+        y * x * t + z * s,
+        c + y * y * t,
+        y * z * t - x * s,
+        z * x * t - y * s,
+        z * y * t + x * s,
+        c + z * z * t,
+    ]
 }
 
 fn cross(a: &[f64; 3], b: &[f64; 3]) -> [f64; 3] {
