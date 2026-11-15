@@ -1091,6 +1091,7 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     keeping the axis's length 25 / 101 / 61, 69 (mean |log ratio| 0.514 to 0.477) but more runaways, so not kept;
     with the exact rotation 30 / 91 / 62, 70. Stash "item19: gyro bias, gravity at stands, and departure axis
     experiments with flags". Open: the departure axis with the runaways' caps, and the exact rotation with it.
+    On the phone in 0.1.26 (installed 2026-11-15, 1:02 pm, from `aba369f`).
 20. Done, unchecked on the phone (`34cfce3`, `6b7d63f`, `10fdd80`, `00681c8`): the live map underground, noted on
     four rides, the latest Sat Nov 7, 5:59 pm. `Fusion::recent_track_path`, drawn under the GPS path:
     each leg between stations once the train stops at its far station (placed as a past ride's by `track::Along`);
@@ -1644,6 +1645,7 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     (`ride_session::recompress::needs_recompression`, used by `RecompressWorker` and `UploadWorker` through `ffi`; not built on Android yet);
     only those streams are redone. On a copy of Mon Nov 9, 12:50 pm its audio went 759.5 to 485.8 MB in 1:49 at a peak of 138 MB.
     Still open: rerun it on the three long rides, timing on the phone, and the Sat Nov 14 one-microphone-twice check.
+    On the phone in 0.1.26 (installed 2026-11-15, 1:02 pm, from `aba369f`).
 51. Clock times in the ride's own time zone, not New York's (rider, 2026-11-15: "don't assume this is in NYC";
     rides elsewhere, and flights, cross zones). Today the app formats every time in `America/New_York`
     (`TapMarks.kt`, `PastRides.kt`, `LiveGraph.kt`), and `ride_session::clock` (`6e4b1ce`) is New York only.
@@ -1667,6 +1669,7 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     take ride times from `ride.local_clock` and `ride.local_ms` (the session's zone, from `SessionClock`),
     and `train_line.py` compares GTFS times in the schedule's zone with `ride.agency_ms`; none is obsolete, all are kept.
     The `ACTION_TIMEZONE_CHANGED` receiver is untested on the phone.
+    On the phone in 0.1.26 (installed 2026-11-15, 1:02 pm, from `aba369f`).
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
