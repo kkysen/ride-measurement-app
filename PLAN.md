@@ -1493,6 +1493,30 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     mag 2.40 to 0.73 and 1.64 to 0.49, pressure 0.18 to 0.13, light 0.08 to 0.05, as benchmarked;
     `ride summary`, `ride csv` of each stream, and whole and live replays are identical to the originals'.
     On the phone in 0.1.25 (installed 2026-11-09, 9:24 am, from `f63ff3f`). Left: phone timing; already-recompressed rides get it only by running `ride recompress` again.
+43. Live speed over 100 mph outdoors (Mon Nov 9, 12:50 pm, at 1:06:32 pm): "it's going crazy high speeds now
+    even outdoors with gnss doppler, over 100 mph", 44 s after boarding (1:05:48 pm).
+    The average speed too: "totally wrong" (1:06:48 pm), then "more normal now but still too high (11 mph), but was 26 mph" (1:08:26 pm).
+    With GNSS Doppler in, nothing should reach 100 mph: find which input drove it (GNSS itself, or the IMU with GNSS standing aside,
+    item 27's "GNSS is never capped"), and why the average follows it. Car 3681 tagged at 12:51:08 pm on the ride before.
+    Pulled 2026-11-15, with Mon Nov 9 (4:16 pm, 5:46 pm, 8:34 pm) and Sat Nov 14, 7:01 pm; the first rides on 0.1.25.
+44. Music playing (Mon Nov 9, 4:16 pm, at 4:38:02 pm): "music playing, might disrupt sound detection".
+    A label for item 26: check the chime and door detection over the stretch with music against the taps,
+    and whether the detectors need to reject it.
+45. Air brakes releasing as a departure cue (Mon Nov 9, 4:16 pm, at 4:44:46 pm):
+    "you can also listen for the air brakes releasing before we start moving on the older trains" (car 2740, last car).
+    Find the sound in the audio before the tapped starts (4:44:45 pm and the others on this ride) and see if it's a reliable sign of a departure
+    a moment before motion; it could help item 27's missed departures (likely stops held the whole next leg).
+46. Wrong chime family (Sat Nov 14, 7:01 pm, at 7:03:07 pm): "R160", "not smee chime", on car 9047 (last car).
+    The app called it the SMEE chime on an R160 (item 24's open N, Q, R, W fleets and noisy classifier). A label for item 24.
+47. Station cells gone, "also in other apps" (Sat Nov 14, 7:01 pm, at 7:27:58 pm): another whole stretch with no cell, as item 35;
+    the station must come from the rest then.
+48. Change to the D (Sat Nov 14, 7:01 pm, at 7:31:07 pm): "switched to D" (tagged alighted 7:30:38 pm, boarded 7:30:45 pm, car 3925, last car),
+    then alighted again at 7:32:10 pm, and "at 1 train platform" at 7:36:42 pm before boarding at 7:37:38 pm.
+    Check the status showed the D and then the 1 (items 21, 22), and that the walk to the 1's platform counts as walking.
+49. The rider's question (Sat Nov 14, 7:01 pm, at 7:42:13 pm, on the 1): "sometimes the speed starts climbing from 0/near 0 a split second
+    before I feel acceleration. what's that from? door sound? magnetometer? imu?"
+    Answer from the replay: what moves the live speed off 0 at the departures on this ride (the IMU's surge, the weak start, an anchor or the cell),
+    against when the gyro-tracked acceleration actually rises.
 
 ## Future: flights
 - Same logger, in airplane mode: GNSS is receive-only and usually keeps working; needs a window seat, expect weak signal and gaps.
