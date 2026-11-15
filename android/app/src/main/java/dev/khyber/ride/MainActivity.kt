@@ -198,6 +198,9 @@ class MainActivity : ComponentActivity() {
         Units.load(this)
         Scanning.load(this)
         if (intent.getBooleanExtra("probe_mics", false)) MicProbe.run(this, intent.getBooleanExtra(MicProbe.CLIPS, false))
+        // Sessions left unrecompressed (e.g. by an older version's limits) are redone in the background
+        // whenever the app opens, not only after a ride ends; the upload after it does nothing until OneDrive is set up.
+        RecompressWorker.enqueueThenUpload(this)
         permissions.launch(
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
