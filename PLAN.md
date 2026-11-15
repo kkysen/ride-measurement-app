@@ -1635,6 +1635,14 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     in 2:41 at a peak of 177 MB; every stream's chunks byte for byte the same as the original's.
     SHA-256 runs at about 1.7 GB/s on the PC. Sensor columns stay whole-stream in memory,
     so they're limited to 64 MiB of content (about 80 min of `accel_uncal`, about 210 MB at peak); longer is plain zstd.
+    Then: sensor columns are written in blocks of at most 32 MiB of content (each with its own value tables), so there is no limit
+    and every stream gets columns; on a copy of Thu Oct 22, 12:29 am (the longest ride) the session went 256.6 to 225.6 MB
+    (`accel_uncal` 26.7 to 13.6 MB, `gyro_uncal` 24.5 to 11.4 MB) at a peak of 181 MB, every stream's content SHA-256 the same.
+    The content SHA-256 is now also in `session.pb` (`StreamInfo.content_sha256`), written by recompression when missing;
+    a stream that differs from it is never replaced. Left: compute it while recording (the Android app does not yet).
+    A session whose `.recompressed` marker names a stream as "too large to check in memory" needs recompression again
+    (`ride_session::recompress::needs_recompression`, used by `RecompressWorker` and `UploadWorker` through `ffi`; not built on Android yet);
+    only those streams are redone. On a copy of Mon Nov 9, 12:50 pm its audio went 759.5 to 485.8 MB in 1:49 at a peak of 138 MB.
     Still open: rerun it on the three long rides, timing on the phone, and the Sat Nov 14 one-microphone-twice check.
 51. Clock times in the ride's own time zone, not New York's (rider, 2026-11-15: "don't assume this is in NYC";
     rides elsewhere, and flights, cross zones). Today the app formats every time in `America/New_York`
