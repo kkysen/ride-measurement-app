@@ -621,7 +621,7 @@ pub struct RideClock(ride_session::clock::Clock);
 
 #[uniffi::export]
 impl RideClock {
-    /// A past ride's: the phone's recorded zone, else its location's, else the offset its id implies.
+    /// A past ride's: its location's zone, else the phone's recorded zone, else the offset its id implies.
     #[uniffi::constructor]
     pub fn for_session(session_dir: String) -> Result<Arc<Self>, RideError> {
         let session = ride_session::read::Session::open(&session_dir)?;
@@ -629,12 +629,19 @@ impl RideClock {
         Ok(Arc::new(Self(clock.shown().clone())))
     }
 
-    /// The phone's zone now (`ZoneId.systemDefault().id`), or its offset now if the zone is one Rust doesn't know.
+    /// The zone of the latest fix (`lat`, `lon`) if given and placed, else the phone's zone now
+    /// (`ZoneId.systemDefault().id`), else its offset now if the zone is one Rust doesn't know.
     #[uniffi::constructor]
-    pub fn live(zone_id: String, utc_offset_ms: i64) -> Arc<Self> {
-        Arc::new(Self(ride_session::clock::Clock::named_or_fixed(
+    pub fn live(
+        zone_id: String,
+        utc_offset_ms: i64,
+        lat: Option<f64>,
+        lon: Option<f64>,
+    ) -> Arc<Self> {
+        Arc::new(Self(ride_session::clock::live_clock(
             &zone_id,
             utc_offset_ms,
+            lat.zip(lon),
         )))
     }
 

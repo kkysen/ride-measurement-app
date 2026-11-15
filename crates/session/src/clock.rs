@@ -7,8 +7,9 @@
 //!   from timezone-boundary-builder's boundaries (`tzf-rs`, lite data, borders within about 111 m);
 //! - the zone implied by the session id: the phone's local time at the start, so the start's fixed offset.
 //!
-//! [`SessionClock::shown`] picks the one clock times are shown in: the phone's zone if recorded,
-//! else the location's, else the id's fixed offset (UTC if none).
+//! [`SessionClock::shown`] picks the one clock times are shown in: the location's zone if any fix places the ride
+//! (local time where the train or plane is, even when the phone's zone doesn't follow, as in airplane mode),
+//! else the phone's recorded zone, else the session id's fixed offset (UTC if none).
 //! Zone rules come from `jiff`'s bundled copy of the IANA database, the same on the phone as on a computer.
 
 use std::sync::LazyLock;
@@ -44,6 +45,14 @@ pub fn named_zone(id: &str) -> Option<TimeZone> {
 pub fn fixed_zone(utc_offset_ms: i64) -> TimeZone {
     let seconds = i32::try_from(utc_offset_ms.div_euclid(1000)).unwrap_or(0);
     TimeZone::fixed(Offset::from_seconds(seconds).unwrap_or(Offset::UTC))
+}
+
+/// Where the phone is now if a fix says so, else the phone's zone `id`, else the fixed `fallback_offset_ms`:
+/// the live clock, by the same rule as [`SessionClock::shown`].
+pub fn live_clock(id: &str, fallback_offset_ms: i64, fix: Option<(f64, f64)>) -> Clock {
+    fix.and_then(|(lat, lon)| zone_at_location(lat, lon))
+        .and_then(|name| named_zone(&name).map(|zone| Clock::new(name, zone)))
+        .unwrap_or_else(|| Clock::named_or_fixed(id, fallback_offset_ms))
 }
 
 /// The IANA zone a point falls in (`None` if the boundaries name none).
@@ -300,9 +309,9 @@ impl SessionClock {
         let phone = phone_clock(info, events);
         let location = location_clock(locations);
         let implied_offset_ms = offset_implied_by_id(&info.session_id, info.start_unix_ms);
-        let shown = phone
+        let shown = location
             .clone()
-            .or_else(|| location.clone())
+            .or_else(|| phone.clone())
             .unwrap_or_else(|| Clock::fixed(implied_offset_ms.unwrap_or(0)));
         Self {
             phone,
@@ -331,8 +340,8 @@ impl SessionClock {
         Self::from_parts(&session.info, &events, &locations)
     }
 
-    /// The clock times are shown in: the phone's zone if recorded (its clock timed the rider's taps),
-    /// else the location's, else the session id's fixed offset.
+    /// The clock times are shown in: the location's zone if any fix places the ride,
+    /// else the phone's recorded zone, else the session id's fixed offset.
     pub fn shown(&self) -> &Clock {
         &self.shown
     }
@@ -381,8 +390,8 @@ impl SessionClock {
             && let Some(t) = disagreement(p, l, self.start_unix_ms)
         {
             lines.push(format!(
-                "the phone's clock and the location's differ from {} (phone) on; times shown in the phone's",
-                p.time(t)
+                "the phone's clock and the location's differ from {} (location) on; times shown in the location's",
+                l.time(t)
             ));
         }
         lines.join("\n")
@@ -581,13 +590,14 @@ mod tests {
         let names: Vec<_> = location.spans().iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["America/New_York", "America/Chicago"]);
         assert_eq!(location.spans()[1].from_unix_ms, arrived);
-        // Shown in the phone's zone, both listed.
-        assert_eq!(c.time(arrived), "10:00:00 am");
+        // Shown in the location's zone, both listed.
+        assert_eq!(c.time(arrived), "9:00:00 am");
+        assert_eq!(c.time(start), "7:00:00 am");
         assert_eq!(location.time(arrived), "9:00:00 am");
         let d = c.describe();
         assert!(d.contains("phone zone: America/New_York"), "{d}");
         assert!(d.contains("America/Chicago from 9:00:00 am"), "{d}");
-        assert!(d.contains("differ from 10:00:00 am"), "{d}");
+        assert!(d.contains("differ from 9:00:00 am (location)"), "{d}");
     }
 
     #[test]
@@ -605,7 +615,8 @@ mod tests {
             "America/Denver"
         );
         let d = c.describe();
-        assert!(d.contains("differ from 11:00:00 am"), "{d}");
+        assert!(d.contains("differ from 12:00:00 pm"), "{d}");
+        assert_eq!(c.time(july), "12:00:00 pm");
         let january = unix_ms(2026, 1, 15, 18, 0, 0);
         let c = SessionClock::from_parts(
             &info("20260115-110000", "America/Phoenix", january),
@@ -613,6 +624,24 @@ mod tests {
             &fixes(january),
         );
         assert!(!c.describe().contains("differ"), "{}", c.describe());
+    }
+
+    #[test]
+    fn live_prefers_the_fix() {
+        let t = unix_ms(2026, 11, 14, 12, 0, 0);
+        assert_eq!(
+            live_clock("America/New_York", 0, Some((41.98, -87.90))).time(t),
+            "6:00:00 am"
+        );
+        assert_eq!(
+            live_clock("America/New_York", 0, None).time(t),
+            "7:00:00 am"
+        );
+        // A phone zone the database doesn't know falls back to its offset.
+        assert_eq!(
+            live_clock("Nowhere/Unknown", 3_600_000, None).time(t),
+            "1:00:00 pm"
+        );
     }
 
     #[test]

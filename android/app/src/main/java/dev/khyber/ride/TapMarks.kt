@@ -3,6 +3,7 @@ package dev.khyber.ride
 import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.Instant
 import java.time.ZoneId
 import uniffi.ride_ffi.RideClock
@@ -12,19 +13,21 @@ import uniffi.ride_ffi.positionsAt
 data class TapMark(val ns: Long, val unixMs: Long, val label: String)
 
 /**
- * Clock times in the phone's zone now, for the ride being recorded (Rust's `RideClock::live`);
- * the offset now is only for a zone Rust's database doesn't know.
+ * Clock times for the ride being recorded (Rust's `RideClock::live`): in the zone of [fix] (the latest fix's
+ * latitude and longitude) if given, else the phone's zone now; the offset now is only for a zone Rust doesn't know.
  */
-fun liveClock(): RideClock {
+fun liveClock(fix: Pair<Double, Double>? = null): RideClock {
     val zone = ZoneId.systemDefault()
-    return RideClock.live(zone.id, zone.rules.getOffset(Instant.now()).totalSeconds * 1000L)
+    return RideClock.live(zone.id, zone.rules.getOffset(Instant.now()).totalSeconds * 1000L, fix?.first, fix?.second)
 }
 
-/** [liveClock], made again when the phone's zone changes (as on a flight). */
+/** [liveClock] at the latest fix, made again when the phone's zone changes or the rider moves about 5 km. */
 @Composable
 fun rememberLiveClock(): RideClock {
     val id = ZoneId.systemDefault().id
-    return remember(id) { liveClock() }
+    val last = LiveTrack.points.collectAsStateWithLifecycle().value.lastOrNull()
+    val fix = last?.let { Math.round(it.lat * 20) / 20.0 to Math.round(it.lon * 20) / 20.0 }
+    return remember(id, fix) { liveClock(fix) }
 }
 
 /**
