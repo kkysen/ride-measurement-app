@@ -286,6 +286,7 @@ pub struct SessionClock {
     pub location: Option<Clock>,
     /// The offset (ms) the session id implies at the start.
     pub implied_offset_ms: Option<i64>,
+    start_unix_ms: i64,
     shown: Clock,
 }
 
@@ -307,6 +308,7 @@ impl SessionClock {
             phone,
             location,
             implied_offset_ms,
+            start_unix_ms: info.start_unix_ms,
             shown,
         }
     }
@@ -376,7 +378,7 @@ impl SessionClock {
             lines.push(format!("id's offset: {}", Clock::fixed(o).spans[0].name));
         }
         if let (Some(p), Some(l)) = (&self.phone, &self.location)
-            && let Some(t) = disagreement(p, l)
+            && let Some(t) = disagreement(p, l, self.start_unix_ms)
         {
             lines.push(format!(
                 "the phone's clock and the location's differ from {} (phone) on; times shown in the phone's",
@@ -387,19 +389,18 @@ impl SessionClock {
     }
 }
 
-/// The first time two clocks give different offsets, at any zone change of either (or the start).
-fn disagreement(a: &Clock, b: &Clock) -> Option<i64> {
+/// The first time from the ride's start that two clocks give different offsets:
+/// at the start, or at a zone change of either after it.
+fn disagreement(a: &Clock, b: &Clock, start_unix_ms: i64) -> Option<i64> {
     let mut times: Vec<i64> = a
         .spans
         .iter()
         .chain(&b.spans)
         .map(|s| s.from_unix_ms)
-        .filter(|t| *t != i64::MIN)
+        .filter(|t| *t > start_unix_ms)
         .collect();
     times.sort_unstable();
-    // Before any change: compare where the first zones both are, at the first change or now-ish.
-    let first = times.first().map_or(0, |t| t - 1);
-    std::iter::once(first)
+    std::iter::once(start_unix_ms)
         .chain(times)
         .find(|t| a.utc_offset_ms(*t) != b.utc_offset_ms(*t))
 }
@@ -587,6 +588,31 @@ mod tests {
         assert!(d.contains("phone zone: America/New_York"), "{d}");
         assert!(d.contains("America/Chicago from 9:00:00 am"), "{d}");
         assert!(d.contains("differ from 10:00:00 am"), "{d}");
+    }
+
+    #[test]
+    fn single_zones_compared_at_the_start() {
+        // Phoenix keeps standard time; Denver doesn't: an hour apart in July, the same in January.
+        let fixes = |start: i64| [chunk(vec![fix(start, 39.74, -104.99)])];
+        let july = unix_ms(2026, 7, 1, 18, 0, 0);
+        let c = SessionClock::from_parts(
+            &info("20260701-110000", "America/Phoenix", july),
+            &[],
+            &fixes(july),
+        );
+        assert_eq!(
+            c.location.as_ref().unwrap().spans()[0].name,
+            "America/Denver"
+        );
+        let d = c.describe();
+        assert!(d.contains("differ from 11:00:00 am"), "{d}");
+        let january = unix_ms(2026, 1, 15, 18, 0, 0);
+        let c = SessionClock::from_parts(
+            &info("20260115-110000", "America/Phoenix", january),
+            &[],
+            &fixes(january),
+        );
+        assert!(!c.describe().contains("differ"), "{}", c.describe());
     }
 
     #[test]
