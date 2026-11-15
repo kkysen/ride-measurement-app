@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use ride_session::proto::StreamInfo;
 use ride_session::read::Session;
 use ride_session::recompress::{
-    Encoding, LEVEL, MARKER, Outcome, recompress_session, recompress_stream,
+    Encoding, LEVEL, MARKER, Outcome, content_sha256, recompress_session, recompress_stream,
     recompress_stream_checked,
 };
 use ride_session::write::{StreamWriter, write_session_info};
@@ -55,6 +55,7 @@ fn replaces_with_smaller_file_with_identical_content() {
     let Outcome::Replaced {
         before: b,
         after: a,
+        ..
     } = outcome
     else {
         panic!("{outcome}")
@@ -351,4 +352,25 @@ fn float_audio_finer_than_24_bits_stays_float_under_zstd() {
         .unwrap();
     assert!(after.is_clean());
     assert_eq!(after.chunks, before);
+}
+
+#[test]
+fn audio_content_sha256_is_the_same_as_pcm_and_as_flac() {
+    let dir = tempfile::tempdir().unwrap();
+    audio_session(dir.path());
+    let path = write_audio_as(dir.path(), 3, Format::F32From24);
+    let audio = Encoding::Audio(ride_session::recompress::Audio {
+        channels: 1,
+        sample_rate_hz: 16_000,
+    });
+    let pcm = content_sha256(&path, audio).unwrap();
+    // As PCM, the content is just what the file decodes to.
+    assert_eq!(content_sha256(&path, Encoding::Plain).unwrap(), pcm);
+    let results = recompress_session(dir.path(), LEVEL).unwrap();
+    let Outcome::Replaced { sha256, .. } = results[0].1 else {
+        panic!("{results:?}")
+    };
+    assert_eq!(sha256, pcm);
+    assert_eq!(content_sha256(&path, audio).unwrap(), pcm);
+    assert_ne!(content_sha256(&path, Encoding::Plain).unwrap(), pcm);
 }

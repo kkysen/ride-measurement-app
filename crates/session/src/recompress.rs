@@ -14,6 +14,8 @@
 //! The one exception is sensor columns, which are a whole-stream encoding (one value table per axis)
 //! and are decoded whole by readers too: a sensor stream decoding to over [`SENSOR_COLUMNS_MAX_BYTES`]
 //! is written as plain zstd instead.
+//! Each outcome names the content's SHA-256 (as [`content_sha256`] computes it), written into [`MARKER`],
+//! so later copies of a stream can be checked without the original.
 
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Seek, Write};
@@ -38,15 +40,42 @@ const TMP_SUFFIX: &str = ".recompress-tmp";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
-    Replaced { before: u64, after: u64 },
-    KeptOriginal { reason: String },
+    /// `sha256` is of the decoded content, the same for the original and the new file.
+    Replaced {
+        before: u64,
+        after: u64,
+        sha256: [u8; 32],
+    },
+    /// `sha256` is of the original's decoded content, when it was read through.
+    KeptOriginal {
+        reason: String,
+        sha256: Option<[u8; 32]>,
+    },
+}
+
+fn hex(digest: &[u8; 32]) -> String {
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl std::fmt::Display for Outcome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Outcome::Replaced { before, after } => write!(f, "replaced, {before} -> {after} bytes"),
-            Outcome::KeptOriginal { reason } => write!(f, "kept original: {reason}"),
+            Outcome::Replaced {
+                before,
+                after,
+                sha256,
+            } => write!(
+                f,
+                "replaced, {before} -> {after} bytes, content SHA-256 {}",
+                hex(sha256)
+            ),
+            Outcome::KeptOriginal { reason, sha256 } => {
+                write!(f, "kept original: {reason}")?;
+                match sha256 {
+                    Some(d) => write!(f, ", content SHA-256 {}", hex(d)),
+                    None => Ok(()),
+                }
+            }
         }
     }
 }
@@ -54,6 +83,14 @@ impl std::fmt::Display for Outcome {
 fn kept(reason: impl std::fmt::Display) -> Outcome {
     Outcome::KeptOriginal {
         reason: reason.to_string(),
+        sha256: None,
+    }
+}
+
+fn kept_hashed(reason: impl std::fmt::Display, sha256: [u8; 32]) -> Outcome {
+    Outcome::KeptOriginal {
+        reason: reason.to_string(),
+        sha256: Some(sha256),
     }
 }
 
@@ -215,7 +252,14 @@ fn recompress_via(
     };
     // A plain zstd reader would take the columns for the content, so they're never recompressed again.
     match starts_columnar(path) {
-        Ok(true) => return kept("already in sensor columns"),
+        Ok(true) => {
+            return match columns_digest(path) {
+                Ok(digest) => kept_hashed("already in sensor columns", digest),
+                Err(e) => kept(format!(
+                    "already in sensor columns, which don't decode: {e}"
+                )),
+            };
+        }
         Ok(false) => {}
         Err(e) => return kept(format!("reading the original failed: {e}")),
     }
@@ -240,33 +284,46 @@ fn recompress_via(
         Err(e) => return kept(format!("writing the new file failed: {e}")),
     };
     corrupt_for_test(tmp);
-    let digest = match encoding {
-        Encoding::Audio(_) => restored_digest(tmp),
-        Encoding::Sensor => columns_digest(tmp),
-        Encoding::Plain => decoded_digest(tmp),
-    };
-    match digest {
+    match content_sha256(tmp, encoding) {
         Ok(digest) if digest == original_digest => {}
-        Ok(_) => return kept("decoded content differs"),
-        Err(e) => return kept(format!("new file doesn't decode: {e}")),
+        Ok(_) => return kept_hashed("decoded content differs", original_digest),
+        Err(e) => return kept_hashed(format!("new file doesn't decode: {e}"), original_digest),
     }
     let after = match fs::metadata(tmp) {
         Ok(m) => m.len(),
         Err(e) => {
-            return kept(format!("reading the new file failed: {e}"));
+            return kept_hashed(format!("reading the new file failed: {e}"), original_digest);
         }
     };
     if after >= before {
-        return kept(format!("not smaller ({after} >= {before} bytes)"));
+        return kept_hashed(
+            format!("not smaller ({after} >= {before} bytes)"),
+            original_digest,
+        );
     }
     // `rename` replaces the original atomically: either the old or the verified new file exists, never neither.
     if let Err(e) = fs::rename(tmp, path) {
-        return kept(format!("rename failed: {e}"));
+        return kept_hashed(format!("rename failed: {e}"), original_digest);
     }
     if let Some(dir) = path.parent() {
         let _ = sync_dir(dir);
     }
-    Outcome::Replaced { before, after }
+    Outcome::Replaced {
+        before,
+        after,
+        sha256: original_digest,
+    }
+}
+
+/// SHA-256 of a stream file's decoded content, the sequence of length-delimited chunks as recorded:
+/// audio chunks with FLAC converted back to PCM, sensor columns decoded. It's the same for a stream
+/// before and after recompression, and is what [`Outcome`] names, so a copy can be checked against it.
+pub fn content_sha256(path: &Path, encoding: Encoding) -> io::Result<[u8; 32]> {
+    match encoding {
+        Encoding::Audio(_) => restored_digest(path),
+        Encoding::Sensor => columns_digest(path),
+        Encoding::Plain => decoded_digest(path),
+    }
 }
 
 /// Whether the file starts like a sensor columns file, reading only its header.
