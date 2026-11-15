@@ -632,8 +632,9 @@ impl LiveSpeedEstimator {
             self.still_since_ns = t_ns;
         }
 
-        // World-fixed vectors seen from a rotating phone turn the other way: v' = v - (omega x v) dt.
-        rotate_world_fixed(&self.omega, &mut self.gravity, dt);
+        // World-fixed vectors seen from a rotating phone turn the other way, through the whole rotation (see
+        // [`rotate_exact`]), so directions keep their length.
+        rotate_exact(&self.omega, &mut self.gravity, dt);
         if let Some((_, g)) = self.gyro_gravity.as_mut() {
             rotate_exact(&self.omega, g, dt);
         }
@@ -655,10 +656,10 @@ impl LiveSpeedEstimator {
         } else {
             self.omega
         };
-        rotate_world_fixed(&tilting, &mut self.axis, dt);
-        rotate_world_fixed(&tilting, &mut self.axis_mean, dt);
-        rotate_world_fixed(&tilting, &mut self.axis_cross, dt);
-        rotate_world_fixed(&tilting, &mut self.h_since_gnss, dt);
+        rotate_exact(&tilting, &mut self.axis, dt);
+        rotate_exact(&tilting, &mut self.axis_mean, dt);
+        rotate_exact(&tilting, &mut self.axis_cross, dt);
+        rotate_exact(&tilting, &mut self.h_since_gnss, dt);
         self.rotate_cov(&tilting, dt);
         let gnss_recent = self.gnss_recent(t_ns);
         let w = norm(&self.omega);
@@ -1551,21 +1552,15 @@ impl LiveSpeedEstimator {
         self.along_since_gnss = -self.along_since_gnss;
     }
 
-    /// C' = (I - W dt) C (I - W dt)^T, to first order C - (W C - C W) dt, with W v = omega x v.
+    /// The axis covariance, world-fixed, seen from the phone turned through `o dt` by `R`: `C' = R^T C R`, exactly
+    /// (see [`rotate_exact`]).
     fn rotate_cov(&mut self, o: &[f64; 3], dt: f64) {
-        let w = [0.0, -o[2], o[1], o[2], 0.0, -o[0], -o[1], o[0], 0.0];
+        let r = rotation(o, dt);
         let c = self.cov;
-        for i in 0..3 {
-            for j in 0..3 {
-                let mut wc = 0.0;
-                let mut cw = 0.0;
-                for k in 0..3 {
-                    wc += w[i * 3 + k] * c[k * 3 + j];
-                    cw += c[i * 3 + k] * w[k * 3 + j];
-                }
-                self.cov[i * 3 + j] = c[i * 3 + j] - (wc - cw) * dt;
-            }
-        }
+        let cr: [f64; 9] =
+            std::array::from_fn(|k| (0..3).map(|m| c[k / 3 * 3 + m] * r[m * 3 + k % 3]).sum());
+        self.cov =
+            std::array::from_fn(|k| (0..3).map(|m| r[m * 3 + k / 3] * cr[m * 3 + k % 3]).sum());
     }
 
     /// Folds one GNSS speed change (over `dt_ns`, worse sigma `sigma`) into the correlation with horizontal
@@ -1637,19 +1632,11 @@ impl LiveSpeedEstimator {
     }
 }
 
-fn rotate_world_fixed(omega: &[f64; 3], v: &mut [f64; 3], dt: f64) {
-    let c = [
-        omega[1] * v[2] - omega[2] * v[1],
-        omega[2] * v[0] - omega[0] * v[2],
-        omega[0] * v[1] - omega[1] * v[0],
-    ];
-    for i in 0..3 {
-        v[i] -= c[i] * dt;
-    }
-}
-
-/// Turns a world-fixed vector seen from the phone through the whole rotation `omega dt` (Rodrigues' formula),
-/// where [`rotate_world_fixed`] is first order.
+/// Turns a world-fixed vector seen from the phone through the whole rotation `omega dt` (Rodrigues' formula).
+/// It keeps the vector's length, as a first-order step (`v - omega x v dt`) doesn't: that grew it by
+/// `(omega dt)^2 / 2` a sample, and with the phone in a hand, the GNSS-learned travel axis (renormalized only when
+/// GNSS re-learns it) grew to 4 times its length over 15 minutes, multiplying the acceleration along it by as much:
+/// the live speed ran to over 100 mph walking at 3.5 mph (`20261109-125025`, item 43).
 fn rotate_exact(omega: &[f64; 3], v: &mut [f64; 3], dt: f64) {
     let w = norm(omega);
     if w < 1e-12 {
@@ -1715,6 +1702,53 @@ fn distance_m(a: &Fix, b: &Fix) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_phone_turned_in_a_hand_keeps_the_gnss_axis_a_unit_vector() {
+        // Item 43: once GNSS has given the axis, only the gyro turns it; 15 minutes of a phone turning in a hand
+        // (here about 3 rad/s, at 400 Hz) left the axis 4 to 5 times its length, and the acceleration along it as much.
+        let mut e = LiveSpeedEstimator::new();
+        e.axis = [0.6, 0.8, 0.0];
+        e.axis_known = true;
+        e.axis_sign_known = true;
+        e.axis_from_gnss = true;
+        let dt = 0.0025;
+        for i in 0..360_000 {
+            let s = i as f64 * dt;
+            e.on_gyro(
+                3.0 * (2.1 * s).sin(),
+                2.0 * (1.3 * s).cos(),
+                1.5 * (0.7 * s).sin(),
+            );
+            e.on_accel(i * 2_500_000 + 1, 0.0, 0.0, 9.81);
+        }
+        assert!((norm(&e.axis) - 1.0).abs() < 1e-6, "{}", norm(&e.axis));
+    }
+
+    #[test]
+    fn turning_the_phone_keeps_directions_and_the_covariance_together() {
+        // A phone shaken in a hand for 15 minutes at 400 Hz: the axis keeps its length (item 43: a first-order step
+        // grew it 4 times), and the covariance turns with it, so its principal axis stays the turned axis.
+        let mut e = LiveSpeedEstimator::new();
+        let mut axis = [0.6, 0.8, 0.0];
+        e.cov = std::array::from_fn(|k| axis[k / 3] * axis[k % 3]);
+        let dt = 0.0025;
+        for i in 0..360_000 {
+            let s = i as f64 * dt;
+            let omega = [
+                3.0 * (2.1 * s).sin(),
+                2.0 * (1.3 * s).cos(),
+                1.5 * (0.7 * s).sin(),
+            ];
+            rotate_exact(&omega, &mut axis, dt);
+            e.rotate_cov(&omega, dt);
+        }
+        assert!((norm(&axis) - 1.0).abs() < 1e-9, "{}", norm(&axis));
+        let outer: [f64; 9] = std::array::from_fn(|k| axis[k / 3] * axis[k % 3]);
+        for (c, o) in e.cov.iter().zip(outer) {
+            assert!((c - o).abs() < 1e-9, "{:?} against {outer:?}", e.cov);
+        }
+    }
 
     #[test]
     fn a_train_reaches_speed_along_the_motoring_curve() {
