@@ -19,9 +19,14 @@ pub struct Session {
 impl Session {
     pub fn open(dir: impl Into<PathBuf>) -> anyhow::Result<Self> {
         let dir = dir.into();
-        let path = dir.join(SESSION_INFO_FILE);
+        let info = Self::open_file(&dir.join(SESSION_INFO_FILE))?;
+        Ok(Self { dir, info })
+    }
+
+    /// The info in a file written like `session.pb`.
+    pub fn open_file(path: &std::path::Path) -> anyhow::Result<SessionInfo> {
         let mut file = BufReader::new(
-            File::open(&path).with_context(|| format!("opening {}", path.display()))?,
+            File::open(path).with_context(|| format!("opening {}", path.display()))?,
         );
         let Some(bytes) = read_message(&mut file)? else {
             bail!("{} is empty", path.display());
@@ -30,7 +35,7 @@ impl Session {
         if info.format_version != FORMAT_VERSION {
             bail!("unsupported format version {}", info.format_version);
         }
-        Ok(Self { dir, info })
+        Ok(info)
     }
 
     pub fn stream_path(&self, name: &str) -> PathBuf {

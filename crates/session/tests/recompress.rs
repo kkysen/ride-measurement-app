@@ -94,7 +94,7 @@ fn keeps_crash_truncated_original() {
 }
 
 #[test]
-fn session_reads_the_same_and_info_is_untouched() {
+fn session_reads_the_same_and_info_only_gains_the_hash() {
     let dir = tempfile::tempdir().unwrap();
     let info = SessionInfo {
         format_version: FORMAT_VERSION,
@@ -106,7 +106,6 @@ fn session_reads_the_same_and_info_is_untouched() {
     };
     write_session_info(dir.path(), &info).unwrap();
     write_stream(dir.path(), "accel", 3);
-    let info_bytes = fs::read(dir.path().join("session.pb")).unwrap();
     let before = Session::open(dir.path())
         .unwrap()
         .read_stream("accel")
@@ -117,7 +116,12 @@ fn session_reads_the_same_and_info_is_untouched() {
         matches!(results[0].1, Outcome::Replaced { .. }),
         "{results:?}"
     );
-    assert_eq!(fs::read(dir.path().join("session.pb")).unwrap(), info_bytes);
+    let mut expected = info.clone();
+    let Outcome::Replaced { sha256, .. } = results[0].1 else {
+        unreachable!()
+    };
+    expected.streams[0].content_sha256 = sha256.to_vec();
+    assert_eq!(Session::open(dir.path()).unwrap().info, expected);
     assert!(dir.path().join(MARKER).exists());
     let contents = Session::open(dir.path())
         .unwrap()
@@ -254,12 +258,9 @@ fn audio_becomes_flac_and_reads_back_as_recorded() {
         .unwrap();
     assert!(after.is_clean());
     assert_eq!(after.chunks, before);
-    // Again: already FLAC, nothing to gain, and still the same.
+    // Again: the marker says it's done, so nothing is redone, and still the same.
     let again = recompress_session(dir.path(), LEVEL).unwrap();
-    assert!(
-        matches!(again[0].1, Outcome::KeptOriginal { .. }),
-        "{again:?}"
-    );
+    assert!(again.is_empty(), "{again:?}");
     assert_eq!(
         Session::open(dir.path())
             .unwrap()
@@ -373,4 +374,45 @@ fn audio_content_sha256_is_the_same_as_pcm_and_as_flac() {
     assert_eq!(sha256, pcm);
     assert_eq!(content_sha256(&path, audio).unwrap(), pcm);
     assert_ne!(content_sha256(&path, Encoding::Plain).unwrap(), pcm);
+}
+
+#[test]
+fn old_marker_with_a_too_large_stream_redoes_only_that_stream() {
+    use ride_session::recompress::needs_recompression;
+    let dir = tempfile::tempdir().unwrap();
+    let info = SessionInfo {
+        format_version: FORMAT_VERSION,
+        streams: ["big", "done"]
+            .map(|name| StreamInfo {
+                name: name.into(),
+                ..Default::default()
+            })
+            .to_vec(),
+        ..Default::default()
+    };
+    write_session_info(dir.path(), &info).unwrap();
+    let big = write_stream(dir.path(), "big", 3);
+    let done = write_stream(dir.path(), "done", 3);
+    assert!(needs_recompression(dir.path()));
+    let done_before = fs::read(&done).unwrap();
+    let marker = dir.path().join(MARKER);
+    fs::write(
+        &marker,
+        "big.zst: kept original: too large to check in memory\ndone.zst: replaced, 9 -> 8 bytes\n",
+    )
+    .unwrap();
+    assert!(needs_recompression(dir.path()));
+    let results = recompress_session(dir.path(), LEVEL).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, "big.zst");
+    assert!(matches!(results[0].1, Outcome::Replaced { .. }));
+    assert_eq!(fs::read(&done).unwrap(), done_before);
+    let text = fs::read_to_string(&marker).unwrap();
+    assert!(
+        text.contains("done.zst: replaced, 9 -> 8 bytes\n"),
+        "{text}"
+    );
+    assert!(text.contains("big.zst: replaced, "), "{text}");
+    assert!(!needs_recompression(dir.path()));
+    assert!(fs::metadata(&big).unwrap().len() > 0);
 }

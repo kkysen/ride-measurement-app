@@ -1,15 +1,18 @@
 //! Columnar encoding of a sensor stream, for post-ride recompression (PLAN.md item 42).
 //!
-//! A file in this encoding is a zstd skippable frame holding [`TAG`], then one zstd frame (with checksum)
-//! of the columns below. It decodes back to the stream's content, the sequence of length-delimited
-//! `SensorChunk`s, byte for byte; [`encode`] refuses a stream it couldn't give back exactly.
+//! A file in this encoding is a zstd skippable frame holding [`TAG`], then one or more zstd frames (with checksum),
+//! each holding the columns below for a block of consecutive chunks (at most [`BLOCK_BYTES`] of content,
+//! each block with its own value tables, so memory stays bounded for a stream of any size).
+//! A file with one frame is the form from before blocks; readers decode either.
+//! It decodes back to the stream's content, the sequence of length-delimited
+//! `SensorChunk`s, byte for byte; encoding refuses a stream it couldn't give back exactly.
 //!
-//! The columns, every integer a varint, signed ones zigzagged:
+//! The columns of a block, every integer a varint, signed ones zigzagged:
 //! - the chunk count and `values_per_sample`, then per chunk its sample count and the change in
 //!   `written_elapsed_realtime_ns` from the chunk before;
 //! - each sample's timestamp as the change in its delta from the sample before (delta of delta, across chunks);
 //! - each accuracy as the change from the one before;
-//! - per axis, the stream's distinct values sorted (as differences of their order keys),
+//! - per axis, the block's distinct values sorted (as differences of their order keys),
 //!   then each sample's value as the change in its rank in that table from the sample before.
 //!
 //! All arithmetic wraps, so any timestamps (non-monotonic, huge jumps) and any bit patterns (NaN payloads, -0.0)
@@ -25,6 +28,10 @@ use crate::SensorChunk;
 pub const TAG: &[u8] = b"ride.sensor-columns.v1";
 /// Magic of the zstd skippable frame that carries [`TAG`] (any of `0x184D2A50..=0x184D2A5F` is skippable).
 const SKIPPABLE_MAGIC: u32 = 0x184D_2A5C;
+
+/// The most content (length-delimited chunk bodies) a block holds, except that a block has at least one chunk.
+/// Encoding a block takes about 2 GB per GB of content plus the compressor's fixed 92 MB (level 19).
+pub const BLOCK_BYTES: u64 = 32 << 20;
 
 /// The header every file in this encoding starts with.
 fn header() -> Vec<u8> {
@@ -331,24 +338,101 @@ pub fn decode_columns(bytes: &[u8]) -> io::Result<Vec<SensorChunk>> {
     Ok(chunks)
 }
 
-/// A whole file in this encoding for a stream's chunk bodies, compressed at `level`.
+/// A whole file in this encoding for a stream's chunk bodies, compressed at `level`, as one block.
 pub fn encode_file(bodies: &[Vec<u8>], level: i32) -> Result<Vec<u8>, String> {
     file_of(&encode_columns(bodies)?, level)
 }
 
-/// Like [`encode_file`], for chunks from [`column_chunk`].
+/// Like [`encode_file`], for chunks from [`column_chunk`], in blocks of at most [`BLOCK_BYTES`].
 pub fn encode_chunks_file(chunks: &[SensorChunk], level: i32) -> Result<Vec<u8>, String> {
-    file_of(&encode_chunk_columns(chunks)?, level)
+    encode_chunks_file_in_blocks(chunks, level, BLOCK_BYTES)
+}
+
+/// Like [`encode_chunks_file`] with blocks of at most `block_bytes` of content.
+pub fn encode_chunks_file_in_blocks(
+    chunks: &[SensorChunk],
+    level: i32,
+    block_bytes: u64,
+) -> Result<Vec<u8>, String> {
+    let mut writer =
+        ColumnsWriter::new(Vec::new(), level, block_bytes).map_err(|e| e.to_string())?;
+    for c in chunks {
+        writer.push(c.clone(), content_len(c))?;
+    }
+    writer.finish()
 }
 
 fn file_of(columns: &[u8], level: i32) -> Result<Vec<u8>, String> {
     let mut out = header();
-    let mut encoder =
-        zstd::stream::write::Encoder::new(&mut out, level).map_err(|e| e.to_string())?;
+    write_frame(&mut out, columns, level)?;
+    Ok(out)
+}
+
+/// One block's columns as a zstd frame with a checksum.
+fn write_frame(out: &mut impl io::Write, columns: &[u8], level: i32) -> Result<(), String> {
+    let mut encoder = zstd::stream::write::Encoder::new(out, level).map_err(|e| e.to_string())?;
     encoder.include_checksum(true).map_err(|e| e.to_string())?;
     io::Write::write_all(&mut encoder, columns).map_err(|e| e.to_string())?;
     encoder.finish().map_err(|e| e.to_string())?;
-    Ok(out)
+    Ok(())
+}
+
+/// The length of a chunk body's length-delimited form, what [`ColumnsWriter::push`] counts toward a block.
+pub fn content_len(chunk: &SensorChunk) -> u64 {
+    let body = chunk.encoded_len() as u64;
+    body + prost::encoding::encoded_len_varint(body) as u64
+}
+
+/// Writes a file in this encoding block by block, holding at most one block of chunks.
+pub struct ColumnsWriter<W: io::Write> {
+    out: W,
+    level: i32,
+    block_bytes: u64,
+    pending: Vec<SensorChunk>,
+    pending_bytes: u64,
+    blocks: usize,
+}
+
+impl<W: io::Write> ColumnsWriter<W> {
+    /// Starts a file with blocks of at most `block_bytes` of content.
+    pub fn new(mut out: W, level: i32, block_bytes: u64) -> io::Result<Self> {
+        out.write_all(&header())?;
+        Ok(Self {
+            out,
+            level,
+            block_bytes,
+            pending: Vec::new(),
+            pending_bytes: 0,
+            blocks: 0,
+        })
+    }
+
+    /// Adds the next chunk (from [`column_chunk`]), whose content takes `content_bytes` (see [`content_len`]).
+    pub fn push(&mut self, chunk: SensorChunk, content_bytes: u64) -> Result<(), String> {
+        if !self.pending.is_empty() && self.pending_bytes + content_bytes > self.block_bytes {
+            self.flush()?;
+        }
+        self.pending.push(chunk);
+        self.pending_bytes += content_bytes;
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), String> {
+        let columns = encode_chunk_columns(&self.pending)?;
+        self.pending = Vec::new();
+        self.pending_bytes = 0;
+        write_frame(&mut self.out, &columns, self.level)?;
+        self.blocks += 1;
+        Ok(())
+    }
+
+    /// Writes the last block (an empty one if there was none, so there's always a frame) and returns the output.
+    pub fn finish(mut self) -> Result<W, String> {
+        if !self.pending.is_empty() || self.blocks == 0 {
+            self.flush()?;
+        }
+        Ok(self.out)
+    }
 }
 
 /// The stream content (length-delimited chunks, as the live format decodes to) of a whole file in this encoding.
@@ -367,20 +451,23 @@ pub fn decode_file_with(bytes: &[u8], mut each: impl FnMut(&[u8])) -> io::Result
     if !bytes.starts_with(&header) {
         return Err(invalid("not a sensor columns file"));
     }
-    let frame = &bytes[header.len()..];
-    let size = zstd::zstd_safe::find_frame_compressed_size(frame)
-        .map_err(|_| invalid("incomplete zstd frame"))?;
-    if size != frame.len() {
-        return Err(invalid("bytes after the columns frame"));
+    let mut rest = &bytes[header.len()..];
+    if rest.is_empty() {
+        return Err(invalid("no columns frame"));
     }
-    let mut columns = Vec::new();
-    zstd::stream::read::Decoder::with_buffer(frame)?
-        .single_frame()
-        .read_to_end(&mut columns)?;
-    let chunks = decode_columns(&columns)?;
-    drop(columns);
-    for c in chunks {
-        each(&c.encode_to_vec());
+    while !rest.is_empty() {
+        let size = zstd::zstd_safe::find_frame_compressed_size(rest)
+            .map_err(|_| invalid("incomplete zstd frame"))?;
+        let mut columns = Vec::new();
+        zstd::stream::read::Decoder::with_buffer(&rest[..size])?
+            .single_frame()
+            .read_to_end(&mut columns)?;
+        rest = &rest[size..];
+        let chunks = decode_columns(&columns)?;
+        drop(columns);
+        for c in chunks {
+            each(&c.encode_to_vec());
+        }
     }
     Ok(())
 }

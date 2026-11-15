@@ -57,6 +57,9 @@ message StreamInfo {
   StreamKind kind = 3;
   // Set for audio streams.
   AudioInfo audio = 4;
+  // SHA-256 of the stream's content as recorded: the length-delimited chunks, audio as PCM, however the file is compressed.
+  // Written by post-ride recompression when empty; a stream whose content differs is never replaced.
+  bytes content_sha256 = 5;
 }
 
 message AudioInfo {

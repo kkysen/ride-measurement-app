@@ -5,10 +5,12 @@ use prost::Message;
 use ride_session::proto::StreamInfo;
 use ride_session::read::{Session, decode_stream_bytes};
 use ride_session::recompress::{
-    Encoding, LEVEL, MARKER, Outcome, content_sha256, recompress_sensor_stream,
-    recompress_sensor_stream_with_max, recompress_session, recompress_stream_checked,
+    Encoding, LEVEL, MARKER, Options, Outcome, content_sha256, recompress_sensor_stream,
+    recompress_session, recompress_stream_checked, recompress_stream_with,
 };
-use ride_session::sensor_columns::{decode_file, encode_file, is_columnar};
+use ride_session::sensor_columns::{
+    content_len, decode_file, encode_chunks_file_in_blocks, encode_file, is_columnar,
+};
 use ride_session::write::{StreamWriter, write_session_info};
 use ride_session::{FORMAT_VERSION, SensorChunk, SessionInfo};
 
@@ -237,30 +239,94 @@ fn unencodable_sensor_stream_falls_back_to_plain() {
 }
 
 #[test]
-fn sensor_stream_past_the_columns_limit_is_plain_with_the_same_chunks() {
+fn blocks_round_trip_and_every_stream_gets_columns() {
     let dir = tempfile::tempdir().unwrap();
     let chunks = ride(dir.path(), "accel_uncal");
+    // Single block is the old form: the same bytes `encode_file` gives.
+    let bodies: Vec<Vec<u8>> = chunks.iter().map(|c| c.encode_to_vec()).collect();
+    let old = encode_file(&bodies, LEVEL).unwrap();
+    assert_eq!(
+        encode_chunks_file_in_blocks(&chunks, LEVEL, u64::MAX).unwrap(),
+        old
+    );
+    assert_eq!(decode_file(&old).unwrap(), content(&chunks));
+    let read = decode_stream_bytes::<SensorChunk>(&old);
+    assert!(read.is_clean());
+    assert_eq!(read.chunks, chunks);
+    // Blocks of a few chunks, and of one chunk each (a block always has a chunk).
+    for block in [3 * content_len(&chunks[0]), 1] {
+        let blocked = encode_chunks_file_in_blocks(&chunks, LEVEL, block).unwrap();
+        assert!(is_columnar(&blocked));
+        assert_ne!(blocked, old);
+        assert_eq!(decode_file(&blocked).unwrap(), content(&chunks));
+        let read = decode_stream_bytes::<SensorChunk>(&blocked);
+        assert!(read.is_clean());
+        assert_eq!(read.chunks, chunks);
+    }
+    // No stream is too long for columns: through the recompressor, in blocks, with the same content.
     let path = dir.path().join("accel_uncal.zst");
-    let size = content(&chunks).len() as u64;
     let original = content_sha256(&path, Encoding::Sensor).unwrap();
-    let copy = dir.path().join("copy.zst");
-    fs::copy(&path, &copy).unwrap();
-    let outcome = recompress_sensor_stream_with_max(&path, LEVEL, size - 1);
+    let options = Options {
+        block_bytes: 4 * content_len(&chunks[0]),
+        ..Options::default()
+    };
+    let outcome = recompress_stream_with(&path, LEVEL, Encoding::Sensor, options);
     let Outcome::Replaced { sha256, .. } = outcome else {
         panic!("{outcome}")
     };
     assert_eq!(sha256, original);
     let bytes = fs::read(&path).unwrap();
-    assert!(!is_columnar(&bytes));
+    assert!(is_columnar(&bytes));
+    assert_eq!(decode_file(&bytes).unwrap(), content(&chunks));
+    assert_eq!(content_sha256(&path, Encoding::Sensor).unwrap(), original);
+}
+
+#[test]
+fn session_info_gets_the_content_hash_and_refuses_a_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let chunks = ride(dir.path(), "gyro_uncal");
+    let path = dir.path().join("gyro_uncal.zst");
+    let original = content_sha256(&path, Encoding::Sensor).unwrap();
+    // Old session: no hash. Recompression writes it.
+    assert!(
+        Session::open(dir.path()).unwrap().info.streams[0]
+            .content_sha256
+            .is_empty()
+    );
+    recompress_session(dir.path(), LEVEL).unwrap();
+    let info = Session::open(dir.path()).unwrap().info;
+    assert_eq!(info.streams[0].content_sha256, original.to_vec());
+    assert!(is_columnar(&fs::read(&path).unwrap()));
     assert_eq!(
-        zstd::decode_all(bytes.as_slice()).unwrap(),
+        decode_file(&fs::read(&path).unwrap()).unwrap(),
         content(&chunks)
     );
-    // At the limit, columns.
-    let outcome = recompress_sensor_stream_with_max(&copy, LEVEL, size);
-    assert!(matches!(outcome, Outcome::Replaced { .. }), "{outcome}");
-    assert!(is_columnar(&fs::read(&copy).unwrap()));
-    assert_eq!(content_sha256(&copy, Encoding::Sensor).unwrap(), original);
+
+    // A different hash recorded: the stream is kept as it is, and the hash stays.
+    let dir = tempfile::tempdir().unwrap();
+    ride(dir.path(), "gyro_uncal");
+    let path = dir.path().join("gyro_uncal.zst");
+    let before = fs::read(&path).unwrap();
+    let mut info = Session::open(dir.path()).unwrap().info;
+    info.streams[0].content_sha256 = vec![7; 32];
+    write_session_info(dir.path(), &info).unwrap();
+    let outcomes = recompress_session(dir.path(), LEVEL).unwrap();
+    let Outcome::KeptOriginal { reason, .. } = &outcomes[0].1 else {
+        panic!("{}", outcomes[0].1)
+    };
+    assert!(reason.contains("differs"), "{reason}");
+    assert_eq!(fs::read(&path).unwrap(), before);
+    let info = Session::open(dir.path()).unwrap().info;
+    assert_eq!(info.streams[0].content_sha256, vec![7; 32]);
+
+    // The right hash recorded: replaced as usual.
+    let dir = tempfile::tempdir().unwrap();
+    ride(dir.path(), "gyro_uncal");
+    let mut info = Session::open(dir.path()).unwrap().info;
+    info.streams[0].content_sha256 = original.to_vec();
+    write_session_info(dir.path(), &info).unwrap();
+    let outcomes = recompress_session(dir.path(), LEVEL).unwrap();
+    assert!(matches!(outcomes[0].1, Outcome::Replaced { .. }));
 }
 
 #[test]
@@ -282,15 +348,7 @@ fn marker_names_each_stream_content_sha256_before_and_after() {
         marker.contains(&format!("content SHA-256 {before}\n")),
         "{marker}"
     );
-    // Again: kept, still naming the same content.
-    recompress_session(dir.path(), LEVEL).unwrap();
-    let marker = fs::read_to_string(dir.path().join(MARKER)).unwrap();
-    assert!(
-        marker.starts_with("gyro_uncal.zst: kept original: "),
-        "{marker}"
-    );
-    assert!(
-        marker.contains(&format!("content SHA-256 {before}\n")),
-        "{marker}"
-    );
+    // Again: the marker says it's done, so nothing is redone and it still names the same content.
+    assert!(recompress_session(dir.path(), LEVEL).unwrap().is_empty());
+    assert_eq!(fs::read_to_string(dir.path().join(MARKER)).unwrap(), marker);
 }

@@ -11,17 +11,18 @@
 //! Everything streams, chunk by chunk, so a stream of any size is handled in bounded memory:
 //! the original is read twice (its frames checked, then decoded, hashed and rewritten),
 //! and the new file once (decoded and hashed).
-//! The one exception is sensor columns, which are a whole-stream encoding (one value table per axis)
-//! and are decoded whole by readers too: a sensor stream decoding to over [`SENSOR_COLUMNS_MAX_BYTES`]
-//! is written as plain zstd instead.
-//! Each outcome names the content's SHA-256 (as [`content_sha256`] computes it), written into [`MARKER`],
+//! Sensor columns are written and decoded in blocks of at most `sensor_columns::BLOCK_BYTES` of content.
+//! Each outcome names the content's SHA-256 (as [`content_sha256`] computes it), written into [`MARKER`]
+//! and, when `session.pb` has none for the stream yet, into its `StreamInfo.content_sha256`,
 //! so later copies of a stream can be checked without the original.
+//! A stream whose content differs from the `content_sha256` already in `session.pb` is not replaced.
 
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 use std::path::Path;
 
 use anyhow::Context;
+use prost::Message;
 
 use crate::delimited::{MAX_MESSAGE_BYTES, read_message};
 use crate::proto::StreamKind;
@@ -31,12 +32,8 @@ use sha2::{Digest, Sha256};
 pub const LEVEL: i32 = 19;
 /// Written into a session once every stream was handled; uploads wait for it.
 pub const MARKER: &str = ".recompressed";
-/// The most decoded content a sensor stream may have to be written in columns, which are encoded
-/// and decoded in memory; past it, the stream is written as plain zstd.
-/// About 80 min of `accel_uncal` at 480 Hz (about 50 MB/h).
-/// Measured on the PC: about 92 MB for the level-19 encoder plus 1.8 times the content,
-/// so 154 MB at 33 MB of content, 204 MB at 65 MB, and about 210 MB at this limit.
-pub const SENSOR_COLUMNS_MAX_BYTES: u64 = 64 << 20;
+/// What the first version wrote into [`MARKER`] for a stream over its 512 MiB limit, which it left as recorded.
+const OLD_TOO_LARGE: &str = "too large to check in memory";
 const TMP_SUFFIX: &str = ".recompress-tmp";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,9 +141,37 @@ fn audio_streams(dir: &Path) -> std::collections::BTreeMap<String, Audio> {
         .collect()
 }
 
+/// The stream files (with `.zst`) the [`MARKER`] in `dir` says were left as recorded for being too large,
+/// or `None` if there's no marker (every stream needs handling).
+fn marked_too_large(dir: &Path) -> Option<std::collections::BTreeSet<String>> {
+    let text = fs::read_to_string(dir.join(MARKER)).ok()?;
+    Some(
+        text.lines()
+            .filter(|l| l.contains(OLD_TOO_LARGE))
+            .filter_map(|l| l.split_once(": ").map(|(n, _)| n.to_owned()))
+            .collect(),
+    )
+}
+
+/// Whether the session in `dir` still needs [`recompress_session`]: it has no [`MARKER`],
+/// or its marker names a stream that an earlier version left as recorded for being too large.
+pub fn needs_recompression(dir: &Path) -> bool {
+    marked_too_large(dir).is_none_or(|too_large| !too_large.is_empty())
+}
+
 /// Recompresses every stream of the session in `dir`, in name order; writes [`MARKER`] once all were handled.
+/// If the session has a marker already, only the streams it names as too large are redone
+/// (see [`needs_recompression`]); the other streams' lines stay as they were, and aren't in the result.
+/// A stream that `session.pb` has a `content_sha256` for is checked against it and kept on a mismatch;
+/// the ones without get theirs written into `session.pb` (atomically) once all were handled.
 pub fn recompress_session(dir: &Path, level: i32) -> anyhow::Result<Vec<(String, Outcome)>> {
     let audio = audio_streams(dir);
+    let info = crate::read::Session::open(dir).ok().map(|s| s.info);
+    let recorded = |name: &str| -> Option<[u8; 32]> {
+        let stem = name.strip_suffix(&format!(".{STREAM_EXTENSION}"))?;
+        let s = info.as_ref()?.streams.iter().find(|s| s.name == stem)?;
+        s.content_sha256.as_slice().try_into().ok()
+    };
     let sensors = sensor_streams(dir);
     let mut names: Vec<String> = fs::read_dir(dir)
         .with_context(|| format!("reading {}", dir.display()))?
@@ -156,25 +181,102 @@ pub fn recompress_session(dir: &Path, level: i32) -> anyhow::Result<Vec<(String,
         .filter(|n| n.ends_with(&format!(".{STREAM_EXTENSION}")))
         .collect();
     names.sort();
+    let old_marker = fs::read_to_string(dir.join(MARKER)).ok();
+    let redo = marked_too_large(dir);
     let results: Vec<(String, Outcome)> = names
-        .into_iter()
+        .iter()
+        .filter(|n| redo.as_ref().is_none_or(|r| r.contains(*n)))
+        .cloned()
         .map(|name| {
             let path = dir.join(&name);
-            let outcome = match audio.get(&name) {
-                Some(&a) => recompress_audio_stream(&path, level, a),
-                None if sensors.contains(&name) => recompress_sensor_stream(&path, level),
-                None => recompress_stream(&path, level),
+            let encoding = match audio.get(&name) {
+                Some(&a) => Encoding::Audio(a),
+                None if sensors.contains(&name) => Encoding::Sensor,
+                None => Encoding::Plain,
             };
+            let outcome = recompress_in_tmp(
+                &path,
+                level,
+                encoding,
+                Options {
+                    expected: recorded(&name),
+                    ..Options::default()
+                },
+                |_| {},
+            );
             (name, outcome)
         })
         .collect();
-    let mut marker = File::create(dir.join(MARKER))?;
-    for (name, outcome) in &results {
-        writeln!(marker, "{name}: {outcome}")?;
+    // Written beside and renamed over, so a marker is never half there.
+    let marker_tmp = dir.join(format!("{MARKER}{TMP_SUFFIX}"));
+    let mut marker = File::create(&marker_tmp)?;
+    for name in &names {
+        match results.iter().find(|(n, _)| n == name) {
+            Some((_, outcome)) => writeln!(marker, "{name}: {outcome}")?,
+            None => {
+                let kept = old_marker.as_deref().unwrap_or("").lines();
+                for line in kept.filter(|l| l.starts_with(&format!("{name}: "))) {
+                    writeln!(marker, "{line}")?;
+                }
+            }
+        }
     }
     marker.sync_all()?;
+    drop(marker);
+    fs::rename(&marker_tmp, dir.join(MARKER))?;
     sync_dir(dir)?;
+    if let Some(info) = info {
+        record_hashes(dir, info, &results)?;
+    }
     Ok(results)
+}
+
+/// Writes the content SHA-256 of each stream that has none in `session.pb`, via a temporary file and a rename,
+/// after checking that what's written reads back as the intended info.
+fn record_hashes(
+    dir: &Path,
+    mut info: crate::SessionInfo,
+    results: &[(String, Outcome)],
+) -> anyhow::Result<()> {
+    let mut changed = false;
+    for (name, outcome) in results {
+        let (Outcome::Replaced { sha256, .. }
+        | Outcome::KeptOriginal {
+            sha256: Some(sha256),
+            ..
+        }) = outcome
+        else {
+            continue;
+        };
+        let Some(stem) = name.strip_suffix(&format!(".{STREAM_EXTENSION}")) else {
+            continue;
+        };
+        if let Some(s) = info
+            .streams
+            .iter_mut()
+            .find(|s| s.name == stem && s.content_sha256.is_empty())
+        {
+            s.content_sha256 = sha256.to_vec();
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(());
+    }
+    let path = dir.join(crate::SESSION_INFO_FILE);
+    let mut tmp_name = path.as_os_str().to_owned();
+    tmp_name.push(TMP_SUFFIX);
+    let tmp = Path::new(&tmp_name);
+    let _ = fs::remove_file(tmp);
+    let mut file = File::create_new(tmp)?;
+    file.write_all(&info.encode_length_delimited_to_vec())?;
+    file.sync_all()?;
+    drop(file);
+    let back = crate::read::Session::open_file(tmp)?;
+    anyhow::ensure!(back == info, "session.pb doesn't read back as written");
+    fs::rename(tmp, &path)?;
+    sync_dir(dir)?;
+    Ok(())
 }
 
 /// How a stream is rewritten.
@@ -200,10 +302,33 @@ pub fn recompress_sensor_stream(path: &Path, level: i32) -> Outcome {
     recompress_stream_checked(path, level, Encoding::Sensor, |_| {})
 }
 
-/// Like [`recompress_sensor_stream`] with another limit than [`SENSOR_COLUMNS_MAX_BYTES`] for columns.
+/// What else a recompression is told.
+#[derive(Clone, Copy, Debug)]
+pub struct Options {
+    /// The content SHA-256 the stream is known to have (`StreamInfo.content_sha256`); a stream differing is kept.
+    pub expected: Option<[u8; 32]>,
+    /// The most content a block of sensor columns holds.
+    pub block_bytes: u64,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            expected: None,
+            block_bytes: crate::sensor_columns::BLOCK_BYTES,
+        }
+    }
+}
+
+/// Like [`recompress_sensor_stream`] with other [`Options`].
 #[doc(hidden)]
-pub fn recompress_sensor_stream_with_max(path: &Path, level: i32, columns_max: u64) -> Outcome {
-    recompress_in_tmp(path, level, Encoding::Sensor, columns_max, |_| {})
+pub fn recompress_stream_with(
+    path: &Path,
+    level: i32,
+    encoding: Encoding,
+    options: Options,
+) -> Outcome {
+    recompress_in_tmp(path, level, encoding, options, |_| {})
 }
 
 /// `corrupt_for_test` can damage the new file before verification, to check the original survives.
@@ -214,27 +339,21 @@ pub fn recompress_stream_checked(
     encoding: Encoding,
     corrupt_for_test: impl FnOnce(&Path),
 ) -> Outcome {
-    recompress_in_tmp(
-        path,
-        level,
-        encoding,
-        SENSOR_COLUMNS_MAX_BYTES,
-        corrupt_for_test,
-    )
+    recompress_in_tmp(path, level, encoding, Options::default(), corrupt_for_test)
 }
 
 fn recompress_in_tmp(
     path: &Path,
     level: i32,
     encoding: Encoding,
-    columns_max: u64,
+    options: Options,
     corrupt_for_test: impl FnOnce(&Path),
 ) -> Outcome {
     let mut tmp_name = path.as_os_str().to_owned();
     tmp_name.push(TMP_SUFFIX);
     let tmp = Path::new(&tmp_name);
     let _ = fs::remove_file(tmp);
-    let outcome = recompress_via(path, tmp, level, encoding, columns_max, corrupt_for_test);
+    let outcome = recompress_via(path, tmp, level, encoding, options, corrupt_for_test);
     let _ = fs::remove_file(tmp);
     outcome
 }
@@ -244,7 +363,7 @@ fn recompress_via(
     tmp: &Path,
     level: i32,
     encoding: Encoding,
-    columns_max: u64,
+    options: Options,
     corrupt_for_test: impl FnOnce(&Path),
 ) -> Outcome {
     let before = match fs::metadata(path) {
@@ -255,6 +374,9 @@ fn recompress_via(
     match starts_columnar(path) {
         Ok(true) => {
             return match columns_digest(path) {
+                Ok(digest) if options.expected.is_some_and(|e| e != digest) => {
+                    kept_hashed("content differs from the SHA-256 in session.pb", digest)
+                }
                 Ok(digest) => kept_hashed("already in sensor columns", digest),
                 Err(e) => kept(format!(
                     "already in sensor columns, which don't decode: {e}"
@@ -274,7 +396,7 @@ fn recompress_via(
     // One decoding pass over the original checks it, recompresses it, and hashes it.
     let written = match encoding {
         Encoding::Audio(a) => write_audio_recompressed(path, tmp, level, a),
-        Encoding::Sensor => write_sensor_recompressed(path, tmp, level, columns_max),
+        Encoding::Sensor => write_sensor_recompressed(path, tmp, level, options.block_bytes),
         Encoding::Plain => write_recompressed(path, tmp, level),
     };
     let original_digest = match written {
@@ -284,6 +406,12 @@ fn recompress_via(
         }
         Err(e) => return kept(format!("writing the new file failed: {e}")),
     };
+    if options.expected.is_some_and(|e| e != original_digest) {
+        return kept_hashed(
+            "content differs from the SHA-256 in session.pb",
+            original_digest,
+        );
+    }
     corrupt_for_test(tmp);
     match content_sha256(tmp, encoding) {
         Ok(digest) if digest == original_digest => {}
@@ -526,44 +654,47 @@ fn write_audio_recompressed(
     Ok(sha.finalize().into())
 }
 
-/// Like [`write_recompressed`] for a sensor stream, in columns where they give every chunk back byte for byte
-/// (checked again on the written file) and its content is at most `columns_max` bytes, else plain;
+/// Like [`write_recompressed`] for a sensor stream, in columns of blocks of at most `block_bytes` of content
+/// where they give every chunk back byte for byte (checked again on the written file), else plain;
 /// returns the SHA-256 of the decoded content.
 fn write_sensor_recompressed(
     original: &Path,
     tmp: &Path,
     level: i32,
-    columns_max: u64,
+    block_bytes: u64,
 ) -> io::Result<[u8; 32]> {
     let mut decoder = BufReader::new(decode_original(original)?);
     let mut sha = Sha256::new();
-    // Decoded as they're read, so the bodies aren't held too.
-    let mut chunks = Vec::new();
-    let mut content = 0u64;
+    let mut writer = crate::sensor_columns::ColumnsWriter::new(
+        io::BufWriter::new(File::create_new(tmp)?),
+        level,
+        block_bytes,
+    )?;
+    let mut columns_ok = true;
     while let Some(message) = read_message(&mut decoder).map_err(invalid)? {
-        content += (delimiter(message.len()).len() + message.len()) as u64;
-        let chunk = match crate::sensor_columns::column_chunk(&message) {
-            Ok(chunk) if content <= columns_max => chunk,
-            // Too long a stream for columns in memory, or a chunk they can't give back:
-            // plain, streaming, from the start.
-            _ => {
-                drop(chunks);
-                return write_recompressed(original, tmp, level);
-            }
-        };
         hash_message(&mut sha, &message);
-        chunks.push(chunk);
+        if !columns_ok {
+            continue;
+        }
+        // A chunk or block the columns can't give back: plain, streaming, from the start.
+        let pushed = crate::sensor_columns::column_chunk(&message)
+            .and_then(|c| writer.push(c, (delimiter(message.len()).len() + message.len()) as u64));
+        columns_ok = pushed.is_ok();
     }
-    let encoded = crate::sensor_columns::encode_chunks_file(&chunks, level);
-    drop(chunks);
-    match encoded {
-        Ok(bytes) => {
-            let mut file = File::create_new(tmp)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
+    let finished = if columns_ok {
+        writer.finish().ok()
+    } else {
+        None
+    };
+    match finished {
+        Some(out) => {
+            out.into_inner().map_err(|e| e.into_error())?.sync_all()?;
             Ok(sha.finalize().into())
         }
-        Err(_) => write_recompressed(original, tmp, level),
+        None => {
+            fs::remove_file(tmp)?;
+            write_recompressed(original, tmp, level)
+        }
     }
 }
 
