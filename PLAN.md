@@ -1473,6 +1473,29 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Also new 3s on Sat Oct 24 8:51 am, Mon Oct 26 11:10 am and Thu Oct 29 11:07 pm, and GS on Sat Oct 24 10:04 pm: not checked against the rides.
     The 2 on Mon Oct 26, 8:08 pm gains 120 s and Tue Nov 3, 6:01 pm 10 s (drops 8 to 2, 1 to 0), so the filter is right to be relaxed only if the route is also trustworthy:
     the next try should keep the filter unless the feeds' trip itself lists the station as passed express (the trip's stop list, not the cell).
+    Second try (2026-11-15, not landed; stash "item 34 fix v11"), scored the same way at `e582069`, whose base is 15621 s named, 44 drops, 1 flip
+    (not the 15721 s and 45 above: item 43's live speed changed Sat Oct 24, 8:51 am):
+    15621 s to 17101 s of 25731 s (61% to 66%), drops 44 to 21, flips 1 to 2; 14 sessions changed, each checked against the taps and the recorded feeds.
+    Checked against the feeds, two of the wrong routes above weren't wrong:
+    - Sat Oct 31, 9:57 pm was the 3 from 10:23 pm, not a 1: trip `133150_3..S01R` is within 11 s of each tap (96 St, 72 St, Times Sq, 34 St, 14 St), with nothing tapped between.
+      The 3 at 86 St to 59 St was right; the wrong route was the base's 1 from 10:29 pm, from an untapped stop record at 59 St, which ruled out the 3 for a 1 ahead.
+    - Fri Oct 30, 4:02 pm: the first train was the 2 (`095900_2..N01R`, Times Sq 4:02 pm, 72 St 4:07 pm, 96 St 4:11 pm), the second the 1 from 96 St.
+      Its GS came from the boarding stop named at Times Sq's shuttle platform (`902`): a trip of another line matches only at a stop's own platform, so only GS could.
+      Its 3 at 96 St was a southbound 3 (`094600_3..S06R`): stop IDs drop their direction, so one stop matched a train going the other way.
+    What the try does (`trips.rs`, `track.rs`, `Fusion::route` and `Fusion::status`):
+    - A trip runs through a station when the station is between two of its stops in a row on a GTFS shape, at that time (`track::runs_through`).
+      At a station named then, the route is kept if the line stops there or its trip runs through it: the 2 express past the 1's stations (Mon Oct 26, 8:08 pm) and the 3 past 86 St to 59 St.
+    - No trip that went elsewhere than the stations the radio named since the first stop: the shuttle is gone at 50 St, a 3 from 96 St at 103 St.
+    - One stop record at a station the trip runs through neither matches nor rules it out (the 59 St one); several do rule it out (the late-night 2 local isn't the 3 ahead, Fri Oct 23, 1:52 am).
+    - No trip whose times at the rider's stations run the other way; stops in one dwell count once, and of two stops at one complex with a departure between, only the first counts (34 St named Times Sq, Fri Oct 23, 7:43 pm).
+    Right now and wrong before: the 3 on Sat Oct 24, 8:51 am, Mon Oct 26, 11:10 am, Thu Oct 29, 11:07 pm and Sat Oct 31, 9:57 pm; the 2 on Mon Oct 26, 8:08 pm (the base's 1 at 72 St gone) and Tue Nov 3, 6:01 pm;
+    the A on Sat Oct 31, 4:58 pm (the base's C at 125 St gone); no GS on Fri Oct 30 or Sat Oct 24, 10:04 pm.
+    Not landed: wrong routes remain on checked rides.
+    - A missed walk-off across the platform keeps the train left: the 2 shown at 96 St while the rider waits for and rides the 1 to 103 St, Fri Oct 30, 4:12 to 4:17 pm (the base showed a 3) and Sat Oct 24, 10:32 to 10:38 pm (new: the base had no route).
+      Dropping the stops before a walk, as the riding lines do, cost 1090 s of right routes (walks inside trains); dropping a trip that got to its next stop while the radio still named the one it left cost right routes where one cell covers two stations.
+    - The radio's platform within a complex is arbitrary, and a stop matches only its platform's lines: the Q from DeKalb Av named the 4 and the 6 at Canal St and Union Sq (Sat Oct 24, 10:15 to 10:20 pm, as before),
+      and the late-night 2 lost at 59 St's A/B/C/D platform. Matching at the whole complex until the riding lines pick a platform is the likely fix, untested.
+    - Untapped stop records at local stations still name a local over the express: the N for the Q from Union Sq to Canal St, Sat Oct 31, 1:42 to 1:46 pm (as before).
 35. Station cells missing (the registered cell, item 7 of 2026-10-21):
     none at 138 St and 149 St-Grand Concourse on the 5 (Tue Oct 27, 10:04 pm, at 10:16 and 10:21 pm);
     the southbound 4 missed 110 St, 103 St, 86 St and 59 St (Mon Nov 2, 6:04 pm, at 6:22 and 6:24 pm);
