@@ -403,6 +403,7 @@ fn read_raw(path: &Path) -> Vec<u8> {
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn report(
     session: &str,
     stream: &str,
@@ -425,6 +426,7 @@ fn report(
 }
 
 /// Runs a candidate: encode, decode, check bit-exact against `raw`, report.
+#[allow(clippy::too_many_arguments)]
 fn run(
     session: &str,
     stream: &str,
@@ -488,7 +490,7 @@ fn diag(path: &Path) {
     );
     println!(
         "first deltas {:?}",
-        &ts.windows(2)
+        ts.windows(2)
             .map(|w| w[1] - w[0])
             .take(12)
             .collect::<Vec<_>>()
