@@ -182,6 +182,23 @@ impl Track {
     }
 }
 
+/// Whether a train going from stop `a` to stop `b` (GTFS parent stop IDs) runs through a stop of `x`: some shape,
+/// of any route, stops at `a`, one of `x` and `b` in that order (either way along it).
+/// So the 2, express from 14 St to Chambers St, runs through Christopher St, Houston St and Canal St
+/// (the 1's shape stops at all five), but a shuttle from Times Sq doesn't run through 50 St.
+pub fn runs_through(a: &str, b: &str, x: &[&str]) -> bool {
+    shapes().iter().any(|shape| {
+        let at = |id: &str| shape.stops.iter().position(|(s, _)| s == id);
+        let (Some(i), Some(j)) = (at(a), at(b)) else {
+            return false;
+        };
+        let (lo, hi) = (i.min(j), i.max(j));
+        shape.stops[lo + 1..hi]
+            .iter()
+            .any(|(s, _)| x.contains(&s.as_str()))
+    })
+}
+
 /// The track from station `a` to `b`: along a shape that stops at both, preferring a route that serves both
 /// as named, then the shortest. None when no shape joins them.
 pub fn between(a: &Station, b: &Station) -> Option<Track> {

@@ -99,6 +99,20 @@ const REOPEN_S: f64 = 15.0;
 const MOVED_ON_AFTER_S: f64 = 20.0;
 /// How long the radio must keep naming the other station: a cell of a neighboring station flickers in at times.
 const MOVED_ON_HELD_S: f64 = 10.0;
+/// How long (s) after the feeds dropped the rider's station from a trip the radio must still name it, for the rider
+/// to have stayed behind (see [`Fusion::left_behind`]): a cell lingers for 30 s, and the train takes some seconds
+/// to leave it.
+const LEFT_BEHIND_S: f64 = 60.0;
+
+/// Whether the rider stayed behind when their train left (see [`Fusion::left_behind`]).
+enum Left {
+    No,
+    /// Not known yet: no route meanwhile.
+    Unsure,
+    /// The stops up to this are another train's.
+    Since(i64),
+}
+
 /// A transfer (see [`Fusion::transfer_s`]) is shown for at most this long (s): a late night wait for a train.
 const TRANSFER_MAX_S: f64 = 1_800.0;
 /// A departure is the rider's new train if no step window ends within this before and after it (s).
@@ -1053,7 +1067,9 @@ impl Fusion {
     /// so otherwise the boarding station is left out (6 Av on the L, `20261023-193658`).
     /// A route matched at older stops is kept while the newer ones don't rule it out
     /// (see [`trips::Trips::held_route`]).
-    fn route(&self, t: i64, boarded_after: i64, records: &Records) -> Option<String> {
+    /// With the matched trip's ID; no trip that went elsewhere than the stations the radio named since the first
+    /// of those stops, each held [`MOVED_ON_HELD_S`] (see [`trips::Trips::held_trip`]).
+    fn route(&self, t: i64, boarded_after: i64, records: &Records) -> Option<(String, String)> {
         let ago = |at: i64| (t - at) as f64 * 1e-9;
         let boarding = self
             .boarding(t, records)
@@ -1088,7 +1104,23 @@ impl Fusion {
                 }),
             )
             .collect();
-        let recent = &stops[stops.len().saturating_sub(ROUTE_STOPS)..];
+        // One per dwell before taking the last few (see [`trips::distinct`]).
+        let mut stops = trips::distinct(&stops);
+        // Each cut drops at least the stop the rider was left behind at.
+        loop {
+            let recent = &stops[stops.len().saturating_sub(ROUTE_STOPS)..];
+            let (route, trip) = self.route_of(recent, t)?;
+            match self.left_behind(&trip, recent, t) {
+                Left::No => return Some((route, trip)),
+                Left::Unsure => return None,
+                Left::Since(walked) => stops.retain(|s| s.stopped_ns > walked),
+            }
+        }
+    }
+
+    /// [`Self::route`] for its last few stops, `recent`, as found.
+    fn route_of(&self, recent: &[trips::RiderStop], t: i64) -> Option<(String, String)> {
+        let ago = |at: i64| (t - at) as f64 * 1e-9;
         if ago(recent.last()?.stopped_ns) > ROUTE_STOP_S {
             return None;
         }
@@ -1098,7 +1130,83 @@ impl Fusion {
             .iter()
             .map(|p| p.station)
             .collect();
-        self.trips.held_route_passing(recent, &passed, t)
+        // As in `moved_on`: the radio names the station before a stop some seconds into it.
+        let from = recent.first()?.stopped_ns + (MOVED_ON_AFTER_S * 1e9) as i64;
+        let i = self
+            .station_history
+            .partition_point(|&(first, ..)| first < from);
+        let named: Vec<trips::Named> = self.station_history[i..]
+            .iter()
+            .take_while(|&&(first, ..)| first <= t)
+            .filter(|&&(first, last, _)| (last - first) as f64 * 1e-9 >= MOVED_ON_HELD_S)
+            .map(|&(first_ns, last_ns, station)| trips::Named {
+                first_ns,
+                last_ns,
+                station,
+            })
+            .collect();
+        self.trips.held_trip(recent, &passed, &named, t)
+    }
+
+    /// Whether the rider stayed behind at one of `stops` when the trip `trip` left it: they walked while it was
+    /// there (from the stop, or [`trips::SLACK_S`] before its time there, until the feeds no longer listed it there),
+    /// and the radio still named the station [`LEFT_BEHIND_S`] after the feeds dropped it, with no other station
+    /// named since the walk. Walking off across the platform at 96 St, the 2 was still shown while the rider waited
+    /// for the 1 and rode it to 103 St (Fri Oct 30, 4:12 to 4:17 pm; Sat Oct 24, 10:32 to 10:38 pm), as the
+    /// stop records missed the walk off. Unsure until then, unless the radio names another station: the rider
+    /// walks inside trains too, and a cell lingers.
+    fn left_behind(&self, trip: &str, stops: &[trips::RiderStop], t: i64) -> Left {
+        let s_ns = |s: f64| (s * 1e9) as i64;
+        for s in stops.iter().rev() {
+            let Some((at, dropped)) = self.trips.left_from(trip, s.station) else {
+                continue;
+            };
+            let from = s.stopped_ns.max(at - trips::SLACK_S * 1_000_000_000);
+            let to = dropped.unwrap_or(t).min(t);
+            let Some(walked) = self.walk_start(from, to) else {
+                continue;
+            };
+            if self.named_other_since(s.station, walked, t) {
+                continue;
+            }
+            match dropped {
+                Some(d) if t >= d + s_ns(LEFT_BEHIND_S) => {
+                    if self
+                        .station_at(d + s_ns(LEFT_BEHIND_S))
+                        .is_some_and(|at| stations::same_complex(at, s.station))
+                    {
+                        return Left::Since(walked.max(s.stopped_ns));
+                    }
+                }
+                _ => return Left::Unsure,
+            }
+        }
+        Left::No
+    }
+
+    /// The first step window of a walk of [`LINE_RESET_WINDOWS`] windows with steps from `from` to `to`, if any.
+    fn walk_start(&self, from: i64, to: i64) -> Option<i64> {
+        let i = self.step_windows.partition_point(|&(at, _)| at <= from);
+        let mut steps = self.step_windows[i..]
+            .iter()
+            .take_while(|&&(at, _)| at <= to)
+            .filter(|&&(_, steps)| steps);
+        let first = steps.next()?.0;
+        (steps.take(LINE_RESET_WINDOWS - 1).count() == LINE_RESET_WINDOWS - 1).then_some(first)
+    }
+
+    /// Whether the radio named a station outside `station`'s complex, for [`MOVED_ON_HELD_S`], first after `since`.
+    fn named_other_since(&self, station: &Station, since: i64, t: i64) -> bool {
+        let i = self
+            .station_history
+            .partition_point(|&(first, ..)| first <= since);
+        self.station_history[i..]
+            .iter()
+            .take_while(|&&(first, ..)| first <= t)
+            .any(|&(first, last, s)| {
+                !stations::same_complex(station, s)
+                    && (last - first) as f64 * 1e-9 >= MOVED_ON_HELD_S
+            })
     }
 
     /// The lines the rider's train can be, from the stations it stopped at: each stop narrows them to the lines
@@ -1532,10 +1640,17 @@ impl Fusion {
         let car = self.cars.current_at(t);
         // A line is only named at a station it serves: one matched from earlier stops is stale at a station
         // of another line (the 6 from 125 St still shown at Astoria Blvd, Sat Nov 7, 2:57 pm).
+        // Or one its trip runs through then: the cell names the stations an express passes too,
+        // and the 2 was lost at Canal St, Houston St and 23 St, all the 1's (Mon Oct 26, 8:08 pm, at 8:27 pm).
         let route = self
             .route(t, boarded_after, &records)
             .filter(|_| aboard)
-            .filter(|r| station.as_ref().is_none_or(|s| self.stops_here(s, r, t)));
+            .filter(|(r, trip)| {
+                station
+                    .as_ref()
+                    .is_none_or(|s| self.stops_here(s, r, t) || self.trips.trip_passes(trip, s, t))
+            })
+            .map(|(r, _)| r);
         // The route if the feeds give it, else the lines the train has been on, else the station's:
         // between trains, all the lines of its complex, any of which the rider may take next.
         let riding_here = (!riding.is_empty() && aboard).then(|| {
