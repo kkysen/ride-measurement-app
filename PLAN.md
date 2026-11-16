@@ -1476,7 +1476,7 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Open: offline, the smoothed speed walking off at 8:41 pm still runs 14 to 30 mph (8:40:54 to 8:42:20 pm);
     on Tue Oct 27 it reads 4 to 6 mph. Offline has no between-trains hold; adding one (or measuring walking sooner)
     is for the rider to approve, as a live and offline difference.
-34. Partly done (519ff01): the 2 from GTFS-RT keeps being lost (Mon Oct 26, 8:08 pm, at 8:19 pm). Check against v2 (item 29).
+34. Partly done (b180c3e): the 2 from GTFS-RT keeps being lost (Mon Oct 26, 8:08 pm, at 8:19 pm). Check against v2 (item 29).
     Looked into (2026-11-15, `skip_still`, live): not reproduced at 8:19 pm, with the code now or at 0.1.16 (the phone's that night).
     The status names the 2 from 8:13:16 pm to 8:27 pm; the recorded v1 feeds list the rider's trip (`118950_2`, 5 stops from Bergen St)
     throughout, and have no polls from 8:17:41 pm to 8:20:14 pm (no cell under the East River), which changes nothing.
@@ -1516,7 +1516,7 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     - The radio's platform within a complex is arbitrary, and a stop matches only its platform's lines: the Q from DeKalb Av named the 4 and the 6 at Canal St and Union Sq (Sat Oct 24, 10:15 to 10:20 pm, as before),
       and the late-night 2 lost at 59 St's A/B/C/D platform. Matching at the whole complex until the riding lines pick a platform is the likely fix, untested.
     - Untapped stop records at local stations still name a local over the express: the N for the Q from Union Sq to Canal St, Sat Oct 31, 1:42 to 1:46 pm (as before).
-    Landed (2026-11-15, 519ff01): the second try plus a stayed-behind check, scored the same way at `d61772b` (base unchanged: 15621 s, 44 drops, 1 flip):
+    Landed (2026-11-15, b180c3e): the second try plus a stayed-behind check, scored the same way at `d61772b` (base unchanged: 15621 s, 44 drops, 1 flip):
     15621 s to 16231 s of 25731 s named, drops 44 to 15, flips 1 to 2; the second try alone was 17101 s, 21, 2.
     - The 96 St walk-off: the stop records missed both (Fri Oct 30 a false departure 18 s into the stop, before the walk; Sat Oct 24 a hold short of the platform, the platform stop never recorded),
       and the live speed ran to 55 mph on the platform on Fri Oct 30 (4:12:36 to 4:15:25 pm, item 27), so neither is a signal there.
