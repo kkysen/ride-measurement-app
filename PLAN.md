@@ -1382,6 +1382,26 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     and Sun Nov 1, 1:50 am 69 mph (68:17 in), from axes set with the phone turning 0.5 rad/s and gravity 63 s old.
     Open: the 26 left under 0.5, 15 of them held (the hold, and the estimator running to the cap while standing);
     Wed Oct 21, 6:21 pm at 13:31 in fell 1.38 to 0.36 (bias +0.33 at its departure; not traced); runaways (53).
+    The held legs and the standing runaway (2026-11-15, not landed; stash "item27d scratch", `data/work/i27d/`):
+    of the 14 legs under 0.5 held over half the leg, 13 are a likely stop, 1 a transfer.
+    8 had the closing heard and no departure found: the start surge was under 0.5 m/s^2 or not steady
+    (0.30 to 0.48 near the taps; none at all on Thu Oct 22, 12:29 am at 6:56 and 12:16), the phone in hand;
+    5 had a departure but a later lurch held again; 1 had its departure 1 s after the stop, within `DEPART_AFTER_STOP_S`.
+    The standing runaway is not new motion: braking integrates past zero into the station (item 19)
+    and the estimate stands at -18 to -55 mph through the dwell, with nothing measuring the speed
+    until the closing confirms the stop; pinned at 55 mph, the caps drag the bias
+    (Thu Oct 22, 12:29 am at 19:19: -0.34 to -0.68 m/s^2), and after the closing's zero that bias runs it 0 to 55 mph in 1:00.
+    After the closing's zero the estimator does see the pull-away: from there to the leg's end,
+    the 12 closing-heard legs read 0.36 to 3.93 of the track (3 within 0.7 to 1.3, 3 at 0.6 to 0.7, 4 over 1.3).
+    Tried (`liveratio` under 0.5 / within 0.7 to 1.3 / over 1.3 / median; baseline 26 / 100 / 53 / 0.95):
+    a likely stop's hold ends once, after a zero since the stop and without GNSS, the estimator reaches 2 m/s,
+    the leg cap counted from the zero: 19 / 100 / 61 / 0.99 (9 legs nearer by 0.15 in log ratio, 3 further);
+    from the release itself (the time cap then too low): 25 / 99 / 53 / 0.94.
+    After a Doors zero the estimate passes 4.5 mph more than 3 s before the "train started" tap at 13 of 168 held stops.
+    The bias set to 0 when gravity is set at a standing: 32 / 110 / 42 / 0.88, but 59 legs nearer and 55 further;
+    the bias put back to its value at the standing's start: 26 / 100 / 51 / 0.93.
+    Not kept: the release only moves legs from under 0.5 to over 1.3 until the bias the caps teach while standing is fixed.
+    Open: undo the caps' bias moves over a standing once it's confirmed, then the release again.
 28. Learn the trains' acceleration curves (speeding up, cruise, braking) from the above-ground rides,
     per line and car model, to bound and shape the speed between stations (rider, 2026-11-08). Done (2026-11-08).
     Open track grid (`b7317bc`, `0377dfb`, `6f988ba`): plus OpenStreetMap's subway ways not tagged as tunnels
