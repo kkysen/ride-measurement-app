@@ -24,7 +24,9 @@ fn main() -> anyhow::Result<()> {
             let w = &r.live[i..j];
             let m: f64 = w
                 .windows(2)
-                .map(|p| (p[0].1.speed_mps + p[1].1.speed_mps) / 2.0 * (p[1].0 - p[0].0) as f64 * 1e-9)
+                .map(|p| {
+                    (p[0].1.speed_mps + p[1].1.speed_mps) / 2.0 * (p[1].0 - p[0].0) as f64 * 1e-9
+                })
                 .sum();
             let peak = w.iter().map(|p| p.1.speed_mps).fold(0.0, f64::max);
             let s = (l.to_ns - l.from_ns) as f64 * 1e-9;
