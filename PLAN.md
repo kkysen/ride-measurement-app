@@ -1364,6 +1364,24 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Gravity underground (2026-11-15, `cb95e4f`, item 19): the gyro's leftover bias tilted gravity
     15 to 23 deg between stills; now set while the train stands and the bias learned. Under 0.5 34 to 31,
     within 89 to 94, over 1.3 58 to 55 (baseline `664da70`, 212 legs). The axis between departures is item 19's open part.
+    The axis off at departures (2026-11-15, `9d284c4`, not on the phone): item 43's exact rotation took the
+    lengthened axis away (under 0.5 31 to 38, median 0.99 to 0.91), uncovering slow integration.
+    Of the 38 legs under 0.5 at `7e197ba`, 15 were held (a likely stop or transfer over half the leg; the estimator
+    itself pinned at the cap through the dwell, as at Elmhurst Av on Tue Oct 20, 6:41 pm) and 23 integrated too little.
+    On 20 of those 23 with a departure, its 12 s speed change in the gyro's frame lay at median |cos| 0.56 to the
+    axis (10 under 0.6), against 0.98 on the legs within 0.7 to 1.3 and 0.99 on those over 1.3;
+    the bias was a real drag on only 4 or 5 (+0.24 m/s^2 after the doors zero at Elmhurst Av).
+    Now, without GNSS, a departure's speed change sets the axis when |cos| is under 0.7 and gravity was set at a
+    standing at most 40 s before, and the bias starts again (`LiveSpeedEstimator::on_departure`).
+    `liveratio` under 0.5 38 to 26, within 0.7 to 1.3 92 to 100, over 1.3 51 to 53, median 0.91 to 0.95
+    (24 legs nearer by over 0.15 in log ratio, 12 further); `gnssgap` (58 rides) 133 / 21 / 18 / 2 to 134 / 22 / 18 / 2.
+    Variants (`liveratio`; stash "item27b scratch"): ungated, every departure (item 19's) 30 / 83 / 65 / 0.99;
+    |cos| under 0.5, 0.6, 0.8: 30 / 93 / 53, 29 / 94 / 53, 30 / 95 / 53; bias kept 29 / 94 / 55, scaled by the cos
+    28 / 96 / 53, reset 28 / 100 / 54; window 8 s 30 / 97 / 54, 16 s 29 / 99 / 53; phone turning under 0.4 rad/s
+    29 / 100 / 54. Without the standing gate, Thu Oct 22, 6:18 pm (20:22 in) read 39 mph over GNSS
+    and Sun Nov 1, 1:50 am 69 mph (68:17 in), from axes set with the phone turning 0.5 rad/s and gravity 63 s old.
+    Open: the 26 left under 0.5, 15 of them held (the hold, and the estimator running to the cap while standing);
+    Wed Oct 21, 6:21 pm at 13:31 in fell 1.38 to 0.36 (bias +0.33 at its departure; not traced); runaways (53).
 28. Learn the trains' acceleration curves (speeding up, cruise, braking) from the above-ground rides,
     per line and car model, to bound and shape the speed between stations (rider, 2026-11-08). Done (2026-11-08).
     Open track grid (`b7317bc`, `0377dfb`, `6f988ba`): plus OpenStreetMap's subway ways not tagged as tunnels
