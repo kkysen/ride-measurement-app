@@ -1530,6 +1530,8 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Left open: the Q named the 4 and 6 at Canal St and Union Sq (Sat Oct 24, 10:15 pm; matching at the whole complex, untried),
     the N for the Q at untapped local stops (Sat Oct 31, 1:44 pm, still the N from 1:44:28 pm),
     and a boarding walk withholding the route until the next station is named (a walk that ends at a departure from the stop could be told apart).
+    Rider's idea (2026-11-15): while the route is unknown after boarding at a platform, show every line whose trip is at that station then in the recorded feeds,
+      e.g. "1/2/3" at 96 St when a 1 and a 2 or 3 are both there, in the MTA's order (item 38), narrowed as stations and stops rule lines out.
 35. Station cells missing (the registered cell, item 7 of 2026-10-21):
     none at 138 St and 149 St-Grand Concourse on the 5 (Tue Oct 27, 10:04 pm, at 10:16 and 10:21 pm);
     the southbound 4 missed 110 St, 103 St, 86 St and 59 St (Mon Nov 2, 6:04 pm, at 6:22 and 6:24 pm);
