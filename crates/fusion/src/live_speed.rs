@@ -122,6 +122,15 @@ const GYRO_BIAS_MAX_RAD_S: f64 = 0.005;
 /// standing that measures gravity.
 const STANDING_HISTORY_S: f64 = 60.0;
 const STANDING_MIN_S: f64 = 1.0;
+/// Without GNSS, a departure's speed change over [`DEPARTURE_AXIS_S`] (in the gyro's frame) sets the travel axis
+/// when it disagrees with it (|cos| under [`DEPARTURE_AXIS_MAX_COS`]), is at least [`DEPARTURE_AXIS_MIN_MPS`] and at
+/// most what a train reaches ([`DEPARTURE_AXIS_MAX_MPS2`]), and gravity was set at a standing at most
+/// [`DEPARTURE_AXIS_STANDING_S`] before (see [`LiveSpeedEstimator::on_departure`]).
+const DEPARTURE_AXIS_S: f64 = 12.0;
+const DEPARTURE_AXIS_MAX_COS: f64 = 0.7;
+const DEPARTURE_AXIS_MIN_MPS: f64 = 2.0;
+const DEPARTURE_AXIS_MAX_MPS2: f64 = 1.6;
+const DEPARTURE_AXIS_STANDING_S: f64 = 40.0;
 /// How recent GNSS must be for the fused acceleration to be the vehicle's, so gravity can follow the rest.
 const GNSS_RECENT_S: f64 = 5.0;
 /// With GNSS recent, the most the speed rises past the last plausible GNSS speed (m/s^2 since, plus
@@ -422,6 +431,10 @@ pub struct LiveSpeedEstimator {
     frame: [f64; 9],
     accel_sum: [f64; 3],
     accel_sums: VecDeque<(i64, [f64; 3])>,
+    /// When gravity was last set at a standing (see [`Self::on_standing`]), and a departure found since whose
+    /// speed change is to check the travel axis (see [`Self::on_departure`]).
+    standing_ns: Option<i64>,
+    departure_ns: Option<i64>,
     last_ns: i64,
     mag_mean: f64,
     mag_var: f64,
@@ -506,6 +519,8 @@ impl Default for LiveSpeedEstimator {
             frame: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
             accel_sum: [0.0; 3],
             accel_sums: VecDeque::new(),
+            standing_ns: None,
+            departure_ns: None,
             last_ns: 0,
             mag_mean: 0.0,
             mag_var: 0.0,
@@ -789,6 +804,12 @@ impl LiveSpeedEstimator {
             self.limit_accel(t_ns, dt);
         }
         self.limit_on_leg(t_ns, dt);
+        if let Some(at) = self.departure_ns
+            && (t_ns - at) as f64 * 1e-9 >= DEPARTURE_AXIS_S
+        {
+            self.departure_ns = None;
+            self.axis_from_departure(at, t_ns);
+        }
         self.along_since_gnss += along * dt;
         for c in &mut self.cars {
             c.pending_sum += along * dt;
@@ -942,6 +963,71 @@ impl LiveSpeedEstimator {
         self.learn_gyro_bias_from(mid, m);
         self.gravity = m;
         self.gyro_gravity = Some((mid, m));
+        self.standing_ns = Some(to_ns);
+    }
+
+    /// The train left a station at `at_ns` (found since). Once GNSS has set the travel axis underground, only the
+    /// gyro carries it, and a phone turned or shifted in a hand leaves it off: at 74 departures on 6 rides, 30% of
+    /// the trains' own acceleration lay under cos 0.83 of it, and on the legs whose live distance was under half the
+    /// track's with no stop held, the median was 0.56 (2026-11-15), so only that fraction of each speed change counted.
+    /// Over the next [`DEPARTURE_AXIS_S`], the train's acceleration is the travel direction; see
+    /// [`Self::axis_from_departure`]. The backward pass keeps the forward pass's axis.
+    pub fn on_departure(&mut self, at_ns: i64) {
+        if !self.backward {
+            self.departure_ns = Some(at_ns);
+        }
+    }
+
+    /// The horizontal speed change since the departure at `at_ns`, in the gyro's frame and back in the phone's as it
+    /// is now, sets the travel axis and its sign if it disagrees with the axis (see [`DEPARTURE_AXIS_S`] for when).
+    /// The speed's integral since the departure moves to the new axis, and the bias, learned along the old one
+    /// (largely gravity's leak along it), starts again.
+    fn axis_from_departure(&mut self, at_ns: i64, t_ns: i64) {
+        if self.gnss_recent(t_ns)
+            || self
+                .standing_ns
+                .is_none_or(|s| (at_ns - s) as f64 * 1e-9 > DEPARTURE_AXIS_STANDING_S)
+        {
+            return;
+        }
+        let i = self.accel_sums.partition_point(|&(t, _)| t <= at_ns);
+        let Some(&(t0, s0)) = i.checked_sub(1).map(|i| &self.accel_sums[i]) else {
+            return;
+        };
+        let span = (t_ns - t0) as f64 * 1e-9;
+        let d: [f64; 3] = std::array::from_fn(|k| self.accel_sum[k] - s0[k]);
+        let d: [f64; 3] = std::array::from_fn(|j| {
+            (0..3).map(|i| self.frame[i * 3 + j] * d[i]).sum::<f64>() - self.gravity[j] * span
+        });
+        let g = norm(&self.gravity);
+        if g < 1e-6 {
+            return;
+        }
+        let up = self.gravity.map(|x| x / g);
+        let vertical = dot(&d, &up);
+        let h: [f64; 3] = std::array::from_fn(|k| d[k] - vertical * up[k]);
+        let dv = norm(&h);
+        if !(DEPARTURE_AXIS_MIN_MPS..=DEPARTURE_AXIS_MAX_MPS2 * span).contains(&dv)
+            || (self.axis_known && dot(&h, &self.axis).abs() >= DEPARTURE_AXIS_MAX_COS * dv)
+        {
+            return;
+        }
+        let axis = h.map(|x| x / dv);
+        let sign = if !self.axis_known || dot(&axis, &self.axis) >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let rest = self.v - dot(&h, &self.axis);
+        self.v = sign * rest + dot(&h, &axis);
+        self.b = 0.0;
+        self.p01 = 0.0;
+        self.p11 = BIAS_SIGMA0 * BIAS_SIGMA0;
+        self.since_stop_along *= sign;
+        self.along_since_gnss *= sign;
+        self.axis = axis;
+        self.axis_known = true;
+        self.axis_sign_known = true;
     }
 
     /// A reading of a steady car's own accelerometer (m/s^2, the beacon's frame, gravity included), at `t_ns`.

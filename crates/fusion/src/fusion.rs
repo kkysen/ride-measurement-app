@@ -2362,6 +2362,7 @@ impl Fusion {
                         self.hold_standing(t_ns, from, from + (STOP_STANDING_S * 1e9) as i64);
                     }
                     self.departures.push(at);
+                    self.estimator.on_departure(at);
                     self.confirm_stops(t_ns, at);
                     self.start_leg(at);
                 }
