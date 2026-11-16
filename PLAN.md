@@ -1476,7 +1476,7 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     Open: offline, the smoothed speed walking off at 8:41 pm still runs 14 to 30 mph (8:40:54 to 8:42:20 pm);
     on Tue Oct 27 it reads 4 to 6 mph. Offline has no between-trains hold; adding one (or measuring walking sooner)
     is for the rider to approve, as a live and offline difference.
-34. The 2 from GTFS-RT keeps being lost (Mon Oct 26, 8:08 pm, at 8:19 pm). Check against v2 (item 29).
+34. Partly done (519ff01): the 2 from GTFS-RT keeps being lost (Mon Oct 26, 8:08 pm, at 8:19 pm). Check against v2 (item 29).
     Looked into (2026-11-15, `skip_still`, live): not reproduced at 8:19 pm, with the code now or at 0.1.16 (the phone's that night).
     The status names the 2 from 8:13:16 pm to 8:27 pm; the recorded v1 feeds list the rider's trip (`118950_2`, 5 stops from Bergen St)
     throughout, and have no polls from 8:17:41 pm to 8:20:14 pm (no cell under the East River), which changes nothing.
@@ -1516,6 +1516,20 @@ and Claude Code runs in a `systemd` slice capped at 8 GB (`claude()` in the dotf
     - The radio's platform within a complex is arbitrary, and a stop matches only its platform's lines: the Q from DeKalb Av named the 4 and the 6 at Canal St and Union Sq (Sat Oct 24, 10:15 to 10:20 pm, as before),
       and the late-night 2 lost at 59 St's A/B/C/D platform. Matching at the whole complex until the riding lines pick a platform is the likely fix, untested.
     - Untapped stop records at local stations still name a local over the express: the N for the Q from Union Sq to Canal St, Sat Oct 31, 1:42 to 1:46 pm (as before).
+    Landed (2026-11-15, 519ff01): the second try plus a stayed-behind check, scored the same way at `d61772b` (base unchanged: 15621 s, 44 drops, 1 flip):
+    15621 s to 16231 s of 25731 s named, drops 44 to 15, flips 1 to 2; the second try alone was 17101 s, 21, 2.
+    - The 96 St walk-off: the stop records missed both (Fri Oct 30 a false departure 18 s into the stop, before the walk; Sat Oct 24 a hold short of the platform, the platform stop never recorded),
+      and the live speed ran to 55 mph on the platform on Fri Oct 30 (4:12:36 to 4:15:25 pm, item 27), so neither is a signal there.
+      The feeds are: the trips now keep when a poll stopped listing a stop (the train left it).
+      When the rider walked while the trip was at their station and the radio still named it 60 s after the feeds dropped it, the stops up to the walk are another train's (`Fusion::left_behind`); no route until known, or until the radio names another station.
+      Both rides now show no route from the walk until the 1 is matched at 103 St.
+    - Cost against the second try, all routes withheld, none wrong: 860 s, mostly boardings from the platform waiting for the next station to be named
+      (Fri Oct 23, 5:51 pm at 110 St; Tue Oct 27, 5:23 pm; Thu Oct 29, 1:23 am at 14 St; Sat Oct 31, 9:57 pm at 191 St; 40 to 90 s each).
+      On Sat Nov 7, 5:59 pm it also removed the wrong N at 57 St and R at Times Sq after the rider walked off, and on Thu Oct 29, 11:07 pm the 3 after walking off at 96 St.
+    - Checked against the feeds: the new 2 on Sat Oct 31, 1:11 pm (66 St to Times Sq, the base had a 1) is right: trip `075950_2..S01R` is at 72 St at 1:29:57 pm (tap 1:29:50 pm) and Times Sq at 1:34:05 pm.
+    Left open: the Q named the 4 and 6 at Canal St and Union Sq (Sat Oct 24, 10:15 pm; matching at the whole complex, untried),
+    the N for the Q at untapped local stops (Sat Oct 31, 1:44 pm, still the N from 1:44:28 pm),
+    and a boarding walk withholding the route until the next station is named (a walk that ends at a departure from the stop could be told apart).
 35. Station cells missing (the registered cell, item 7 of 2026-10-21):
     none at 138 St and 149 St-Grand Concourse on the 5 (Tue Oct 27, 10:04 pm, at 10:16 and 10:21 pm);
     the southbound 4 missed 110 St, 103 St, 86 St and 59 St (Mon Nov 2, 6:04 pm, at 6:22 and 6:24 pm);
