@@ -3530,8 +3530,7 @@ impl Fusion {
                     a.points.pop();
                 }
                 let n = self.live_speeds.len();
-                for k in a.next..n {
-                    let (t, v) = self.live_speeds[k];
+                for (k, &(t, v)) in self.live_speeds.iter().enumerate().skip(a.next) {
                     if let Some((pt, pv)) = a.prev {
                         a.m += f64::from(pv + v) / 2.0 * (t - pt) as f64 * 1e-9;
                     }
