@@ -2,7 +2,7 @@ package dev.khyber.ride
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
-import uniffi.ride_ffi.clockTicks
+import uniffi.ride_ffi.RideClock
 
 /** The graph's clock times and the taps' places, through the bindings; the logic itself is tested in Rust. */
 class TapMarksTest {
@@ -28,8 +28,11 @@ class TapMarksTest {
     @Test
     fun clockTimesInNewYork() {
         // Thu Oct 22, 2026, 6:18:02 pm in New York (EDT).
-        assertEquals("6:18:02 pm", clockTime(1_792_707_482_000))
+        val hour = 3_600_000L
+        val newYork = RideClock.live("America/New_York", -4 * hour, null, null)
+        assertEquals("6:18:02 pm", newYork.time(1_792_707_482_000))
         val minute = 60_000L
-        assertEquals(listOf(0L, 5 * minute, 10 * minute), clockTicks(0, 12 * minute, 0, 3u))
+        val utc = RideClock.live("UTC", 0, null, null)
+        assertEquals(listOf(0L, 5 * minute, 10 * minute), utc.ticks(0, 12 * minute, 3u))
     }
 }
